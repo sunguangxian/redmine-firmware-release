@@ -1,14 +1,13 @@
 """Release Notes 索引同步。
 
-同步策略以项目 Wiki 当前结构为准：
+同步策略由当前项目 Wiki 页面 ``Release_Tool_Config`` 明确配置。
 
-- 如果项目已经存在多个产品线页面，例如 ``Release_Notes_Regular``、
-  ``Release_Notes_Trunking``，则按多分类结构同步。
-- 如果项目只有一个 ``Release_Notes`` 页面和若干 ``Release_xxx_FW_xxx`` 页面，
-  则按单列表结构同步。
-- 如果页面中存在 ``<!-- RELEASE_SYNC_BEGIN -->`` / ``<!-- RELEASE_SYNC_END -->``，
-  只替换标记区域。
-- 如果没有标记，则尽量只替换“版本列表”或“产品线索引”章节，避免覆盖页面说明。
+工具不再自动扫描并猜测 Wiki 结构：
+
+- 项目没有 ``Release_Tool_Config`` 时，索引同步直接报错提示。
+- 配置页没有 ``RELEASE_CONFIG_BEGIN`` / ``RELEASE_CONFIG_END`` 配置块时，索引同步直接报错提示。
+- 配置有效时，才更新主页面、分类页面和 Release 详情页父页面。
+- 如果页面中存在 ``<!-- RELEASE_SYNC_BEGIN -->`` / ``<!-- RELEASE_SYNC_END -->``，只替换标记区域。
 """
 
 from __future__ import annotations
@@ -17,8 +16,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .redmine_api import RELEASE_PAGE_RE, RedmineClient
+from .redmine_api import RELEASE_PAGE_RE, RedmineClient, RedmineError
 from .release_page import proj_tag_from_project
+from .wiki_config import CONFIG_PAGE_TITLE, ConfigCategory, parse_release_wiki_config
 
 SYNC_BEGIN = "<!-- RELEASE_SYNC_BEGIN -->"
 SYNC_END = "<!-- RELEASE_SYNC_END -->"
@@ -52,9 +52,9 @@ class IndexSync:
         self.project_id = project_id
         self._wiki_index: list[dict[str, Any]] | None = None
         self._page_cache: dict[str, dict[str, Any] | None] = {}
+        self._profile_cache: WikiProfile | None = None
 
     def sync_after_publish(self, page_title: str, page_text: str) -> None:
-        # 发布页刚刚写入，先放入缓存，后续自动识别时能立即看到最新内容。
         self._page_cache[page_title] = {"title": page_title, "text": page_text}
         profile = self.discover_profile()
         items = self._build_items(profile)
@@ -87,23 +87,39 @@ class IndexSync:
         return len(items)
 
     def discover_profile(self) -> WikiProfile:
-        """从项目 Wiki 自动推断索引结构。"""
-        titles = self._wiki_titles()
-        release_titles = self._release_titles()
-        main_page = self._discover_main_page(titles)
-        main_text = self._page_text(main_page)
+        """从 Release_Tool_Config 读取索引结构；不再自动猜测。"""
+        if self._profile_cache:
+            return self._profile_cache
 
-        categories = self._discover_categories(titles, main_text, release_titles)
-        has_category_pages = any(c.hub in titles or c.list_page in titles for c in categories)
-        main_has_category_refs = any(c.hub in main_text or c.list_page in main_text for c in categories)
+        config_page = self._get_page(CONFIG_PAGE_TITLE)
+        if not config_page:
+            raise RedmineError(
+                f"当前项目缺少 Wiki 配置页：{CONFIG_PAGE_TITLE}。"
+                "请先按模板创建该页面，再发布或刷新 Release 索引。"
+            )
 
-        # 优先尊重已有 Wiki 结构：只要已经有产品线页面或主页面引用产品线页面，就认为是多分类。
-        if categories and (has_category_pages or main_has_category_refs):
-            return WikiProfile(mode="multi_list", main_page=main_page, categories=categories)
+        config = parse_release_wiki_config(config_page.get("text", ""))
+        if not config or not config.is_valid:
+            raise RedmineError(
+                f"Wiki 配置页 {CONFIG_PAGE_TITLE} 无效。"
+                "请检查 RELEASE_CONFIG_BEGIN / RELEASE_CONFIG_END 中的 mode、main_page 和 categories。"
+            )
 
-        # 没有明显产品线页面时，即使存在 Trunking / Record / NP500 版本，也按单列表处理，
-        # 避免工具把 TP35 这类项目误拆成多页面结构。
-        return WikiProfile(mode="single_list", main_page=main_page, categories=[])
+        if config.mode == "single_list":
+            profile = WikiProfile(mode="single_list", main_page=config.main_page, categories=[])
+        else:
+            categories = [self._category_from_config(c) for c in config.categories]
+            profile = WikiProfile(mode="multi_list", main_page=config.main_page, categories=categories)
+
+        self._profile_cache = profile
+        return profile
+
+    def _category_from_config(self, item: ConfigCategory) -> CategoryProfile:
+        meta = CATEGORY_META.get(item.key, {})
+        title = item.title or meta.get("title") or item.key
+        hub = item.hub_page or meta.get("hub") or f"Release_Notes_{item.key}"
+        list_page = item.list_page or hub
+        return CategoryProfile(key=item.key, title=title, hub=hub, list_page=list_page)
 
     def _wiki_titles(self) -> set[str]:
         if self._wiki_index is None:
@@ -115,76 +131,6 @@ class IndexSync:
         if self._wiki_index is None:
             self._wiki_index = pages
         return [p["title"] for p in pages if RELEASE_PAGE_RE.match(p.get("title", ""))]
-
-    def _discover_main_page(self, titles: set[str]) -> str:
-        tag = self.project_id.upper()
-        candidates = []
-        preferred = [f"Changelog_for_{tag}", "Changelog_for_5X", "Release_Notes"]
-        candidates.extend([p for p in preferred if p in titles])
-        candidates.extend([t for t in titles if "release" in t.lower() or "changelog" in t.lower()])
-
-        if not candidates:
-            return "Release_Notes"
-
-        scored: list[tuple[int, str]] = []
-        for title in dict.fromkeys(candidates):
-            text = self._page_text(title)
-            score = 0
-            if title == "Release_Notes":
-                score += 3
-            if title.startswith("Changelog_for_"):
-                score += 4
-            if re.search(r"Release Notes|版本列表|产品线索引", text, re.I):
-                score += 4
-            if re.search(r"Release_Notes_(Regular|Trunking|Record|NP500)", text):
-                score += 6
-            if re.search(r"\{\{include\(Release_Notes_", text):
-                score += 6
-            if re.search(r"\[\[Release_[^\]|]+", text):
-                score += 2
-            scored.append((score, title))
-
-        scored.sort(reverse=True)
-        return scored[0][1] if scored else candidates[0]
-
-    def _discover_categories(
-        self,
-        titles: set[str],
-        main_text: str,
-        release_titles: list[str],
-    ) -> list[CategoryProfile]:
-        categories: list[CategoryProfile] = []
-        detected_keys = {self._categorize(title, self._page_text(title)) for title in release_titles}
-
-        for key, meta in CATEGORY_META.items():
-            hub = meta["hub"]
-            title = meta["title"]
-            default_list = f"{hub}_List"
-
-            if default_list in titles:
-                list_page = default_list
-            elif hub in titles:
-                hub_text = self._page_text(hub)
-                included = self._first_include_page(hub_text)
-                list_page = included if included else hub
-            else:
-                list_page = default_list
-
-            exists_or_referenced = (
-                hub in titles
-                or default_list in titles
-                or hub in main_text
-                or default_list in main_text
-                or title in main_text
-            )
-            if exists_or_referenced or key in detected_keys:
-                categories.append(CategoryProfile(key=key, title=title, hub=hub, list_page=list_page))
-
-        return categories
-
-    def _first_include_page(self, text: str) -> str | None:
-        match = re.search(r"\{\{include\(([^)]+)\)\}\}", text)
-        return match.group(1).strip() if match else None
 
     def _build_items(self, profile: WikiProfile) -> list[dict[str, Any]]:
         items = []
@@ -239,12 +185,12 @@ class IndexSync:
                 cat_profile.list_page,
                 lines,
                 comment="auto sync list",
-                fallback_text=self._build_category_page(cat_profile, lines),
+                fallback_text=self._build_category_page(profile, cat_profile, lines),
                 section_title="版本列表",
             )
 
             if cat_profile.list_page != cat_profile.hub and not self._get_page(cat_profile.hub):
-                hub_text = self._build_category_hub(cat_profile)
+                hub_text = self._build_category_hub(profile, cat_profile)
                 self.client.put_wiki_page(self.project_id, cat_profile.hub, hub_text, "产品线索引")
 
             if set_parents:
@@ -338,8 +284,6 @@ class IndexSync:
         generated_has_heading = bool(heading_re.match(first_generated_line))
         start = match.start() if generated_has_heading else match.end()
 
-        # 如果 generated 自己包含“产品线索引”标题，通常它还包含后续所有产品线章节，
-        # 此时直接替换到页面末尾，避免旧分类章节残留或标题重复。
         if generated_has_heading:
             end = len(text)
         else:
@@ -353,20 +297,20 @@ class IndexSync:
             f"- [[{i['page']}|{i['ver']} ({i['date']})]] - {i['summary']}" for i in items
         )
 
-    def _build_category_page(self, category: CategoryProfile, list_text: str) -> str:
+    def _build_category_page(self, profile: WikiProfile, category: CategoryProfile, list_text: str) -> str:
         return (
             f"# {category.title}\n\n"
-            f"[[{self._discover_main_page(self._wiki_titles())}|← 返回 Release Notes]]\n\n"
+            f"[[{profile.main_page}|← 返回 Release Notes]]\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
             f"## 版本列表\n\n"
             f"{list_text}"
         )
 
-    def _build_category_hub(self, category: CategoryProfile) -> str:
+    def _build_category_hub(self, profile: WikiProfile, category: CategoryProfile) -> str:
         return (
             f"# {category.title}\n\n"
-            f"[[{self._discover_main_page(self._wiki_titles())}|← 返回 Release Notes]]\n\n"
+            f"[[{profile.main_page}|← 返回 Release Notes]]\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
             f"## 版本列表\n\n"
