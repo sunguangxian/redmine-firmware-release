@@ -1,6 +1,16 @@
-# Redmine 版本发布工具（Python）
+# Redmine 固件版本发布
 
 面向固件团队的桌面 Web 工具：用户登录 Redmine、选择项目、填写 Release 信息与固件附件，自动创建/更新 Release Wiki 并同步上级 `Release_Notes` 索引。
+
+## 获取
+
+```bash
+git clone git@github.com:sunguangxian/redmine-firmware-release.git
+cd redmine-firmware-release
+run.bat
+```
+
+> 仓库地址：https://github.com/sunguangxian/redmine-firmware-release
 
 ## 功能
 
