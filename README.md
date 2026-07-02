@@ -17,14 +17,55 @@ run.bat
 - 图形界面（Gradio，浏览器打开）
 - 服务器地址支持用户输入，默认读取上次保存的地址；没有保存时使用当前内网默认地址 `http://192.168.1.208:3000`
 - 可通过环境变量 `REDMINE_BASE_URL` 覆盖默认服务器地址
-- **记住账号密码**：保存到本地 `%LOCALAPPDATA%\redmine-release-tool\settings.json`
+- 支持两种 Redmine 登录方式：用户名密码、API Key
+- **记住登录信息**：保存到本地 `%LOCALAPPDATA%\redmine-release-tool\settings.json`
 - 多项目：连接后列出所有可访问项目
+- 管理员结构管理：在工具中生成、读取、检测、保存每个项目的 `Release_Tool_Config`
 - 查看已有 Release 列表
 - 发布新版本：版本号、日期、Commit、产品线、changelog、`.bin` 附件
 - 编辑已有版本（从下拉框加载）
 - 编辑已有版本附件：默认保留旧附件；上传新附件时追加；勾选“替换旧附件列表”时只显示新附件
 - 可选发布邮件：保存常用收件人/抄送后，发布时选择联系人；本次选择的固件文件会作为邮件附件
 - 自动：创建 Redmine 版本 → 上传项目文件 → 写 Release Wiki → 读取 `Release_Tool_Config` → 同步上级页面 / 当前发布列表
+
+## 登录方式
+
+### 用户名密码
+
+在「连接设置」中选择“用户名密码”，填写 Redmine 地址、用户名、密码后连接。
+
+### API Key
+
+在「连接设置」中选择“API Key”，填写 Redmine 地址和 API Key 后连接。工具会通过请求头：
+
+```text
+X-Redmine-API-Key: <your api key>
+```
+
+访问 Redmine REST API。
+
+API Key 方式适合管理员给发布工具单独授权，也避免用户在工具里保存 Redmine 密码。
+
+## 管理员结构管理
+
+管理员可以在工具的「结构管理」页维护每个项目的 Wiki 结构：
+
+1. 先在「连接设置」连接 Redmine
+2. 打开「结构管理」
+3. 选择项目
+4. 选择结构模板
+5. 点击“生成模板”
+6. 检查或修改配置内容
+7. 点击“检测配置”
+8. 点击“保存到项目 Wiki”
+
+保存后，工具会把内容写入当前项目的 Wiki 页面：
+
+```text
+Release_Tool_Config
+```
+
+如果当前用户没有 Wiki 编辑权限，保存会失败并显示 Redmine 权限错误。
 
 ## Wiki 结构配置页
 
@@ -60,7 +101,7 @@ main_page: Release_Notes
 
 ### 模板文件
 
-仓库已提供三种模板，可直接复制到项目 Wiki 的 `Release_Tool_Config` 页面：
+仓库已提供三种模板，可直接复制到项目 Wiki 的 `Release_Tool_Config` 页面，也可以通过工具「结构管理」页生成：
 
 | 结构 | 模板文件 | 适用场景 |
 |------|----------|----------|
@@ -212,12 +253,10 @@ categories:
 
 ## 首次使用
 
-1. 打开目标 Redmine 项目 Wiki，按模板创建 `Release_Tool_Config` 页面
-2. 打开「连接设置」
-3. 填写 Redmine 地址（如 `http://192.168.1.208:3000`）、用户名、密码
-4. 勾选「记住账号密码」→ 点击「连接 / 保存」
-5. 打开「邮件设置」配置 SMTP 和常用联系人（需要发邮件时）
-6. 切换到「版本发布」→ 选项目 → 填写表单 → 「发布到 Redmine」
+1. 打开工具，连接 Redmine。可选用户名密码或 API Key
+2. 打开「结构管理」页，选择项目，生成并保存 `Release_Tool_Config`
+3. 打开「邮件设置」配置 SMTP 和常用联系人（需要发邮件时）
+4. 切换到「版本发布」→ 选项目 → 填写表单 → 「发布到 Redmine」
 
 ## 凭据文件位置
 
@@ -230,8 +269,9 @@ categories:
 ```json
 {
   "base_url": "http://192.168.1.208:3000",
-  "username": "zhangsan",
-  "password": "your_password",
+  "auth_mode": "api_key",
+  "username": "",
+  "api_key": "your_redmine_api_key",
   "remember": true,
   "last_project": "dp5x",
   "email": {
@@ -246,7 +286,7 @@ categories:
 }
 ```
 
-> 密码以明文保存在本机，仅适用于内网环境。请勿在公网机器上勾选记住密码。
+> 登录信息以明文保存在本机，仅适用于内网环境。请勿在公网机器上勾选记住登录信息。
 
 ## 命令行启动
 
@@ -271,16 +311,16 @@ python main.py
 ## 要求
 
 - Redmine 用户需有：项目 Wiki 编辑、版本管理、文件上传权限
-- Redmine 需启用 **REST API** 且允许 HTTP Basic 认证（或使用 API Key 可后续扩展）
+- Redmine 需启用 **REST API**
 - 每个项目必须有有效的 `Release_Tool_Config` Wiki 页面
 - 发送邮件需要可访问的 SMTP 服务
 
 ## 故障排查
 
-- **登录失败**：确认用户名密码、Redmine 是否允许 API 访问
-- **权限不足**：确认用户对目标项目有成员权限
+- **登录失败**：确认用户名密码或 API Key、Redmine 是否允许 API 访问
+- **权限不足**：确认用户或 API Key 对目标项目有成员权限
 - **上传失败**：确认项目已启用「文件」模块
-- **缺少 Release_Tool_Config**：先按模板创建项目 Wiki 配置页
+- **缺少 Release_Tool_Config**：在「结构管理」页生成并保存项目 Wiki 配置页
 - **配置页无效**：检查 `RELEASE_CONFIG_BEGIN` / `RELEASE_CONFIG_END` 中的 `mode`、`main_page`、`categories`
 - **邮件发送失败**：确认 SMTP 地址、端口、账号、发件人和网络是否可用
 - **索引页面不符合预期**：优先在目标页面加入 `RELEASE_SYNC_BEGIN` / `RELEASE_SYNC_END` 标记，工具会只更新标记区域
