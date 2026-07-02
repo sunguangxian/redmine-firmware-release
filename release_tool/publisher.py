@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient
 from .release_page import (
@@ -13,11 +15,18 @@ from .release_page import (
 )
 
 
+@dataclass
+class PublishResult:
+    title: str
+    warnings: list[str] = field(default_factory=list)
+
+
 class ReleasePublisher:
     def __init__(self, client: RedmineClient):
         self.client = client
 
-    def publish(self, form: ReleaseForm) -> str:
+    def publish(self, form: ReleaseForm) -> PublishResult:
+        warnings: list[str] = []
         version = self._get_or_create_version(form)
         title = form.page_title
         existing = self.client.get_wiki_page(form.project_id, title)
@@ -33,18 +42,28 @@ class ReleasePublisher:
 
         markdown = build_release_markdown(form, version["id"], linked_files)
 
+        # Wiki 详情页是核心结果。如果这里失败，直接抛出给 UI，提示发布失败。
         comment = "release tool update" if existing else "release tool create"
         self.client.put_wiki_page(form.project_id, title, markdown, comment)
 
-        self.client.update_version(
-            version["id"],
-            wiki_page_title=title,
-            due_date=form.release_date,
-            description=self._version_description(form),
-        )
+        # 版本元数据和上级索引属于后续同步步骤。失败时记录警告，不让工具崩溃，
+        # 也不把已经写成功的 Release Wiki 误判为完全失败。
+        try:
+            self.client.update_version(
+                version["id"],
+                wiki_page_title=title,
+                due_date=form.release_date,
+                description=self._version_description(form),
+            )
+        except Exception as exc:  # noqa: BLE001 - 桌面工具需要把同步失败展示给用户
+            warnings.append(f"版本信息同步失败：{exc}")
 
-        IndexSync(self.client, form.project_id).sync_after_publish(title, markdown)
-        return title
+        try:
+            IndexSync(self.client, form.project_id).sync_after_publish(title, markdown)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"上级 Wiki 索引同步失败：{exc}")
+
+        return PublishResult(title=title, warnings=warnings)
 
     def list_releases(self, project_id: str) -> list[dict]:
         pages = self.client.get_wiki_index(project_id)
