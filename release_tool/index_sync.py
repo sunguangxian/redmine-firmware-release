@@ -334,9 +334,18 @@ class IndexSync:
         if not match:
             return text
 
-        start = match.end()
-        next_heading = re.search(r"^(?:#+\s+|h[1-6]\.\s+).+$", text[start:], re.M)
-        end = start + next_heading.start() if next_heading else len(text)
+        first_generated_line = generated.lstrip().splitlines()[0] if generated.strip() else ""
+        generated_has_heading = bool(heading_re.match(first_generated_line))
+        start = match.start() if generated_has_heading else match.end()
+
+        # 如果 generated 自己包含“产品线索引”标题，通常它还包含后续所有产品线章节，
+        # 此时直接替换到页面末尾，避免旧分类章节残留或标题重复。
+        if generated_has_heading:
+            end = len(text)
+        else:
+            next_heading = re.search(r"^(?:#+\s+|h[1-6]\.\s+).+$", text[match.end():], re.M)
+            end = match.end() + next_heading.start() if next_heading else len(text)
+
         return text[:start].rstrip() + "\n\n" + generated.rstrip() + "\n" + text[end:].lstrip("\n")
 
     def _format_release_lines(self, items: list[dict[str, Any]]) -> str:
