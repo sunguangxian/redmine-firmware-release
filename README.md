@@ -1,6 +1,6 @@
 # Redmine 固件版本发布
 
-面向固件团队的桌面 Web 工具：用户登录 Redmine、选择项目、填写 Release 信息与固件附件，自动创建/更新 Release Wiki，并从项目 Wiki 自动识别上级页面结构后同步索引。
+面向固件团队的桌面 Web 工具：用户登录 Redmine、选择项目、填写 Release 信息与固件附件，自动创建/更新 Release Wiki，并按项目 Wiki 配置页同步索引。
 
 ## 获取
 
@@ -24,20 +24,49 @@ run.bat
 - 编辑已有版本（从下拉框加载）
 - 编辑已有版本附件：默认保留旧附件；上传新附件时追加；勾选“替换旧附件列表”时只显示新附件
 - 可选发布邮件：保存常用收件人/抄送后，发布时选择联系人；本次选择的固件文件会作为邮件附件
-- 自动：创建 Redmine 版本 → 上传项目文件 → 写 Release Wiki → 自动识别 Wiki 结构 → 同步上级页面 / 当前发布列表
+- 自动：创建 Redmine 版本 → 上传项目文件 → 写 Release Wiki → 读取 `Release_Tool_Config` → 同步上级页面 / 当前发布列表
 
-## Wiki 结构自动识别
+## Wiki 结构配置页
 
-工具不需要为每个项目手写固定配置。发布或刷新索引时会读取当前项目 Wiki：
+每个 Redmine 项目必须创建一个固定 Wiki 页面：
 
-1. 扫描 `Release_..._FW_...` 版本详情页
-2. 查找可能的主页面，例如 `Changelog_for_项目TAG`、`Changelog_for_5X`、`Release_Notes`
-3. 判断项目是否已经存在产品线页面，例如：
-   - `Release_Notes_Regular`
-   - `Release_Notes_Trunking`
-   - `Release_Notes_Record`
-   - `Release_Notes_NP500`
-4. 根据现有结构选择同步模式
+```text
+Release_Tool_Config
+```
+
+工具不再自动猜测 Wiki 结构。发布或刷新索引前会先读取该页面：
+
+```text
+存在 Release_Tool_Config 且配置有效
+    -> 按配置同步 Release 索引
+
+不存在 Release_Tool_Config
+    -> 直接提示异常，不创建版本、不上传附件、不写 Release 页面
+
+配置无效
+    -> 直接提示异常，不扫描 Wiki，不猜测结构
+```
+
+配置必须写在以下标记之间：
+
+```text
+<!-- RELEASE_CONFIG_BEGIN -->
+```yaml
+mode: single_list
+main_page: Release_Notes
+```
+<!-- RELEASE_CONFIG_END -->
+```
+
+### 模板文件
+
+仓库已提供三种模板，可直接复制到项目 Wiki 的 `Release_Tool_Config` 页面：
+
+| 结构 | 模板文件 | 适用场景 |
+|------|----------|----------|
+| 单列表 | `docs/wiki_templates/Release_Tool_Config_single_list.md` | TP35 这类只有一个 `Release_Notes` 列表的项目 |
+| 多分类 include | `docs/wiki_templates/Release_Tool_Config_multi_list_include.md` | DP5X 这类主页面 + 分类页面 + 独立 List 页面结构 |
+| 多分类直接列表 | `docs/wiki_templates/Release_Tool_Config_multi_list_direct.md` | 主页面 + 分类页面，但不额外拆 `xxx_List` 页面 |
 
 ### 单列表结构
 
@@ -50,27 +79,72 @@ Release_Notes
 └── Release_TP35_FW_V5_3_7_14
 ```
 
+配置示例：
+
+```yaml
+mode: single_list
+main_page: Release_Notes
+release_page_prefix: Release_TP35_FW_
+```
+
 工具会自动更新 `Release_Notes` 的“版本列表”章节。
 
-### 多产品线结构
+### 多分类 include 结构
 
 适合 DP5X 这类项目：
 
 ```text
 Changelog_for_5X
 ├── Release_Notes_Regular
+│   └── {{include(Release_Notes_Regular_List)}}
 ├── Release_Notes_Trunking
+│   └── {{include(Release_Notes_Trunking_List)}}
 ├── Release_Notes_Record
+│   └── {{include(Release_Notes_Record_List)}}
 └── Release_Notes_NP500
+    └── {{include(Release_Notes_NP500_List)}}
 ```
 
-工具会自动更新：
+配置示例：
 
-- 主页面中的“产品线索引”与各分类 include 区域
-- 对应产品线页面中的“版本列表”
-- 版本详情页的父页面关系
+```yaml
+mode: multi_list
+main_page: Changelog_for_5X
+categories:
+  - key: Regular
+    title: 常规版本 (5X)
+    hub_page: Release_Notes_Regular
+    list_page: Release_Notes_Regular_List
 
-如果产品线页面本身已经包含 `{{include(...)}}`，工具会优先更新被 include 的列表页；否则直接更新产品线页面的“版本列表”。
+  - key: Trunking
+    title: Trunking 集群
+    hub_page: Release_Notes_Trunking
+    list_page: Release_Notes_Trunking_List
+
+  - key: Record
+    title: Record 录音
+    hub_page: Release_Notes_Record
+    list_page: Release_Notes_Record_List
+
+  - key: NP500
+    title: NP500
+    hub_page: Release_Notes_NP500
+    list_page: Release_Notes_NP500_List
+```
+
+### 多分类直接列表结构
+
+如果不想建立独立 `xxx_List` 页面，可以把 `list_page` 设置成和 `hub_page` 一样：
+
+```yaml
+mode: multi_list
+main_page: Changelog_for_5X
+categories:
+  - key: Regular
+    title: 常规版本 (5X)
+    hub_page: Release_Notes_Regular
+    list_page: Release_Notes_Regular
+```
 
 ## 编辑已发布版本
 
@@ -138,11 +212,12 @@ Changelog_for_5X
 
 ## 首次使用
 
-1. 打开「连接设置」
-2. 填写 Redmine 地址（如 `http://192.168.1.208:3000`）、用户名、密码
-3. 勾选「记住账号密码」→ 点击「连接 / 保存」
-4. 打开「邮件设置」配置 SMTP 和常用联系人（需要发邮件时）
-5. 切换到「版本发布」→ 选项目 → 填写表单 → 「发布到 Redmine」
+1. 打开目标 Redmine 项目 Wiki，按模板创建 `Release_Tool_Config` 页面
+2. 打开「连接设置」
+3. 填写 Redmine 地址（如 `http://192.168.1.208:3000`）、用户名、密码
+4. 勾选「记住账号密码」→ 点击「连接 / 保存」
+5. 打开「邮件设置」配置 SMTP 和常用联系人（需要发邮件时）
+6. 切换到「版本发布」→ 选项目 → 填写表单 → 「发布到 Redmine」
 
 ## 凭据文件位置
 
@@ -197,6 +272,7 @@ python main.py
 
 - Redmine 用户需有：项目 Wiki 编辑、版本管理、文件上传权限
 - Redmine 需启用 **REST API** 且允许 HTTP Basic 认证（或使用 API Key 可后续扩展）
+- 每个项目必须有有效的 `Release_Tool_Config` Wiki 页面
 - 发送邮件需要可访问的 SMTP 服务
 
 ## 故障排查
@@ -204,5 +280,7 @@ python main.py
 - **登录失败**：确认用户名密码、Redmine 是否允许 API 访问
 - **权限不足**：确认用户对目标项目有成员权限
 - **上传失败**：确认项目已启用「文件」模块
+- **缺少 Release_Tool_Config**：先按模板创建项目 Wiki 配置页
+- **配置页无效**：检查 `RELEASE_CONFIG_BEGIN` / `RELEASE_CONFIG_END` 中的 `mode`、`main_page`、`categories`
 - **邮件发送失败**：确认 SMTP 地址、端口、账号、发件人和网络是否可用
 - **索引页面不符合预期**：优先在目标页面加入 `RELEASE_SYNC_BEGIN` / `RELEASE_SYNC_END` 标记，工具会只更新标记区域
