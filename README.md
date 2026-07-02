@@ -23,6 +23,7 @@ run.bat
 - 发布新版本：版本号、日期、Commit、产品线、changelog、`.bin` 附件
 - 编辑已有版本（从下拉框加载）
 - 编辑已有版本附件：默认保留旧附件；上传新附件时追加；勾选“替换旧附件列表”时只显示新附件
+- 可选发布邮件：保存常用收件人/抄送后，发布时选择联系人；本次选择的固件文件会作为邮件附件
 - 自动：创建 Redmine 版本 → 上传项目文件 → 写 Release Wiki → 自动识别 Wiki 结构 → 同步上级页面 / 当前发布列表
 
 ## Wiki 结构自动识别
@@ -97,6 +98,25 @@ Changelog_for_5X
 
 注意：“替换旧附件列表”只修改 Wiki 页面里的附件表，不会删除 Redmine 项目文件里的旧文件。
 
+## 发布邮件
+
+工具支持发布成功后发送邮件通知：
+
+1. 在“邮件设置”中填写 SMTP 服务器、端口、发件人、常用收件人、常用抄送并保存
+2. 在“版本发布”页勾选“发布成功后发送邮件”
+3. 从已保存的联系人里选择收件人和抄送
+4. 点击“发布到 Redmine”
+
+邮件内容会包含：
+
+- 项目、版本、产品线、发布日期、Commit
+- 变更说明
+- Release Wiki 链接
+- 项目文件链接
+- 本次选择的 `.bin` 文件附件
+
+说明：当前版本在发布页通过“选择”联系人发送；需要新增联系人时，到“邮件设置”里输入并保存后再选择。
+
 ## 推荐的自动同步标记
 
 如果想明确指定工具可改写的区域，可以在 Wiki 页面中加入：
@@ -121,7 +141,8 @@ Changelog_for_5X
 1. 打开「连接设置」
 2. 填写 Redmine 地址（如 `http://192.168.1.208:3000`）、用户名、密码
 3. 勾选「记住账号密码」→ 点击「连接 / 保存」
-4. 切换到「版本发布」→ 选项目 → 填写表单 → 「发布到 Redmine」
+4. 打开「邮件设置」配置 SMTP 和常用联系人（需要发邮件时）
+5. 切换到「版本发布」→ 选项目 → 填写表单 → 「发布到 Redmine」
 
 ## 凭据文件位置
 
@@ -137,7 +158,16 @@ Changelog_for_5X
   "username": "zhangsan",
   "password": "your_password",
   "remember": true,
-  "last_project": "dp5x"
+  "last_project": "dp5x",
+  "email": {
+    "smtp_host": "smtp.company.com",
+    "smtp_port": 587,
+    "smtp_user": "firmware@company.com",
+    "smtp_from": "firmware@company.com",
+    "use_tls": true,
+    "contacts_to": ["dev@example.com"],
+    "contacts_cc": ["qa@example.com"]
+  }
 }
 ```
 
@@ -167,10 +197,12 @@ python main.py
 
 - Redmine 用户需有：项目 Wiki 编辑、版本管理、文件上传权限
 - Redmine 需启用 **REST API** 且允许 HTTP Basic 认证（或使用 API Key 可后续扩展）
+- 发送邮件需要可访问的 SMTP 服务
 
 ## 故障排查
 
 - **登录失败**：确认用户名密码、Redmine 是否允许 API 访问
 - **权限不足**：确认用户对目标项目有成员权限
 - **上传失败**：确认项目已启用「文件」模块
+- **邮件发送失败**：确认 SMTP 地址、端口、账号、发件人和网络是否可用
 - **索引页面不符合预期**：优先在目标页面加入 `RELEASE_SYNC_BEGIN` / `RELEASE_SYNC_END` 标记，工具会只更新标记区域
