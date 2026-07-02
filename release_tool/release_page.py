@@ -24,6 +24,7 @@ class ReleaseForm:
     changelog_items: list[str] = field(default_factory=list)
     files: list[tuple[str, str, bytes]] = field(default_factory=list)  # name, desc, bytes
     wiki_title: str | None = None
+    replace_attachments: bool = False
 
     @property
     def product_meta(self) -> dict:
@@ -71,7 +72,9 @@ def build_release_markdown(
 
     rows = []
     for item in linked_files:
-        name = item["filename"]
+        name = item.get("filename") or ""
+        if not name:
+            continue
         desc = item.get("description") or ""
         url = item.get("url")
         cell = f"[{name}]({url})" if url else name
@@ -93,6 +96,74 @@ def build_release_markdown(
         f"|--------|------|\n"
         f"{chr(10).join(rows)}\n\n"
         f"[[Release_Notes|← 返回 Release Notes]]"
+    )
+
+
+def parse_release_files(text: str) -> list[dict[str, str | None]]:
+    """解析 Release Wiki 中已有的固件文件表。"""
+    files: list[dict[str, str | None]] = []
+    section = re.search(r"## 固件文件\s*\n+(.*?)(?:\n## |\Z)", text, re.S)
+    if not section:
+        return files
+
+    for raw_line in section.group(1).splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|") or "---" in line or "文件名" in line:
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if not cells:
+            continue
+        file_cell = cells[0]
+        if not file_cell or file_cell == "（无）":
+            continue
+        desc = cells[1] if len(cells) > 1 else ""
+
+        link_match = re.match(r"\[([^\]]+)\]\(([^)]+)\)", file_cell)
+        if link_match:
+            filename = link_match.group(1).strip()
+            url = link_match.group(2).strip()
+        else:
+            filename = file_cell.strip()
+            url = None
+
+        if filename:
+            files.append({"filename": filename, "description": desc, "url": url})
+    return files
+
+
+def merge_release_files(
+    old_files: list[dict[str, str | None]],
+    new_files: list[dict[str, str | None]],
+    replace: bool = False,
+) -> list[dict[str, str | None]]:
+    """合并旧附件和新附件。
+
+    replace=True 只在 Wiki 页面中显示新附件；不会删除 Redmine 项目文件里的旧附件。
+    """
+    if replace:
+        return new_files
+
+    merged: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for item in old_files + new_files:
+        filename = item.get("filename") or ""
+        if not filename:
+            continue
+        key = (filename, item.get("url"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def format_release_files(files: list[dict[str, str | None]]) -> str:
+    if not files:
+        return "（无已有附件）"
+    return "\n".join(
+        f"- {item.get('filename') or ''} {item.get('url') or ''}".rstrip()
+        for item in files
+        if item.get("filename")
     )
 
 
@@ -126,10 +197,13 @@ def parse_release_page(title: str, text: str) -> dict:
             if line:
                 changelog.append(line)
 
+    files = parse_release_files(text)
+
     return {
         "version_name": version_name,
         "release_date": release_date,
         "commit": commit,
         "product_line": product_line,
         "changelog": "\n".join(changelog),
+        "files": files,
     }
