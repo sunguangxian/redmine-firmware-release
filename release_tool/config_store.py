@@ -67,6 +67,46 @@ def store_login(base_url: str, username: str, password: str, remember: bool) -> 
     save_settings(data)
 
 
+def get_email_settings() -> dict[str, Any]:
+    data = load_settings()
+    email = data.get("email") or {}
+    return {
+        "smtp_host": email.get("smtp_host", ""),
+        "smtp_port": int(email.get("smtp_port") or 25),
+        "smtp_user": email.get("smtp_user", ""),
+        "smtp_password": email.get("smtp_password", ""),
+        "smtp_from": email.get("smtp_from", ""),
+        "use_tls": bool(email.get("use_tls", False)),
+        "contacts_to": email.get("contacts_to", []),
+        "contacts_cc": email.get("contacts_cc", []),
+    }
+
+
+def store_email_settings(
+    *,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_user: str,
+    smtp_password: str,
+    smtp_from: str,
+    use_tls: bool,
+    contacts_to: list[str],
+    contacts_cc: list[str],
+) -> None:
+    data = load_settings()
+    data["email"] = {
+        "smtp_host": (smtp_host or "").strip(),
+        "smtp_port": int(smtp_port or 25),
+        "smtp_user": (smtp_user or "").strip(),
+        "smtp_password": smtp_password or "",
+        "smtp_from": (smtp_from or "").strip(),
+        "use_tls": bool(use_tls),
+        "contacts_to": contacts_to,
+        "contacts_cc": contacts_cc,
+    }
+    save_settings(data)
+
+
 def get_last_project() -> str:
     return load_settings().get("last_project", "")
 
