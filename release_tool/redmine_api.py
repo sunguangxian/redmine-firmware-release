@@ -14,11 +14,27 @@ class RedmineError(Exception):
 
 
 class RedmineClient:
-    def __init__(self, base_url: str, username: str, password: str):
+    def __init__(
+        self,
+        base_url: str,
+        username: str = "",
+        password: str = "",
+        *,
+        api_key: str = "",
+        auth_mode: str = "password",
+    ):
         self.base_url = base_url.rstrip("/")
+        self.auth_mode = auth_mode
         self.session = requests.Session()
-        self.session.auth = (username, password)
         self.session.headers.update({"Content-Type": "application/json; charset=utf-8"})
+
+        api_key = (api_key or "").strip()
+        if auth_mode == "api_key" or api_key:
+            if not api_key:
+                raise RedmineError("请填写 Redmine API Key")
+            self.session.headers.update({"X-Redmine-API-Key": api_key})
+        else:
+            self.session.auth = (username, password)
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -26,7 +42,7 @@ class RedmineClient:
     def _request(self, method: str, path: str, **kwargs) -> Any:
         resp = self.session.request(method, self._url(path), timeout=60, **kwargs)
         if resp.status_code == 401:
-            raise RedmineError("登录失败：用户名或密码错误，或无 API 访问权限")
+            raise RedmineError("登录失败：用户名密码或 API Key 错误，或无 API 访问权限")
         if resp.status_code == 403:
             raise RedmineError(f"权限不足：{path}")
         if resp.status_code == 404:
@@ -67,7 +83,7 @@ class RedmineClient:
             )
             return data.get("wiki_page")
         except RedmineError as exc:
-            if "404" in str(exc):
+            if "404" in str(exc) or "资源不存在" in str(exc):
                 return None
             raise
 
