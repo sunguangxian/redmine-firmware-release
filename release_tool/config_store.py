@@ -44,26 +44,43 @@ def default_base_url() -> str:
     return os.environ.get("REDMINE_BASE_URL", DEFAULT_REDMINE_BASE_URL).rstrip("/")
 
 
-def get_saved_login() -> dict[str, str]:
+def get_saved_login() -> dict[str, Any]:
     data = load_settings()
     return {
         "base_url": data.get("base_url") or default_base_url(),
+        "auth_mode": data.get("auth_mode", "password"),
         "username": data.get("username", ""),
         "password": data.get("password", ""),
+        "api_key": data.get("api_key", ""),
         "remember": bool(data.get("remember", True)),
     }
 
 
-def store_login(base_url: str, username: str, password: str, remember: bool) -> None:
+def store_login(
+    base_url: str,
+    username: str,
+    password: str,
+    remember: bool,
+    *,
+    auth_mode: str = "password",
+    api_key: str = "",
+) -> None:
     data = load_settings()
     data["base_url"] = base_url.rstrip("/")
+    data["auth_mode"] = auth_mode
     data["username"] = username
     if remember:
-        data["password"] = password
         data["remember"] = True
+        if auth_mode == "api_key":
+            data["api_key"] = api_key
+            data.pop("password", None)
+        else:
+            data["password"] = password
+            data.pop("api_key", None)
     else:
-        data.pop("password", None)
         data["remember"] = False
+        data.pop("password", None)
+        data.pop("api_key", None)
     save_settings(data)
 
 
