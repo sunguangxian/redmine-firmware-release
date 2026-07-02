@@ -14,6 +14,8 @@ from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
 from .release_page import PRODUCT_LINES, ReleaseForm, format_release_files, parse_release_page, proj_tag_from_project
+from .wiki_config import CONFIG_PAGE_TITLE
+from .wiki_templates import TEMPLATE_CHOICES, build_config_template, validate_config_text
 
 _session: dict = {"client": None, "projects": []}
 
@@ -22,23 +24,35 @@ def _client() -> RedmineClient | None:
     return _session.get("client")
 
 
-def _connect(base_url: str, username: str, password: str, remember: bool) -> tuple[str, gr.Dropdown, gr.Dropdown]:
+def _project_dropdowns(projects: list[dict], value: str | None = None) -> tuple[gr.Dropdown, gr.Dropdown]:
+    choices = [(f"{p['name']} ({p['identifier']})", p["identifier"]) for p in projects]
+    return gr.Dropdown(choices=choices, value=value), gr.Dropdown(choices=choices, value=value)
+
+
+def _connect(auth_mode: str, base_url: str, username: str, password: str, api_key: str, remember: bool) -> tuple[str, gr.Dropdown, gr.Dropdown]:
     base_url = (base_url or "").strip().rstrip("/")
-    if not base_url or not username or not password:
-        return "请填写 Redmine 地址、用户名和密码", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
+    auth_mode = auth_mode or "password"
+    username = (username or "").strip()
+    api_key = (api_key or "").strip()
+    if not base_url:
+        return "请填写 Redmine 地址", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
+    if auth_mode == "api_key" and not api_key:
+        return "请填写 API Key", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
+    if auth_mode != "api_key" and (not username or not password):
+        return "请填写用户名和密码", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
     try:
-        client = RedmineClient(base_url, username, password)
+        client = RedmineClient(base_url, username, password, api_key=api_key, auth_mode=auth_mode)
         account = client.test_login()
-        _session["client"] = client
         projects = client.list_projects()
+        _session["client"] = client
         _session["projects"] = projects
-        store_login(base_url, username, password, remember)
+        store_login(base_url, username, password, remember, auth_mode=auth_mode, api_key=api_key)
         choices = [(f"{p['name']} ({p['identifier']})", p["identifier"]) for p in projects]
         last = get_last_project()
         default = last if last in [c[1] for c in choices] else (choices[0][1] if choices else None)
-        user_label = account.get("user", {}).get("login", username)
-        msg = f"已连接：{user_label}，服务器：{base_url}，共 {len(projects)} 个项目"
-        return msg, gr.Dropdown(choices=choices, value=default), gr.Dropdown(choices=choices, value=default)
+        user_label = account.get("user", {}).get("login", username or "api-key")
+        mode_label = "API Key" if auth_mode == "api_key" else "用户名密码"
+        return f"已连接：{user_label}，方式：{mode_label}，共 {len(projects)} 个项目", *_project_dropdowns(projects, default)
     except RedmineError as exc:
         _session["client"] = None
         return f"连接失败：{exc}", gr.Dropdown(choices=[]), gr.Dropdown(choices=[])
@@ -54,17 +68,8 @@ def _save_notice_settings(host: str, port: int | float | str, user: str, secret:
         smtp_port = int(float(port or 25))
     except (TypeError, ValueError):
         smtp_port = 25
-    store_email_settings(
-        smtp_host=host,
-        smtp_port=smtp_port,
-        smtp_user=user,
-        smtp_password=secret,
-        smtp_from=sender,
-        use_tls=use_tls,
-        contacts_to=contacts_to,
-        contacts_cc=contacts_cc,
-    )
-    return f"通知设置已保存：收件人 {len(contacts_to)} 个，抄送 {len(contacts_cc)} 个", gr.CheckboxGroup(choices=contacts_to, value=[]), gr.CheckboxGroup(choices=contacts_cc, value=[])
+    store_email_settings(smtp_host=host, smtp_port=smtp_port, smtp_user=user, smtp_password=secret, smtp_from=sender, use_tls=use_tls, contacts_to=contacts_to, contacts_cc=contacts_cc)
+    return f"邮件设置已保存：收件人 {len(contacts_to)} 个，抄送 {len(contacts_cc)} 个", gr.CheckboxGroup(choices=contacts_to, value=[]), gr.CheckboxGroup(choices=contacts_cc, value=[])
 
 
 def _list_releases(project_id: str) -> str:
@@ -107,6 +112,52 @@ def _release_choices(project_id: str) -> gr.Dropdown:
         return gr.Dropdown(choices=[(f"{r['version']} — {r['title']}", r["title"]) for r in releases])
     except RedmineError:
         return gr.Dropdown(choices=[])
+
+
+def _generate_config_template(project_id: str, template_key: str) -> tuple[str, str]:
+    if not project_id:
+        return "", "请选择项目"
+    text = build_config_template(template_key or "single_list", project_id)
+    ok, msg = validate_config_text(text)
+    return text, f"已生成模板。{msg if ok else msg}"
+
+
+def _load_config(project_id: str) -> tuple[str, str]:
+    client = _client()
+    if not client:
+        return "", "请先连接 Redmine"
+    if not project_id:
+        return "", "请选择项目"
+    try:
+        page = client.get_wiki_page(project_id, CONFIG_PAGE_TITLE)
+        if not page:
+            return "", f"未找到 {CONFIG_PAGE_TITLE}，请选择模板生成后保存。"
+        text = page.get("text", "")
+        ok, msg = validate_config_text(text)
+        return text, msg if ok else f"已读取，但{msg}"
+    except RedmineError as exc:
+        return "", f"读取失败：{exc}"
+
+
+def _check_config(config_text: str) -> str:
+    ok, msg = validate_config_text(config_text or "")
+    return msg if ok else msg
+
+
+def _save_config(project_id: str, config_text: str) -> str:
+    client = _client()
+    if not client:
+        return "请先连接 Redmine"
+    if not project_id:
+        return "请选择项目"
+    ok, msg = validate_config_text(config_text or "")
+    if not ok:
+        return msg
+    try:
+        client.put_wiki_page(project_id, CONFIG_PAGE_TITLE, config_text, "release tool config update")
+        return f"已保存到 {CONFIG_PAGE_TITLE}。{msg}"
+    except RedmineError as exc:
+        return f"保存失败：{exc}"
 
 
 def _publish(project_id: str, version_name: str, release_date: str, commit: str, product_line: str, changelog: str, files: list, replace_attachments: bool, notice_enabled: bool, selected_to: list[str], selected_cc: list[str], edit_title: str) -> tuple[str, str]:
@@ -189,12 +240,25 @@ def build_app() -> gr.Blocks:
         gr.Markdown("登录后选择项目，填写 Release 信息与固件附件，自动创建 Wiki 并同步上级索引。")
 
         with gr.Tab("连接设置"):
+            auth_mode = gr.Radio(label="登录方式", choices=[("用户名密码", "password"), ("API Key", "api_key")], value=saved["auth_mode"])
             base_url = gr.Textbox(label="Redmine 服务器地址", value=saved["base_url"], placeholder="例如：http://192.168.1.208:3000")
             username = gr.Textbox(label="用户名", value=saved["username"])
             password = gr.Textbox(label="密码", type="password", value=saved["password"])
-            remember = gr.Checkbox(label="记住账号密码（保存到本地文件）", value=saved["remember"])
+            api_key = gr.Textbox(label="API Key", type="password", value=saved["api_key"])
+            remember = gr.Checkbox(label="记住登录信息（保存到本地文件）", value=saved["remember"])
             connect_btn = gr.Button("连接 / 保存", variant="primary")
             connect_status = gr.Textbox(label="状态", interactive=False)
+
+        with gr.Tab("结构管理"):
+            config_project_dd = gr.Dropdown(label="项目", choices=[], interactive=True)
+            template_dd = gr.Dropdown(label="结构模板", choices=TEMPLATE_CHOICES, value="single_list")
+            with gr.Row():
+                gen_config_btn = gr.Button("生成模板")
+                load_config_btn = gr.Button("读取当前配置")
+                check_config_btn = gr.Button("检测配置")
+                save_config_btn = gr.Button("保存到项目 Wiki", variant="primary")
+            config_text = gr.Textbox(label=f"{CONFIG_PAGE_TITLE} 内容", lines=22)
+            config_status = gr.Textbox(label="结构管理状态", interactive=False)
 
         with gr.Tab("邮件设置"):
             with gr.Row():
@@ -236,8 +300,12 @@ def build_app() -> gr.Blocks:
             publish_btn = gr.Button("发布到 Redmine", variant="primary")
             publish_status = gr.Textbox(label="发布结果", interactive=False)
 
+        connect_btn.click(_connect, inputs=[auth_mode, base_url, username, password, api_key, remember], outputs=[connect_status, project_dd, config_project_dd]).then(_list_releases, inputs=[project_dd], outputs=[release_table]).then(_release_choices, inputs=[project_dd], outputs=[edit_release_dd])
+        gen_config_btn.click(_generate_config_template, inputs=[config_project_dd, template_dd], outputs=[config_text, config_status])
+        load_config_btn.click(_load_config, inputs=[config_project_dd], outputs=[config_text, config_status])
+        check_config_btn.click(_check_config, inputs=[config_text], outputs=[config_status])
+        save_config_btn.click(_save_config, inputs=[config_project_dd, config_text], outputs=[config_status])
         save_notice_btn.click(_save_notice_settings, inputs=[notice_host, notice_port, notice_user, notice_secret, notice_sender, notice_tls, contacts_to_text, contacts_cc_text], outputs=[notice_status, selected_to, selected_cc])
-        connect_btn.click(_connect, inputs=[base_url, username, password, remember], outputs=[connect_status, project_dd, project_dd]).then(_list_releases, inputs=[project_dd], outputs=[release_table]).then(_release_choices, inputs=[project_dd], outputs=[edit_release_dd])
         project_dd.change(_list_releases, inputs=[project_dd], outputs=[release_table]).then(_release_choices, inputs=[project_dd], outputs=[edit_release_dd])
         reload_btn.click(_list_releases, inputs=[project_dd], outputs=[release_table]).then(_release_choices, inputs=[project_dd], outputs=[edit_release_dd])
         refresh_index_btn.click(_refresh_index, inputs=[project_dd], outputs=[publish_status, release_table])
