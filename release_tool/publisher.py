@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from .index_sync import IndexSync
-from .redmine_api import RedmineClient, RedmineError
-from .release_page import ReleaseForm, build_release_markdown, parse_release_page
+from .redmine_api import RedmineClient
+from .release_page import (
+    ReleaseForm,
+    build_release_markdown,
+    merge_release_files,
+    parse_release_files,
+    parse_release_page,
+)
 
 
 class ReleasePublisher:
@@ -13,18 +19,28 @@ class ReleasePublisher:
 
     def publish(self, form: ReleaseForm) -> str:
         version = self._get_or_create_version(form)
-        linked_files = self._upload_files(form, version["id"])
-        markdown = build_release_markdown(form, version["id"], linked_files)
         title = form.page_title
-
         existing = self.client.get_wiki_page(form.project_id, title)
+        existing_text = (existing or {}).get("text", "")
+
+        old_files = parse_release_files(existing_text) if existing_text else []
+        new_files = self._upload_files(form, version["id"])
+        linked_files = merge_release_files(
+            old_files,
+            new_files,
+            replace=form.replace_attachments,
+        )
+
+        markdown = build_release_markdown(form, version["id"], linked_files)
+
         comment = "release tool update" if existing else "release tool create"
         self.client.put_wiki_page(form.project_id, title, markdown, comment)
 
         self.client.update_version(
             version["id"],
             wiki_page_title=title,
-            description=f"固件文件: /projects/{form.project_id}/files",
+            due_date=form.release_date,
+            description=self._version_description(form),
         )
 
         IndexSync(self.client, form.project_id).sync_after_publish(title, markdown)
@@ -59,15 +75,21 @@ class ReleasePublisher:
             if version.get("name", "").strip() == name:
                 return version
 
-        description = "commit: " + form.commit + "\n" + "\n".join(
-            f"{idx}. {item}" for idx, item in enumerate(form.changelog_items, 1)
-        )
         return self.client.create_version(
             form.project_id,
             name,
             form.release_date,
-            description,
+            self._version_description(form),
         )
+
+    def _version_description(self, form: ReleaseForm) -> str:
+        lines = [
+            f"commit: {form.commit}",
+            f"固件文件: /projects/{form.project_id}/files",
+            "",
+        ]
+        lines.extend(f"{idx}. {item}" for idx, item in enumerate(form.changelog_items, 1))
+        return "\n".join(lines).strip()
 
     def _upload_files(self, form: ReleaseForm, version_id: int) -> list[dict]:
         linked: list[dict] = []
