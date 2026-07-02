@@ -1,6 +1,6 @@
 # Redmine 固件版本发布
 
-面向固件团队的桌面 Web 工具：用户登录 Redmine、选择项目、填写 Release 信息与固件附件，自动创建/更新 Release Wiki 并同步上级 `Release_Notes` 索引。
+面向固件团队的桌面 Web 工具：用户登录 Redmine、选择项目、填写 Release 信息与固件附件，自动创建/更新 Release Wiki，并从项目 Wiki 自动识别上级页面结构后同步索引。
 
 ## 获取
 
@@ -20,7 +20,65 @@ run.bat
 - 查看已有 Release 列表
 - 发布新版本：版本号、日期、Commit、产品线、changelog、`.bin` 附件
 - 编辑已有版本（从下拉框加载）
-- 自动：创建 Redmine 版本 → 上传项目文件 → 写 Release Wiki → 同步 `*_List` / `Release_Notes`
+- 自动：创建 Redmine 版本 → 上传项目文件 → 写 Release Wiki → 自动识别 Wiki 结构 → 同步上级页面 / 当前发布列表
+
+## Wiki 结构自动识别
+
+工具不需要为每个项目手写固定配置。发布或刷新索引时会读取当前项目 Wiki：
+
+1. 扫描 `Release_..._FW_...` 版本详情页
+2. 查找可能的主页面，例如 `Changelog_for_项目TAG`、`Changelog_for_5X`、`Release_Notes`
+3. 判断项目是否已经存在产品线页面，例如：
+   - `Release_Notes_Regular`
+   - `Release_Notes_Trunking`
+   - `Release_Notes_Record`
+   - `Release_Notes_NP500`
+4. 根据现有结构选择同步模式
+
+### 单列表结构
+
+适合 TP35 这类项目：
+
+```text
+Release_Notes
+├── Release_TP35_FW_V1_00_00_0030_20260320
+├── Release_TP35_FW_V1_0_0_29
+└── Release_TP35_FW_V5_3_7_14
+```
+
+工具会自动更新 `Release_Notes` 的“版本列表”章节。
+
+### 多产品线结构
+
+适合 DP5X 这类项目：
+
+```text
+Changelog_for_5X
+├── Release_Notes_Regular
+├── Release_Notes_Trunking
+├── Release_Notes_Record
+└── Release_Notes_NP500
+```
+
+工具会自动更新：
+
+- 主页面中的“产品线索引”与各分类 include 区域
+- 对应产品线页面中的“版本列表”
+- 版本详情页的父页面关系
+
+如果产品线页面本身已经包含 `{{include(...)}}`，工具会优先更新被 include 的列表页；否则直接更新产品线页面的“版本列表”。
+
+## 推荐的自动同步标记
+
+如果想明确指定工具可改写的区域，可以在 Wiki 页面中加入：
+
+```text
+<!-- RELEASE_SYNC_BEGIN -->
+这里由工具自动生成
+<!-- RELEASE_SYNC_END -->
+```
+
+有标记时，工具只替换标记之间的内容；没有标记时，会尽量只替换“版本列表”或“产品线索引”章节。
 
 ## 分发给用户
 
@@ -38,7 +96,7 @@ run.bat
 
 ## 凭据文件位置
 
-```
+```text
 %LOCALAPPDATA%\redmine-release-tool\settings.json
 ```
 
@@ -72,7 +130,7 @@ python main.py
 |------|-----------|
 | 常规版本 (5X) | `Release_{TAG}_FW_V5_3_8_3` |
 | NP500 | `Release_{TAG}_NP500_FW_V5_3_8_3` |
-| Trunking / Record | 同上，索引按规则自动分类 |
+| Trunking / Record | 同普通 FW 命名，索引按产品线字段或版本规则自动分类 |
 
 `{TAG}` 默认取项目 identifier 大写（如 `dp5x` → `DP5X`）。
 
@@ -86,3 +144,4 @@ python main.py
 - **登录失败**：确认用户名密码、Redmine 是否允许 API 访问
 - **权限不足**：确认用户对目标项目有成员权限
 - **上传失败**：确认项目已启用「文件」模块
+- **索引页面不符合预期**：优先在目标页面加入 `RELEASE_SYNC_BEGIN` / `RELEASE_SYNC_END` 标记，工具会只更新标记区域
