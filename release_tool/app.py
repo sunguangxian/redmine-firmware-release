@@ -12,7 +12,13 @@ from .config_store import get_last_project, get_saved_login, set_last_project, s
 from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
-from .release_page import PRODUCT_LINES, ReleaseForm, parse_release_page, proj_tag_from_project
+from .release_page import (
+    PRODUCT_LINES,
+    ReleaseForm,
+    format_release_files,
+    parse_release_page,
+    proj_tag_from_project,
+)
 
 # 全局会话（单用户桌面工具）
 _session: dict = {"client": None, "projects": []}
@@ -39,7 +45,7 @@ def _connect(base_url: str, username: str, password: str, remember: bool) -> tup
         last = get_last_project()
         default = last if last in [c[1] for c in choices] else (choices[0][1] if choices else None)
         user_label = account.get("user", {}).get("login", username)
-        msg = f"已连接：{user_label}，共 {len(projects)} 个项目"
+        msg = f"已连接：{user_label}，服务器：{base_url}，共 {len(projects)} 个项目"
         return msg, gr.Dropdown(choices=choices, value=default), gr.Dropdown(choices=choices, value=default)
     except RedmineError as exc:
         _session["client"] = None
@@ -79,11 +85,12 @@ def _list_releases(project_id: str) -> str:
 
 def _load_release_to_form(project_id: str, wiki_title: str) -> tuple:
     client = _client()
+    default_line = list(PRODUCT_LINES.keys())[0]
     if not client or not project_id or not wiki_title:
-        return "", "", "", list(PRODUCT_LINES.keys())[0], ""
+        return "", "", "", default_line, "", "（未选择已有版本）", False
     page = client.get_wiki_page(project_id, wiki_title)
     if not page:
-        return "", "", "", list(PRODUCT_LINES.keys())[0], ""
+        return "", "", "", default_line, "", "（未找到版本页面）", False
     parsed = parse_release_page(wiki_title, page.get("text", ""))
     return (
         parsed["version_name"],
@@ -91,6 +98,8 @@ def _load_release_to_form(project_id: str, wiki_title: str) -> tuple:
         parsed["commit"],
         parsed["product_line"],
         parsed["changelog"],
+        format_release_files(parsed.get("files", [])),
+        False,
     )
 
 
@@ -115,6 +124,7 @@ def _publish(
     product_line: str,
     changelog: str,
     files: list,
+    replace_attachments: bool,
     edit_title: str,
 ) -> tuple[str, str]:
     client = _client()
@@ -146,12 +156,21 @@ def _publish(
         changelog_items=items,
         files=file_rows,
         wiki_title=edit_title or None,
+        replace_attachments=bool(replace_attachments),
     )
 
     try:
         pub = ReleasePublisher(client)
         title = pub.publish(form)
-        return f"发布成功：{title}", _list_releases(project_id)
+        if edit_title and replace_attachments:
+            note = "发布成功（已替换 Wiki 中的附件列表，旧项目文件未删除）"
+        elif edit_title and file_rows:
+            note = "发布成功（已保留旧附件并追加新附件）"
+        elif edit_title:
+            note = "发布成功（已保留旧附件）"
+        else:
+            note = "发布成功"
+        return f"{note}：{title}", _list_releases(project_id)
     except RedmineError as exc:
         return f"发布失败：{exc}", _list_releases(project_id)
     except Exception as exc:
@@ -181,7 +200,11 @@ def build_app() -> gr.Blocks:
         gr.Markdown("登录后选择项目，填写 Release 信息与固件附件，自动创建 Wiki 并同步上级索引。")
 
         with gr.Tab("连接设置"):
-            base_url = gr.Textbox(label="Redmine 地址", value=saved["base_url"])
+            base_url = gr.Textbox(
+                label="Redmine 服务器地址",
+                value=saved["base_url"],
+                placeholder="例如：http://192.168.1.208:3000",
+            )
             username = gr.Textbox(label="用户名", value=saved["username"])
             password = gr.Textbox(label="密码", type="password", value=saved["password"])
             remember = gr.Checkbox(label="记住账号密码（保存到本地文件）", value=saved["remember"])
@@ -204,6 +227,12 @@ def build_app() -> gr.Blocks:
                 choices=[],
                 interactive=True,
             )
+            existing_files_info = gr.Textbox(
+                label="已有附件（编辑已有版本时自动加载）",
+                value="（未选择已有版本）",
+                lines=4,
+                interactive=False,
+            )
             with gr.Row():
                 version_name = gr.Textbox(label="版本号", placeholder="V5.3.8.3")
                 release_date = gr.Textbox(label="发布日期", value=today)
@@ -214,7 +243,11 @@ def build_app() -> gr.Blocks:
                 lines=6,
                 placeholder="1. 修复 xxx\n2. 新增 yyy",
             )
-            files = gr.File(label="固件附件 (.bin)", file_count="multiple", file_types=[".bin"])
+            files = gr.File(label="新增固件附件 (.bin)", file_count="multiple", file_types=[".bin"])
+            replace_attachments = gr.Checkbox(
+                label="替换旧附件列表（不勾选则保留旧附件并追加新附件；不会删除 Redmine 项目文件里的旧文件）",
+                value=False,
+            )
             publish_btn = gr.Button("发布到 Redmine", variant="primary")
             publish_status = gr.Textbox(label="发布结果", interactive=False)
 
@@ -240,7 +273,15 @@ def build_app() -> gr.Blocks:
         edit_release_dd.change(
             _load_release_to_form,
             inputs=[project_dd, edit_release_dd],
-            outputs=[version_name, release_date, commit, product_line, changelog],
+            outputs=[
+                version_name,
+                release_date,
+                commit,
+                product_line,
+                changelog,
+                existing_files_info,
+                replace_attachments,
+            ],
         )
 
         publish_btn.click(
@@ -253,6 +294,7 @@ def build_app() -> gr.Blocks:
                 product_line,
                 changelog,
                 files,
+                replace_attachments,
                 edit_release_dd,
             ],
             outputs=[publish_status, release_table],
