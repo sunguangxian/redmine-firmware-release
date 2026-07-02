@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "redmine-release-tool"
+DEFAULT_REDMINE_BASE_URL = "http://192.168.1.208:3000"
 
 
 def config_dir() -> Path:
@@ -39,10 +40,14 @@ def save_settings(data: dict[str, Any]) -> None:
         json.dump(data, fh, ensure_ascii=False, indent=2)
 
 
+def default_base_url() -> str:
+    return os.environ.get("REDMINE_BASE_URL", DEFAULT_REDMINE_BASE_URL).rstrip("/")
+
+
 def get_saved_login() -> dict[str, str]:
     data = load_settings()
     return {
-        "base_url": data.get("base_url", "http://192.168.1.208:3000"),
+        "base_url": data.get("base_url") or default_base_url(),
         "username": data.get("username", ""),
         "password": data.get("password", ""),
         "remember": bool(data.get("remember", True)),
