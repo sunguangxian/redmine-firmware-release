@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,9 @@ DEFAULT_REDMINE_BASE_URL = "http://192.168.1.208:3000"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DATA_DIR = ".redmine-release-tool"
 SAVE_LOGIN_SECRETS_ENV = "RELEASE_TOOL_SAVE_LOGIN_SECRETS"
+MAIL_SCOPE_INTERNAL = "internal"
+MAIL_SCOPE_EXTERNAL = "external"
+MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
 
 
 def config_dir() -> Path:
@@ -131,28 +134,153 @@ def store_login(
     save_settings(data)
 
 
-def get_email_settings() -> dict[str, Any]:
+def _normalize_scope(scope: str) -> str:
+    value = (scope or MAIL_SCOPE_INTERNAL).strip().lower()
+    return value if value in MAIL_SCOPES else MAIL_SCOPE_INTERNAL
+
+
+def _normalize_email_server(server: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "smtp_host": (server.get("smtp_host") or "").strip(),
+        "smtp_port": int(server.get("smtp_port") or 25),
+        "smtp_from": (server.get("smtp_from") or "").strip(),
+        "use_tls": bool(server.get("use_tls", False)),
+    }
+
+
+def _normalize_email_auth(email: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "smtp_user": (email.get("smtp_user") or "").strip(),
+        "smtp_password": email.get("smtp_password") or "",
+        "smtp_from": (email.get("smtp_from") or "").strip(),
+        "contacts_to": email.get("contacts_to", []),
+        "contacts_cc": email.get("contacts_cc", []),
+    }
+
+
+def _normalize_contacts(contacts: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contacts_to": contacts.get("contacts_to") or contacts.get("to") or [],
+        "contacts_cc": contacts.get("contacts_cc") or contacts.get("cc") or [],
+    }
+
+
+def get_email_server_settings(scope: str) -> dict[str, Any]:
+    """读取管理员维护的内网/外网 SMTP 服务器配置。"""
+    scope = _normalize_scope(scope)
     data = load_settings()
-    email = data.get("email") or {}
-    return _normalize_email_settings(email)
+    servers = data.get("email_servers") or {}
+    server = servers.get(scope) or {}
+
+    # 兼容旧版本：原来的全局 email 视作外网服务器默认值。
+    if not server and scope == MAIL_SCOPE_EXTERNAL:
+        legacy = data.get("email") or {}
+        server = legacy
+    return _normalize_email_server(server)
+
+
+def store_email_server_settings(
+    scope: str,
+    *,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_from: str = "",
+    use_tls: bool,
+) -> None:
+    scope = _normalize_scope(scope)
+    data = load_settings()
+    servers = data.get("email_servers") or {}
+    servers[scope] = {
+        "smtp_host": (smtp_host or "").strip(),
+        "smtp_port": int(smtp_port or 25),
+        "smtp_from": (smtp_from or "").strip(),
+        "use_tls": bool(use_tls),
+    }
+    data["email_servers"] = servers
+    save_settings(data)
+
+
+def get_internal_contact_settings() -> dict[str, Any]:
+    data = load_settings()
+    contacts = data.get("internal_contacts") or {}
+
+    # 兼容旧版本：原全局 contacts 可作为内网联系人初始值。
+    if not contacts:
+        legacy = data.get("email") or {}
+        contacts = {
+            "contacts_to": legacy.get("contacts_to", []),
+            "contacts_cc": legacy.get("contacts_cc", []),
+        }
+    return _normalize_contacts(contacts)
+
+
+def store_internal_contact_settings(*, contacts_to: list[str], contacts_cc: list[str]) -> None:
+    data = load_settings()
+    data["internal_contacts"] = {
+        "contacts_to": contacts_to,
+        "contacts_cc": contacts_cc,
+    }
+    save_settings(data)
+
+
+def get_user_external_email_settings(user_key: str) -> dict[str, Any]:
+    data = load_user_settings(user_key)
+    email = data.get("external_email") or {}
+
+    # 兼容旧版本：原来的用户 email 视作外网个人账号和外网联系人。
+    if not email:
+        email = data.get("email") or {}
+    return _normalize_email_auth(email)
+
+
+def store_user_external_email_settings(
+    user_key: str,
+    *,
+    smtp_user: str,
+    smtp_password: str,
+    smtp_from: str,
+    contacts_to: list[str],
+    contacts_cc: list[str],
+) -> None:
+    data = load_user_settings(user_key)
+    data["external_email"] = {
+        "smtp_user": (smtp_user or "").strip(),
+        "smtp_password": smtp_password or "",
+        "smtp_from": (smtp_from or "").strip(),
+        "contacts_to": contacts_to,
+        "contacts_cc": contacts_cc,
+    }
+    save_user_settings(user_key, data)
+
+
+# 旧接口保留，便于历史代码或脚本继续使用。
+def get_email_settings() -> dict[str, Any]:
+    server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
+    contacts = get_internal_contact_settings()
+    return {
+        "smtp_host": server["smtp_host"],
+        "smtp_port": server["smtp_port"],
+        "smtp_user": "",
+        "smtp_password": "",
+        "smtp_from": server["smtp_from"],
+        "use_tls": server["use_tls"],
+        "contacts_to": contacts["contacts_to"],
+        "contacts_cc": contacts["contacts_cc"],
+    }
 
 
 def get_user_email_settings(user_key: str) -> dict[str, Any]:
-    data = load_user_settings(user_key)
-    email = data.get("email") or {}
-    return _normalize_email_settings(email)
-
-
-def _normalize_email_settings(email: dict[str, Any]) -> dict[str, Any]:
+    server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
+    email = get_user_external_email_settings(user_key)
     return {
-        "smtp_host": email.get("smtp_host", ""),
-        "smtp_port": int(email.get("smtp_port") or 25),
-        "smtp_user": email.get("smtp_user", ""),
-        "smtp_password": email.get("smtp_password", ""),
-        "smtp_from": email.get("smtp_from", ""),
-        "use_tls": bool(email.get("use_tls", False)),
-        "contacts_to": email.get("contacts_to", []),
-        "contacts_cc": email.get("contacts_cc", []),
+        "smtp_host": server["smtp_host"],
+        "smtp_port": server["smtp_port"],
+        "smtp_user": email["smtp_user"],
+        "smtp_password": email["smtp_password"],
+        "smtp_from": email["smtp_from"] or server["smtp_from"],
+        "use_tls": server["use_tls"],
+        "contacts_to": email["contacts_to"],
+        "contacts_cc": email["contacts_cc"],
     }
 
 
@@ -167,18 +295,8 @@ def store_email_settings(
     contacts_to: list[str],
     contacts_cc: list[str],
 ) -> None:
-    data = load_settings()
-    data["email"] = {
-        "smtp_host": (smtp_host or "").strip(),
-        "smtp_port": int(smtp_port or 25),
-        "smtp_user": (smtp_user or "").strip(),
-        "smtp_password": smtp_password or "",
-        "smtp_from": (smtp_from or "").strip(),
-        "use_tls": bool(use_tls),
-        "contacts_to": contacts_to,
-        "contacts_cc": contacts_cc,
-    }
-    save_settings(data)
+    store_email_server_settings(MAIL_SCOPE_EXTERNAL, smtp_host=smtp_host, smtp_port=smtp_port, smtp_from=smtp_from, use_tls=use_tls)
+    store_internal_contact_settings(contacts_to=contacts_to, contacts_cc=contacts_cc)
 
 
 def store_user_email_settings(
@@ -193,18 +311,15 @@ def store_user_email_settings(
     contacts_to: list[str],
     contacts_cc: list[str],
 ) -> None:
-    data = load_user_settings(user_key)
-    data["email"] = {
-        "smtp_host": (smtp_host or "").strip(),
-        "smtp_port": int(smtp_port or 25),
-        "smtp_user": (smtp_user or "").strip(),
-        "smtp_password": smtp_password or "",
-        "smtp_from": (smtp_from or "").strip(),
-        "use_tls": bool(use_tls),
-        "contacts_to": contacts_to,
-        "contacts_cc": contacts_cc,
-    }
-    save_user_settings(user_key, data)
+    # 普通用户不能修改 SMTP 服务器；仅保存个人外网账号和外网联系人。
+    store_user_external_email_settings(
+        user_key,
+        smtp_user=smtp_user,
+        smtp_password=smtp_password,
+        smtp_from=smtp_from,
+        contacts_to=contacts_to,
+        contacts_cc=contacts_cc,
+    )
 
 
 def get_last_project() -> str:
