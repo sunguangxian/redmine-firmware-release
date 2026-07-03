@@ -2,7 +2,7 @@
 
 面向固件团队的发布工具：用户登录 Redmine、选择项目、填写 Release 信息与固件附件，自动创建或更新 Release Wiki，并按项目 Wiki 配置页同步索引。
 
-当前架构：Vue 3 前端 + FastAPI 后端 + Python 发布逻辑。
+当前架构：Vue 3 前端 + FastAPI 后端 + Python 发布逻辑 + SQLite 数据存储。
 
 ## 启动
 
@@ -37,6 +37,7 @@ http://127.0.0.1:5173
 
 - Vue 3 + Element Plus 图形界面
 - FastAPI 后端接口
+- SQLite 保存配置和用户数据
 - Redmine 登录：用户名密码或 API Key
 - 结构管理：生成、读取、检测、保存 Release_Tool_Config
 - 版本发布：版本号、日期、Commit、产品线、changelog、bin 附件
@@ -60,12 +61,31 @@ http://127.0.0.1:5173
 - 发布时选择外网邮件，只能选择当前用户自己的外网联系人。
 - 后端会再次校验联系人范围。
 
-配置保存位置：
+## 数据存储
+
+数据保存到 SQLite：
+
+```text
+.redmine-release-tool/release_tool.db
+```
+
+主要数据表：
+
+```text
+app_settings           # Redmine 地址、登录方式、最近项目等应用配置
+mail_servers           # internal / external SMTP 服务器配置
+user_external_email    # 用户个人外网 SMTP 账号配置
+contacts               # 内网联系人和用户外网联系人
+```
+
+当前版本不再读取旧 JSON 配置：
 
 ```text
 .redmine-release-tool/settings.json
 .redmine-release-tool/users/*.json
 ```
+
+如需重新配置，启动后在页面中重新保存邮件服务器、联系人和个人外网账号即可。
 
 ## 目录结构
 
