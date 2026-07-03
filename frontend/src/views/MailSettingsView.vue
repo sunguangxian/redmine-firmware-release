@@ -27,8 +27,8 @@
         <el-checkbox v-model="settings.admin.external_server.use_tls" class="full-row">外网使用 STARTTLS；465 端口自动 SSL</el-checkbox>
 
         <el-divider class="full-row" content-position="left">内网联系人</el-divider>
-        <el-input v-model="internalToText" type="textarea" :rows="4" placeholder="每行或逗号分隔一个邮箱" />
-        <el-input v-model="internalCcText" type="textarea" :rows="4" placeholder="每行或逗号分隔一个邮箱" />
+        <el-input v-model="internalToText" type="textarea" :rows="4" placeholder="内网收件人，每行或逗号分隔一个邮箱" />
+        <el-input v-model="internalCcText" type="textarea" :rows="4" placeholder="内网抄送，每行或逗号分隔一个邮箱" />
       </div>
       <div class="toolbar" style="margin-top: 16px">
         <el-button type="primary" :loading="savingAdmin" @click="saveAdmin">保存管理员邮件配置</el-button>
@@ -64,7 +64,7 @@ import { ElMessage } from 'element-plus'
 import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings } from '../api/http'
 import type { MailSettings, SessionInfo } from '../types'
 
-def splitText(text: string): string[] {
+function splitText(text: string): string[] {
   return text.split(/[\n,;，；\s]+/).map((item) => item.trim()).filter((item) => item.includes('@'))
 }
 
