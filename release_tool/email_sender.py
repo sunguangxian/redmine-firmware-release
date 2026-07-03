@@ -11,6 +11,9 @@ from email.message import EmailMessage
 from typing import Iterable
 from urllib.parse import quote
 
+MAIL_SCOPE_INTERNAL = "internal"
+MAIL_SCOPE_EXTERNAL = "external"
+
 
 class EmailSendError(Exception):
     pass
@@ -60,11 +63,64 @@ def normalize_contact_lines(text: str) -> list[str]:
     return split_emails(text or "")
 
 
-def build_release_email_subject(project_id: str, version_name: str, product_line: str) -> str:
+def _normalize_mail_scope(mail_scope: str | None) -> str:
+    return mail_scope if mail_scope in {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL} else MAIL_SCOPE_INTERNAL
+
+
+def build_release_email_subject(project_id: str, version_name: str, product_line: str, mail_scope: str = MAIL_SCOPE_INTERNAL) -> str:
+    """构建发布邮件标题。mail_scope 支持 internal/external 两个模板。"""
+    scope = _normalize_mail_scope(mail_scope)
+    if scope == MAIL_SCOPE_EXTERNAL:
+        return build_external_release_email_subject(project_id, version_name, product_line)
+    return build_internal_release_email_subject(project_id, version_name, product_line)
+
+
+def build_internal_release_email_subject(project_id: str, version_name: str, product_line: str) -> str:
     return f"[{project_id}] 固件版本发布 {version_name} - {product_line}"
 
 
+def build_external_release_email_subject(project_id: str, version_name: str, product_line: str) -> str:
+    return f"[Firmware Release][{project_id}] {version_name} - {product_line}"
+
+
 def build_release_email_body(
+    *,
+    base_url: str,
+    project_id: str,
+    wiki_title: str,
+    version_name: str,
+    release_date: str,
+    commit: str,
+    product_line: str,
+    changelog_items: Iterable[str],
+    attachment_names: Iterable[str],
+    mail_scope: str = MAIL_SCOPE_INTERNAL,
+) -> str:
+    """构建发布邮件正文。mail_scope 支持 internal/external 两个模板。"""
+    scope = _normalize_mail_scope(mail_scope)
+    if scope == MAIL_SCOPE_EXTERNAL:
+        return build_external_release_email_body(
+            project_id=project_id,
+            version_name=version_name,
+            release_date=release_date,
+            product_line=product_line,
+            changelog_items=changelog_items,
+            attachment_names=attachment_names,
+        )
+    return build_internal_release_email_body(
+        base_url=base_url,
+        project_id=project_id,
+        wiki_title=wiki_title,
+        version_name=version_name,
+        release_date=release_date,
+        commit=commit,
+        product_line=product_line,
+        changelog_items=changelog_items,
+        attachment_names=attachment_names,
+    )
+
+
+def build_internal_release_email_body(
     *,
     base_url: str,
     project_id: str,
@@ -93,6 +149,31 @@ def build_release_email_body(
         f"附件：\n{attachments}\n\n"
         f"Wiki：{wiki_url}\n"
         f"项目文件：{files_url}\n"
+    )
+
+
+def build_external_release_email_body(
+    *,
+    project_id: str,
+    version_name: str,
+    release_date: str,
+    product_line: str,
+    changelog_items: Iterable[str],
+    attachment_names: Iterable[str],
+) -> str:
+    changelog = "\n".join(f"{idx}. {item}" for idx, item in enumerate(changelog_items, 1)) or "（无）"
+    attachments = "\n".join(f"- {name}" for name in attachment_names) or "（本次邮件未附加文件，请联系相关人员获取固件文件）"
+
+    return (
+        f"您好，\n\n"
+        f"固件版本已发布，请查收。\n\n"
+        f"项目：{project_id}\n"
+        f"版本：{version_name}\n"
+        f"产品线：{product_line}\n"
+        f"发布日期：{release_date}\n\n"
+        f"变更说明：\n{changelog}\n\n"
+        f"附件：\n{attachments}\n\n"
+        f"如有问题，请联系技术支持人员。\n"
     )
 
 
