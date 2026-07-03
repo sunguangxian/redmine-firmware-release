@@ -27,6 +27,7 @@ class EmailSettings:
     smtp_password: str = ""
     smtp_from: str = ""
     use_tls: bool = False
+    template_scope: str = ""
 
 
 _EMAIL_SPLIT_RE = re.compile(r"[;,，；\s]+")
@@ -193,6 +194,8 @@ def send_release_email(
     if not to_addrs:
         raise EmailSendError("请填写或选择至少一个收件人")
 
+    subject, body = _apply_template_scope(settings, subject, body)
+
     cc_addrs = cc_addrs or []
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -226,6 +229,47 @@ def send_release_email(
                 smtp.send_message(msg, from_addr=settings.smtp_from, to_addrs=recipients)
     except Exception as exc:  # noqa: BLE001 - 展示给用户的桌面工具，需要保留原始错误信息
         raise EmailSendError(str(exc)) from exc
+
+
+def _apply_template_scope(settings: EmailSettings, subject: str, body: str) -> tuple[str, str]:
+    scope = settings.template_scope or (MAIL_SCOPE_EXTERNAL if settings.smtp_user else MAIL_SCOPE_INTERNAL)
+    if _normalize_mail_scope(scope) == MAIL_SCOPE_EXTERNAL:
+        return _externalize_subject(subject), _externalize_body(body)
+    return subject, body
+
+
+def _externalize_subject(subject: str) -> str:
+    if "Firmware Release" in subject:
+        return subject
+    return subject.replace("固件版本发布", "Firmware Release")
+
+
+def _externalize_body(body: str) -> str:
+    if body.startswith("您好，"):
+        return body
+
+    lines = body.splitlines()
+    filtered: list[str] = []
+    skip_prefixes = ("Commit：", "Wiki：", "项目文件：")
+    for line in lines:
+        if line.startswith(skip_prefixes):
+            continue
+        filtered.append(line)
+
+    while filtered and not filtered[0].strip():
+        filtered.pop(0)
+    if filtered and filtered[0].strip() == "固件版本已发布。":
+        filtered.pop(0)
+
+    return "\n".join([
+        "您好，",
+        "",
+        "固件版本已发布，请查收。",
+        "",
+        *filtered,
+        "",
+        "如有问题，请联系技术支持人员。",
+    ]).strip() + "\n"
 
 
 def _smtp_login_if_needed(smtp: smtplib.SMTP, settings: EmailSettings) -> None:
