@@ -2,15 +2,38 @@
 
 from __future__ import annotations
 
+import os
 import traceback
 from datetime import date
-import os
 from pathlib import Path
 
 import gradio as gr
 
-from .config_store import allow_login_secret_storage, default_base_url, get_email_settings, get_last_project, get_saved_login, get_user_email_settings, set_last_project, store_login, store_user_email_settings
-from .email_sender import EmailSendError, EmailSettings, build_release_email_body, build_release_email_subject, normalize_contact_lines, send_release_email, split_emails
+from .config_store import (
+    MAIL_SCOPE_EXTERNAL,
+    MAIL_SCOPE_INTERNAL,
+    allow_login_secret_storage,
+    default_base_url,
+    get_email_server_settings,
+    get_internal_contact_settings,
+    get_last_project,
+    get_saved_login,
+    get_user_external_email_settings,
+    set_last_project,
+    store_email_server_settings,
+    store_internal_contact_settings,
+    store_login,
+    store_user_external_email_settings,
+)
+from .email_sender import (
+    EmailSendError,
+    EmailSettings,
+    build_release_email_body,
+    build_release_email_subject,
+    normalize_contact_lines,
+    send_release_email,
+    split_emails,
+)
 from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
@@ -19,6 +42,8 @@ from .wiki_config import CONFIG_PAGE_TITLE
 from .wiki_templates import TEMPLATE_CHOICES, build_config_template, validate_config_text
 
 RECENT_RELEASE_LIMIT = 10
+MAIL_SCOPE_CHOICES = [("内网邮件", MAIL_SCOPE_INTERNAL), ("外网邮件", MAIL_SCOPE_EXTERNAL)]
+
 BROWSER_LOGIN_STORE_JS = """
 (session, authMode, username, password, apiKey, remember) => {
     const key = "redmine-release-tool-login-v1";
@@ -66,7 +91,18 @@ BROWSER_LOGIN_LOAD_JS = """
 
 
 def _empty_session() -> dict:
-    return {"connected": False, "base_url": "", "auth_mode": "password", "username": "", "password": "", "api_key": "", "projects": []}
+    return {
+        "connected": False,
+        "base_url": "",
+        "auth_mode": "password",
+        "username": "",
+        "password": "",
+        "api_key": "",
+        "user_login": "",
+        "user_key": "",
+        "is_admin": False,
+        "projects": [],
+    }
 
 
 def _user_key(base_url: str, login: str) -> str:
@@ -75,6 +111,10 @@ def _user_key(base_url: str, login: str) -> str:
 
 def _session_user_key(session: dict | None) -> str:
     return (session or {}).get("user_key", "")
+
+
+def _session_is_admin(session: dict | None) -> bool:
+    return bool((session or {}).get("is_admin", False))
 
 
 def _client(session: dict | None) -> RedmineClient | None:
@@ -114,6 +154,21 @@ def _page_visibility(connected: bool) -> tuple[dict, dict]:
     return gr.update(visible=not connected), gr.update(visible=connected)
 
 
+def _normalize_mail_scope(scope: str | None) -> str:
+    return scope if scope in {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL} else MAIL_SCOPE_INTERNAL
+
+
+def _mail_scope_label(scope: str | None) -> str:
+    return "外网" if _normalize_mail_scope(scope) == MAIL_SCOPE_EXTERNAL else "内网"
+
+
+def _to_int_port(port: int | float | str, default: int = 25) -> int:
+    try:
+        return int(float(port or default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _connect(auth_mode: str, username: str, password: str, api_key: str, _browser_remember: bool) -> tuple:
     base_url = default_base_url()
     auth_mode = auth_mode or "password"
@@ -133,6 +188,7 @@ def _connect(auth_mode: str, username: str, password: str, api_key: str, _browse
         store_login(base_url, username, password, False, auth_mode=auth_mode, api_key=api_key)
         account_user = account.get("user", {})
         user_label = account_user.get("login", username or "api-key")
+        is_admin = bool(account_user.get("admin", False))
         session = {
             "connected": True,
             "base_url": base_url,
@@ -142,13 +198,15 @@ def _connect(auth_mode: str, username: str, password: str, api_key: str, _browse
             "api_key": api_key,
             "user_login": user_label,
             "user_key": _user_key(base_url, str(user_label)),
+            "is_admin": is_admin,
             "projects": projects,
         }
         default = _default_project_id(projects)
         mode_label = "API Key" if auth_mode == "api_key" else "用户名密码"
+        role_label = "管理员" if is_admin else "普通用户"
         login_hidden, main_shown = _page_visibility(True)
         return (
-            f"已连接：{user_label}，方式：{mode_label}，共 {len(projects)} 个项目",
+            f"已连接：{user_label}，方式：{mode_label}，角色：{role_label}，共 {len(projects)} 个项目",
             session,
             login_hidden,
             main_shown,
@@ -169,8 +227,9 @@ def _restore_connection(session: dict | None) -> tuple:
         default_line = _default_product_line()
         release_table = _list_releases(session, default or "", default_line)
         login_hidden, main_shown = _page_visibility(True)
+        role_label = "管理员" if _session_is_admin(session) else "普通用户"
         return (
-            f"已恢复登录状态，共 {len(projects)} 个项目",
+            f"已恢复登录状态，角色：{role_label}，共 {len(projects)} 个项目",
             session or _empty_session(),
             login_hidden,
             main_shown,
@@ -204,49 +263,123 @@ def _restore_connection(session: dict | None) -> tuple:
     return status, restored_session, login_update, main_update, project_dd, config_project_dd, edit_project_dd, release_table, release_table, release_choices
 
 
-def _notice_component_updates(data: dict) -> tuple:
-    contacts_to = data.get("contacts_to", [])
-    contacts_cc = data.get("contacts_cc", [])
+def _contact_lists_for_scope(session: dict | None, mail_scope: str | None) -> tuple[list[str], list[str]]:
+    scope = _normalize_mail_scope(mail_scope)
+    if scope == MAIL_SCOPE_INTERNAL:
+        contacts = get_internal_contact_settings()
+    else:
+        contacts = get_user_external_email_settings(_session_user_key(session))
+    return contacts.get("contacts_to", []), contacts.get("contacts_cc", [])
+
+
+def _checkbox_updates_for_scope(session: dict | None, mail_scope: str | None) -> tuple[gr.CheckboxGroup, gr.CheckboxGroup]:
+    contacts_to, contacts_cc = _contact_lists_for_scope(session, mail_scope)
+    return gr.CheckboxGroup(choices=contacts_to, value=[]), gr.CheckboxGroup(choices=contacts_cc, value=[])
+
+
+def _release_scope_changed(session: dict | None, mail_scope: str | None) -> tuple[gr.CheckboxGroup, gr.CheckboxGroup]:
+    return _checkbox_updates_for_scope(session, mail_scope)
+
+
+def _notice_contact_outputs(session: dict | None, release_scope: str | None, edit_scope: str | None) -> tuple:
+    release_to, release_cc = _checkbox_updates_for_scope(session, release_scope)
+    edit_to, edit_cc = _checkbox_updates_for_scope(session, edit_scope)
+    return release_to, release_cc, edit_to, edit_cc
+
+
+def _notice_component_updates(session: dict | None, release_scope: str | None, edit_scope: str | None) -> tuple:
+    internal_server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
+    external_server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
+    internal_contacts = get_internal_contact_settings()
+    external_user = get_user_external_email_settings(_session_user_key(session))
     return (
-        gr.update(value=data.get("smtp_host", "")),
-        gr.update(value=data.get("smtp_port", 25)),
-        gr.update(value=data.get("smtp_user", "")),
-        gr.update(value=data.get("smtp_password", "")),
-        gr.update(value=data.get("smtp_from", "")),
-        gr.update(value=data.get("use_tls", False)),
-        gr.update(value="\n".join(contacts_to)),
-        gr.update(value="\n".join(contacts_cc)),
-        gr.CheckboxGroup(choices=contacts_to, value=[]),
-        gr.CheckboxGroup(choices=contacts_cc, value=[]),
-        gr.CheckboxGroup(choices=contacts_to, value=[]),
-        gr.CheckboxGroup(choices=contacts_cc, value=[]),
+        gr.update(visible=_session_is_admin(session)),
+        gr.update(value=internal_server["smtp_host"]),
+        gr.update(value=internal_server["smtp_port"]),
+        gr.update(value=internal_server["smtp_from"]),
+        gr.update(value=internal_server["use_tls"]),
+        gr.update(value=external_server["smtp_host"]),
+        gr.update(value=external_server["smtp_port"]),
+        gr.update(value=external_server["use_tls"]),
+        gr.update(value="\n".join(internal_contacts["contacts_to"])),
+        gr.update(value="\n".join(internal_contacts["contacts_cc"])),
+        gr.update(value=external_user["smtp_user"]),
+        gr.update(value=external_user["smtp_password"]),
+        gr.update(value=external_user["smtp_from"]),
+        gr.update(value="\n".join(external_user["contacts_to"])),
+        gr.update(value="\n".join(external_user["contacts_cc"])),
+        *_notice_contact_outputs(session, release_scope, edit_scope),
     )
 
 
-def _load_notice_settings(session: dict | None) -> tuple:
-    user_key = _session_user_key(session)
-    data = get_user_email_settings(user_key) if user_key else get_email_settings()
-    return _notice_component_updates(data)
+def _load_notice_settings(session: dict | None, release_scope: str | None = MAIL_SCOPE_INTERNAL, edit_scope: str | None = MAIL_SCOPE_INTERNAL) -> tuple:
+    return _notice_component_updates(session, release_scope, edit_scope)
 
 
-def _save_notice_settings(session: dict | None, host: str, port: int | float | str, user: str, secret: str, sender: str, use_tls: bool, to_text: str, cc_text: str) -> tuple[str, gr.CheckboxGroup, gr.CheckboxGroup, gr.CheckboxGroup, gr.CheckboxGroup]:
+def _save_admin_notice_settings(
+    session: dict | None,
+    internal_host: str,
+    internal_port: int | float | str,
+    internal_sender: str,
+    internal_use_tls: bool,
+    external_host: str,
+    external_port: int | float | str,
+    external_use_tls: bool,
+    internal_to_text: str,
+    internal_cc_text: str,
+    release_scope: str | None,
+    edit_scope: str | None,
+) -> tuple:
+    if not _session_is_admin(session):
+        return "只有 Redmine 管理员可以修改邮件服务器和内网联系人配置", *_notice_contact_outputs(session, release_scope, edit_scope)
+
+    contacts_to = normalize_contact_lines(internal_to_text or "")
+    contacts_cc = normalize_contact_lines(internal_cc_text or "")
+    store_email_server_settings(
+        MAIL_SCOPE_INTERNAL,
+        smtp_host=internal_host,
+        smtp_port=_to_int_port(internal_port),
+        smtp_from=internal_sender,
+        use_tls=internal_use_tls,
+    )
+    store_email_server_settings(
+        MAIL_SCOPE_EXTERNAL,
+        smtp_host=external_host,
+        smtp_port=_to_int_port(external_port),
+        smtp_from="",
+        use_tls=external_use_tls,
+    )
+    store_internal_contact_settings(contacts_to=contacts_to, contacts_cc=contacts_cc)
+    msg = f"管理员邮件配置已保存：内网收件人 {len(contacts_to)} 个，内网抄送 {len(contacts_cc)} 个"
+    return msg, *_notice_contact_outputs(session, release_scope, edit_scope)
+
+
+def _save_user_notice_settings(
+    session: dict | None,
+    external_user: str,
+    external_secret: str,
+    external_sender: str,
+    external_to_text: str,
+    external_cc_text: str,
+    release_scope: str | None,
+    edit_scope: str | None,
+) -> tuple:
     user_key = _session_user_key(session)
     if not user_key:
-        return "请先登录 Redmine", gr.CheckboxGroup(choices=[]), gr.CheckboxGroup(choices=[]), gr.CheckboxGroup(choices=[]), gr.CheckboxGroup(choices=[])
-    contacts_to = normalize_contact_lines(to_text or "")
-    contacts_cc = normalize_contact_lines(cc_text or "")
-    try:
-        smtp_port = int(float(port or 25))
-    except (TypeError, ValueError):
-        smtp_port = 25
-    store_user_email_settings(user_key, smtp_host=host, smtp_port=smtp_port, smtp_user=user, smtp_password=secret, smtp_from=sender, use_tls=use_tls, contacts_to=contacts_to, contacts_cc=contacts_cc)
-    return (
-        f"邮件设置已保存到当前用户：收件人 {len(contacts_to)} 个，抄送 {len(contacts_cc)} 个",
-        gr.CheckboxGroup(choices=contacts_to, value=[]),
-        gr.CheckboxGroup(choices=contacts_cc, value=[]),
-        gr.CheckboxGroup(choices=contacts_to, value=[]),
-        gr.CheckboxGroup(choices=contacts_cc, value=[]),
+        return "请先登录 Redmine", *_notice_contact_outputs(session, release_scope, edit_scope)
+
+    contacts_to = normalize_contact_lines(external_to_text or "")
+    contacts_cc = normalize_contact_lines(external_cc_text or "")
+    store_user_external_email_settings(
+        user_key,
+        smtp_user=external_user,
+        smtp_password=external_secret,
+        smtp_from=external_sender,
+        contacts_to=contacts_to,
+        contacts_cc=contacts_cc,
     )
+    msg = f"个人外网邮件设置已保存：外网收件人 {len(contacts_to)} 个，外网抄送 {len(contacts_cc)} 个"
+    return msg, *_notice_contact_outputs(session, release_scope, edit_scope)
 
 
 def _list_releases(session: dict | None, project_id: str, product_line: str = "") -> str:
@@ -342,7 +475,23 @@ def _save_config(session: dict | None, project_id: str, config_text: str) -> str
         return f"保存失败：{exc}"
 
 
-def _publish(session: dict | None, project_id: str, version_name: str, release_date: str, commit: str, product_line: str, changelog: str, files: list, replace_attachments: bool, notice_enabled: bool, selected_to: list[str], selected_cc: list[str], edit_title: str, display_product_line: str | None = None) -> tuple[str, str]:
+def _publish(
+    session: dict | None,
+    project_id: str,
+    version_name: str,
+    release_date: str,
+    commit: str,
+    product_line: str,
+    changelog: str,
+    files: list,
+    replace_attachments: bool,
+    notice_enabled: bool,
+    mail_scope: str,
+    selected_to: list[str],
+    selected_cc: list[str],
+    edit_title: str,
+    display_product_line: str | None = None,
+) -> tuple[str, str]:
     list_product_line = display_product_line or product_line
     client = _client(session)
     if not client:
@@ -362,7 +511,18 @@ def _publish(session: dict | None, project_id: str, version_name: str, release_d
         if p.exists():
             file_rows.append((p.name, "", p.read_bytes()))
 
-    form = ReleaseForm(project_id=project_id, proj_tag=proj_tag_from_project(project_id, edit_title or None), version_name=version_name.strip(), release_date=release_date.strip(), commit=commit.strip(), product_line=product_line, changelog_items=items, files=file_rows, wiki_title=edit_title or None, replace_attachments=bool(replace_attachments))
+    form = ReleaseForm(
+        project_id=project_id,
+        proj_tag=proj_tag_from_project(project_id, edit_title or None),
+        version_name=version_name.strip(),
+        release_date=release_date.strip(),
+        commit=commit.strip(),
+        product_line=product_line,
+        changelog_items=items,
+        files=file_rows,
+        wiki_title=edit_title or None,
+        replace_attachments=bool(replace_attachments),
+    )
 
     try:
         title = ReleasePublisher(client).publish(form)
@@ -375,7 +535,21 @@ def _publish(session: dict | None, project_id: str, version_name: str, release_d
         else:
             note = "发布成功"
         if notice_enabled:
-            note += "\n" + _send_notice(session, client, project_id, title, version_name.strip(), release_date.strip(), commit.strip(), product_line, items, file_rows, selected_to, selected_cc)
+            note += "\n" + _send_notice(
+                session,
+                client,
+                project_id,
+                title,
+                version_name.strip(),
+                release_date.strip(),
+                commit.strip(),
+                product_line,
+                items,
+                file_rows,
+                mail_scope,
+                selected_to,
+                selected_cc,
+            )
         return f"{note}：{title}", _list_releases(session, project_id, list_product_line)
     except RedmineError as exc:
         return f"发布失败：{exc}", _list_releases(session, project_id, list_product_line)
@@ -383,16 +557,86 @@ def _publish(session: dict | None, project_id: str, version_name: str, release_d
         return f"发布失败：{exc}\n{traceback.format_exc()}", _list_releases(session, project_id, list_product_line)
 
 
-def _send_notice(session: dict | None, client: RedmineClient, project_id: str, wiki_title: str, version_name: str, release_date: str, commit: str, product_line: str, items: list[str], file_rows: list[tuple[str, str, bytes]], selected_to: list[str], selected_cc: list[str]) -> str:
-    data = get_user_email_settings(_session_user_key(session))
-    settings = EmailSettings(smtp_host=data["smtp_host"], smtp_port=data["smtp_port"], smtp_user=data["smtp_user"], smtp_password=data["smtp_password"], smtp_from=data["smtp_from"], use_tls=data["use_tls"])
+def _validate_selected_contacts(
+    mail_scope: str,
+    to_addrs: list[str],
+    cc_addrs: list[str],
+    contacts_to: list[str],
+    contacts_cc: list[str],
+) -> None:
+    allowed = {item.lower() for item in split_emails(contacts_to, contacts_cc)}
+    selected = {item.lower() for item in split_emails(to_addrs, cc_addrs)}
+    invalid = sorted(selected - allowed)
+    if invalid:
+        label = _mail_scope_label(mail_scope)
+        raise EmailSendError(f"{label}邮件包含不允许的联系人：{', '.join(invalid)}")
+
+
+def _build_notice_settings(session: dict | None, mail_scope: str) -> tuple[EmailSettings, list[str], list[str]]:
+    scope = _normalize_mail_scope(mail_scope)
+    if scope == MAIL_SCOPE_INTERNAL:
+        server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
+        contacts = get_internal_contact_settings()
+        settings = EmailSettings(
+            smtp_host=server["smtp_host"],
+            smtp_port=server["smtp_port"],
+            smtp_user="",
+            smtp_password="",
+            smtp_from=server["smtp_from"],
+            use_tls=server["use_tls"],
+        )
+        return settings, contacts["contacts_to"], contacts["contacts_cc"]
+
+    server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
+    external_user = get_user_external_email_settings(_session_user_key(session))
+    if not external_user["smtp_user"] or not external_user["smtp_password"]:
+        raise EmailSendError("外网邮件请先在邮件设置中配置个人 SMTP 用户名和密码")
+    settings = EmailSettings(
+        smtp_host=server["smtp_host"],
+        smtp_port=server["smtp_port"],
+        smtp_user=external_user["smtp_user"],
+        smtp_password=external_user["smtp_password"],
+        smtp_from=external_user["smtp_from"],
+        use_tls=server["use_tls"],
+    )
+    return settings, external_user["contacts_to"], external_user["contacts_cc"]
+
+
+def _send_notice(
+    session: dict | None,
+    client: RedmineClient,
+    project_id: str,
+    wiki_title: str,
+    version_name: str,
+    release_date: str,
+    commit: str,
+    product_line: str,
+    items: list[str],
+    file_rows: list[tuple[str, str, bytes]],
+    mail_scope: str,
+    selected_to: list[str],
+    selected_cc: list[str],
+) -> str:
     to_addrs = split_emails(selected_to)
     cc_addrs = split_emails(selected_cc)
     subject = build_release_email_subject(project_id, version_name, product_line)
-    body = build_release_email_body(base_url=client.base_url, project_id=project_id, wiki_title=wiki_title, version_name=version_name, release_date=release_date, commit=commit, product_line=product_line, changelog_items=items, attachment_names=[name for name, _desc, _content in file_rows])
+    body = build_release_email_body(
+        base_url=client.base_url,
+        project_id=project_id,
+        wiki_title=wiki_title,
+        version_name=version_name,
+        release_date=release_date,
+        commit=commit,
+        product_line=product_line,
+        changelog_items=items,
+        attachment_names=[name for name, _desc, _content in file_rows],
+    )
     try:
+        settings, contacts_to, contacts_cc = _build_notice_settings(session, mail_scope)
+        _validate_selected_contacts(mail_scope, to_addrs, cc_addrs, contacts_to, contacts_cc)
         send_release_email(settings, to_addrs=to_addrs, cc_addrs=cc_addrs, subject=subject, body=body, attachments=file_rows)
-        return f"邮件已发送：收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个，附件 {len(file_rows)} 个"
+        label = _mail_scope_label(mail_scope)
+        return f"{label}邮件已发送：收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个，附件 {len(file_rows)} 个"
     except EmailSendError as exc:
         return f"邮件发送失败：{exc}"
 
@@ -412,11 +656,14 @@ def _refresh_index(session: dict | None, project_id: str, product_line: str = ""
 
 def build_app() -> gr.Blocks:
     saved = get_saved_login()
-    notice = get_email_settings()
+    internal_server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
+    external_server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
+    internal_contacts = get_internal_contact_settings()
+    external_user = get_user_external_email_settings("")
     product_choices = list(PRODUCT_LINES.keys())
     today = date.today().isoformat()
-    contact_to_choices = notice["contacts_to"]
-    contact_cc_choices = notice["contacts_cc"]
+    default_scope = MAIL_SCOPE_INTERNAL
+    contact_to_choices, contact_cc_choices = _contact_lists_for_scope(None, default_scope)
 
     with gr.Blocks(title="Redmine 版本发布工具", theme=gr.themes.Soft()) as app:
         session_state = gr.State(_empty_session())
@@ -447,17 +694,33 @@ def build_app() -> gr.Blocks:
                     config_status = gr.Textbox(label="结构管理状态", interactive=False)
 
                 with gr.Tab("邮件设置"):
+                    gr.Markdown("普通用户只能维护个人外网 SMTP 账号和外网联系人；邮件服务器和内网联系人仅 Redmine 管理员可修改。")
+                    with gr.Group(visible=False) as admin_notice_group:
+                        gr.Markdown("### 管理员配置")
+                        gr.Markdown("#### 内网邮件服务器")
+                        with gr.Row():
+                            internal_notice_host = gr.Textbox(label="内网 SMTP 服务器", value=internal_server["smtp_host"])
+                            internal_notice_port = gr.Number(label="内网 SMTP 端口", value=internal_server["smtp_port"], precision=0)
+                        internal_notice_sender = gr.Textbox(label="内网发件人", value=internal_server["smtp_from"])
+                        internal_notice_tls = gr.Checkbox(label="内网使用 STARTTLS；端口 465 自动使用 SSL", value=internal_server["use_tls"])
+                        gr.Markdown("#### 外网邮件服务器")
+                        with gr.Row():
+                            external_notice_host = gr.Textbox(label="外网 SMTP 服务器", value=external_server["smtp_host"])
+                            external_notice_port = gr.Number(label="外网 SMTP 端口", value=external_server["smtp_port"], precision=0)
+                        external_notice_tls = gr.Checkbox(label="外网使用 STARTTLS；端口 465 自动使用 SSL", value=external_server["use_tls"])
+                        gr.Markdown("#### 内网联系人")
+                        internal_contacts_to_text = gr.Textbox(label="内网收件人（管理员维护）", value="\n".join(internal_contacts["contacts_to"]), lines=4)
+                        internal_contacts_cc_text = gr.Textbox(label="内网抄送（管理员维护）", value="\n".join(internal_contacts["contacts_cc"]), lines=4)
+                        save_admin_notice_btn = gr.Button("保存管理员邮件配置", variant="primary")
+
+                    gr.Markdown("### 个人外网邮件账号和联系人")
                     with gr.Row():
-                        notice_host = gr.Textbox(label="SMTP 服务器", value=notice["smtp_host"])
-                        notice_port = gr.Number(label="SMTP 端口", value=notice["smtp_port"], precision=0)
-                    with gr.Row():
-                        notice_user = gr.Textbox(label="SMTP 用户名", value=notice["smtp_user"])
-                        notice_secret = gr.Textbox(label="SMTP 密钥", type="password", value=notice["smtp_password"])
-                    notice_sender = gr.Textbox(label="发件人", value=notice["smtp_from"])
-                    notice_tls = gr.Checkbox(label="使用 STARTTLS；端口 465 自动使用 SSL", value=notice["use_tls"])
-                    contacts_to_text = gr.Textbox(label="常用收件人（输入后保存，再到发布页选择）", value="\n".join(contact_to_choices), lines=4)
-                    contacts_cc_text = gr.Textbox(label="常用抄送（输入后保存，再到发布页选择）", value="\n".join(contact_cc_choices), lines=4)
-                    save_notice_btn = gr.Button("保存邮件设置", variant="primary")
+                        external_notice_user = gr.Textbox(label="外网 SMTP 用户名", value=external_user["smtp_user"])
+                        external_notice_secret = gr.Textbox(label="外网 SMTP 密码", type="password", value=external_user["smtp_password"])
+                    external_notice_sender = gr.Textbox(label="外网发件人", value=external_user["smtp_from"])
+                    external_contacts_to_text = gr.Textbox(label="外网收件人（个人维护）", value="\n".join(external_user["contacts_to"]), lines=4)
+                    external_contacts_cc_text = gr.Textbox(label="外网抄送（个人维护）", value="\n".join(external_user["contacts_cc"]), lines=4)
+                    save_user_notice_btn = gr.Button("保存个人外网邮件设置", variant="primary")
                     notice_status = gr.Textbox(label="邮件设置状态", interactive=False)
 
                 with gr.Tab("版本发布"):
@@ -477,9 +740,10 @@ def build_app() -> gr.Blocks:
                     files = gr.File(label="固件附件 (.bin)", file_count="multiple", file_types=[".bin"])
                     gr.Markdown("### 发布邮件（可选）")
                     notice_enabled = gr.Checkbox(label="发布成功后发送邮件", value=False)
+                    notice_scope = gr.Radio(label="邮件类型", choices=MAIL_SCOPE_CHOICES, value=default_scope)
                     selected_to = gr.CheckboxGroup(label="选择收件人", choices=contact_to_choices)
                     selected_cc = gr.CheckboxGroup(label="选择抄送", choices=contact_cc_choices)
-                    gr.Markdown("邮件会包含版本信息、Wiki 链接、项目文件链接，并附加本次选择的固件文件。")
+                    gr.Markdown("邮件会包含版本信息、Wiki 链接、项目文件链接，并附加本次选择的固件文件。选择内网/外网后，只能选择对应类型的联系人。")
                     publish_btn = gr.Button("发布到 Redmine", variant="primary")
                     publish_status = gr.Textbox(label="发布结果", interactive=False)
                     new_replace_attachments = gr.State(False)
@@ -504,31 +768,124 @@ def build_app() -> gr.Blocks:
                     edit_replace_attachments = gr.Checkbox(label="替换旧附件列表（不勾选则保留旧附件并追加新附件；不会删除 Redmine 项目文件里的旧文件）", value=False)
                     gr.Markdown("### 发布邮件（可选）")
                     edit_notice_enabled = gr.Checkbox(label="更新成功后发送邮件", value=False)
+                    edit_notice_scope = gr.Radio(label="邮件类型", choices=MAIL_SCOPE_CHOICES, value=default_scope)
                     edit_selected_to = gr.CheckboxGroup(label="选择收件人", choices=contact_to_choices)
                     edit_selected_cc = gr.CheckboxGroup(label="选择抄送", choices=contact_cc_choices)
                     edit_publish_btn = gr.Button("更新到 Redmine", variant="primary")
                     edit_publish_status = gr.Textbox(label="更新结果", interactive=False)
 
-        notice_setting_outputs = [notice_host, notice_port, notice_user, notice_secret, notice_sender, notice_tls, contacts_to_text, contacts_cc_text, selected_to, selected_cc, edit_selected_to, edit_selected_cc]
+        notice_setting_outputs = [
+            admin_notice_group,
+            internal_notice_host,
+            internal_notice_port,
+            internal_notice_sender,
+            internal_notice_tls,
+            external_notice_host,
+            external_notice_port,
+            external_notice_tls,
+            internal_contacts_to_text,
+            internal_contacts_cc_text,
+            external_notice_user,
+            external_notice_secret,
+            external_notice_sender,
+            external_contacts_to_text,
+            external_contacts_cc_text,
+            selected_to,
+            selected_cc,
+            edit_selected_to,
+            edit_selected_cc,
+        ]
+        notice_contact_outputs = [selected_to, selected_cc, edit_selected_to, edit_selected_cc]
 
-        connect_btn.click(_connect, inputs=[auth_mode, username, password, api_key, remember], outputs=[connect_status, session_state, login_panel, main_panel, project_dd, config_project_dd, edit_project_dd]).then(_load_notice_settings, inputs=[session_state], outputs=notice_setting_outputs).then(_list_releases, inputs=[session_state, project_dd, product_line], outputs=[release_table]).then(_list_releases, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_table]).then(_release_choices, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_dd]).then(fn=None, inputs=[session_state, auth_mode, username, password, api_key, remember], outputs=[], js=BROWSER_LOGIN_STORE_JS)
+        connect_btn.click(
+            _connect,
+            inputs=[auth_mode, username, password, api_key, remember],
+            outputs=[connect_status, session_state, login_panel, main_panel, project_dd, config_project_dd, edit_project_dd],
+        ).then(
+            _load_notice_settings,
+            inputs=[session_state, notice_scope, edit_notice_scope],
+            outputs=notice_setting_outputs,
+        ).then(
+            _list_releases,
+            inputs=[session_state, project_dd, product_line],
+            outputs=[release_table],
+        ).then(
+            _list_releases,
+            inputs=[session_state, edit_project_dd, edit_filter_product_line],
+            outputs=[edit_release_table],
+        ).then(
+            _release_choices,
+            inputs=[session_state, edit_project_dd, edit_filter_product_line],
+            outputs=[edit_release_dd],
+        ).then(fn=None, inputs=[session_state, auth_mode, username, password, api_key, remember], outputs=[], js=BROWSER_LOGIN_STORE_JS)
+
         gen_config_btn.click(_generate_config_template, inputs=[config_project_dd, template_dd], outputs=[config_text, config_status])
         load_config_btn.click(_load_config, inputs=[session_state, config_project_dd], outputs=[config_text, config_status])
         check_config_btn.click(_check_config, inputs=[config_text], outputs=[config_status])
         save_config_btn.click(_save_config, inputs=[session_state, config_project_dd, config_text], outputs=[config_status])
-        save_notice_btn.click(_save_notice_settings, inputs=[session_state, notice_host, notice_port, notice_user, notice_secret, notice_sender, notice_tls, contacts_to_text, contacts_cc_text], outputs=[notice_status, selected_to, selected_cc, edit_selected_to, edit_selected_cc])
+        save_admin_notice_btn.click(
+            _save_admin_notice_settings,
+            inputs=[
+                session_state,
+                internal_notice_host,
+                internal_notice_port,
+                internal_notice_sender,
+                internal_notice_tls,
+                external_notice_host,
+                external_notice_port,
+                external_notice_tls,
+                internal_contacts_to_text,
+                internal_contacts_cc_text,
+                notice_scope,
+                edit_notice_scope,
+            ],
+            outputs=[notice_status, *notice_contact_outputs],
+        )
+        save_user_notice_btn.click(
+            _save_user_notice_settings,
+            inputs=[
+                session_state,
+                external_notice_user,
+                external_notice_secret,
+                external_notice_sender,
+                external_contacts_to_text,
+                external_contacts_cc_text,
+                notice_scope,
+                edit_notice_scope,
+            ],
+            outputs=[notice_status, *notice_contact_outputs],
+        )
+        notice_scope.change(_release_scope_changed, inputs=[session_state, notice_scope], outputs=[selected_to, selected_cc])
+        edit_notice_scope.change(_release_scope_changed, inputs=[session_state, edit_notice_scope], outputs=[edit_selected_to, edit_selected_cc])
+
         project_dd.change(_list_releases, inputs=[session_state, project_dd, product_line], outputs=[release_table])
         product_line.change(_list_releases, inputs=[session_state, project_dd, product_line], outputs=[release_table])
         reload_btn.click(_list_releases, inputs=[session_state, project_dd, product_line], outputs=[release_table])
         refresh_index_btn.click(_refresh_index, inputs=[session_state, project_dd, product_line], outputs=[publish_status, release_table])
-        publish_btn.click(_publish, inputs=[session_state, project_dd, version_name, release_date, commit, product_line, changelog, files, new_replace_attachments, notice_enabled, selected_to, selected_cc, new_edit_title], outputs=[publish_status, release_table])
+        publish_btn.click(
+            _publish,
+            inputs=[session_state, project_dd, version_name, release_date, commit, product_line, changelog, files, new_replace_attachments, notice_enabled, notice_scope, selected_to, selected_cc, new_edit_title],
+            outputs=[publish_status, release_table],
+        )
         edit_project_dd.change(_list_releases, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_table]).then(_release_choices, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_dd])
         edit_filter_product_line.change(_list_releases, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_table]).then(_release_choices, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_dd])
         edit_reload_btn.click(_list_releases, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_table]).then(_release_choices, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_dd])
         edit_refresh_index_btn.click(_refresh_index, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_publish_status, edit_release_table])
         edit_release_dd.change(_load_release_to_form, inputs=[session_state, edit_project_dd, edit_release_dd], outputs=[edit_version_name, edit_release_date, edit_commit, edit_product_line, edit_changelog, existing_files_info, edit_replace_attachments])
-        edit_publish_btn.click(_publish, inputs=[session_state, edit_project_dd, edit_version_name, edit_release_date, edit_commit, edit_product_line, edit_changelog, edit_files, edit_replace_attachments, edit_notice_enabled, edit_selected_to, edit_selected_cc, edit_release_dd, edit_filter_product_line], outputs=[edit_publish_status, edit_release_table]).then(_release_choices, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_dd])
-        app.load(_restore_connection, inputs=[session_state], outputs=[connect_status, session_state, login_panel, main_panel, project_dd, config_project_dd, edit_project_dd, release_table, edit_release_table, edit_release_dd]).then(_load_notice_settings, inputs=[session_state], outputs=notice_setting_outputs)
+        edit_publish_btn.click(
+            _publish,
+            inputs=[session_state, edit_project_dd, edit_version_name, edit_release_date, edit_commit, edit_product_line, edit_changelog, edit_files, edit_replace_attachments, edit_notice_enabled, edit_notice_scope, edit_selected_to, edit_selected_cc, edit_release_dd, edit_filter_product_line],
+            outputs=[edit_publish_status, edit_release_table],
+        ).then(_release_choices, inputs=[session_state, edit_project_dd, edit_filter_product_line], outputs=[edit_release_dd])
+        app.load(
+            _restore_connection,
+            inputs=[session_state],
+            outputs=[connect_status, session_state, login_panel, main_panel, project_dd, config_project_dd, edit_project_dd, release_table, edit_release_table, edit_release_dd],
+        ).then(
+            _load_notice_settings,
+            inputs=[session_state, notice_scope, edit_notice_scope],
+            outputs=notice_setting_outputs,
+        )
         app.load(fn=None, inputs=[auth_mode, username, password, api_key, remember], outputs=[auth_mode, username, password, api_key, remember], js=BROWSER_LOGIN_LOAD_JS)
 
     return app
