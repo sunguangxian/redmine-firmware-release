@@ -1,20 +1,27 @@
-"""本地配置与凭据存储。"""
+"""SQLite 配置与用户数据存储。"""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 DEFAULT_REDMINE_BASE_URL = "http://192.168.1.208:3000"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DATA_DIR = ".redmine-release-tool"
+DB_FILENAME = "release_tool.db"
 SAVE_LOGIN_SECRETS_ENV = "RELEASE_TOOL_SAVE_LOGIN_SECRETS"
+
 MAIL_SCOPE_INTERNAL = "internal"
 MAIL_SCOPE_EXTERNAL = "external"
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
+
+GLOBAL_OWNER = "global"
+USER_OWNER = "user"
+CONTACT_TO = "to"
+CONTACT_CC = "cc"
 
 
 def config_dir() -> Path:
@@ -23,59 +30,65 @@ def config_dir() -> Path:
     return path
 
 
-def settings_path() -> Path:
-    return config_dir() / "settings.json"
+def db_path() -> Path:
+    return config_dir() / DB_FILENAME
 
 
-def user_settings_dir() -> Path:
-    path = config_dir() / "users"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def user_settings_path(user_key: str) -> Path:
-    digest = hashlib.sha256(user_key.encode("utf-8")).hexdigest()
-    return user_settings_dir() / f"{digest}.json"
-
-
-def load_settings() -> dict[str, Any]:
-    path = settings_path()
-    if not path.exists():
-        return {}
+@contextmanager
+def db() -> Iterable[sqlite3.Connection]:
+    conn = sqlite3.connect(db_path())
+    conn.row_factory = sqlite3.Row
     try:
-        with path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
+        _init_db(conn)
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
-def save_settings(data: dict[str, Any]) -> None:
-    path = settings_path()
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
+def _init_db(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT ''
+        );
 
+        CREATE TABLE IF NOT EXISTS mail_servers (
+            scope TEXT PRIMARY KEY,
+            smtp_host TEXT NOT NULL DEFAULT '',
+            smtp_port INTEGER NOT NULL DEFAULT 25,
+            smtp_from TEXT NOT NULL DEFAULT '',
+            use_tls INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
 
-def load_user_settings(user_key: str) -> dict[str, Any]:
-    if not user_key:
-        return {}
-    path = user_settings_path(user_key)
-    if not path.exists():
-        return {}
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
+        CREATE TABLE IF NOT EXISTS user_external_email (
+            user_key TEXT PRIMARY KEY,
+            smtp_user TEXT NOT NULL DEFAULT '',
+            smtp_password TEXT NOT NULL DEFAULT '',
+            smtp_from TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
 
+        CREATE TABLE IF NOT EXISTS contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_type TEXT NOT NULL,
+            user_key TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL,
+            contact_type TEXT NOT NULL,
+            email TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner_type, user_key, scope, contact_type, email)
+        );
 
-def save_user_settings(user_key: str, data: dict[str, Any]) -> None:
-    if not user_key:
-        return
-    path = user_settings_path(user_key)
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
+        CREATE INDEX IF NOT EXISTS idx_contacts_lookup
+            ON contacts(owner_type, user_key, scope, contact_type, display_order, id);
+        """
+    )
 
 
 def default_base_url() -> str:
@@ -86,17 +99,78 @@ def allow_login_secret_storage() -> bool:
     return os.environ.get(SAVE_LOGIN_SECRETS_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def get_saved_login() -> dict[str, Any]:
-    data = load_settings()
-    allow_secrets = allow_login_secret_storage()
+def _normalize_scope(scope: str) -> str:
+    value = (scope or MAIL_SCOPE_INTERNAL).strip().lower()
+    return value if value in MAIL_SCOPES else MAIL_SCOPE_INTERNAL
+
+
+def _normalize_contact_type(contact_type: str) -> str:
+    value = (contact_type or CONTACT_TO).strip().lower()
+    return value if value in {CONTACT_TO, CONTACT_CC} else CONTACT_TO
+
+
+def _clean_email_list(items: list[str] | tuple[str, ...] | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items or []:
+        email = str(item or "").strip()
+        if not email or "@" not in email:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(email)
+    return result
+
+
+def _row_to_email_server(row: sqlite3.Row | None) -> dict[str, Any]:
+    if row is None:
+        return {
+            "smtp_host": "",
+            "smtp_port": 25,
+            "smtp_from": "",
+            "use_tls": False,
+        }
     return {
-        "base_url": data.get("base_url") or default_base_url(),
-        "auth_mode": data.get("auth_mode", "password"),
-        "username": data.get("username", "") if allow_secrets else "",
-        "password": data.get("password", "") if allow_secrets else "",
-        "api_key": data.get("api_key", "") if allow_secrets else "",
-        "remember": bool(data.get("remember", False)) if allow_secrets else False,
+        "smtp_host": row["smtp_host"] or "",
+        "smtp_port": int(row["smtp_port"] or 25),
+        "smtp_from": row["smtp_from"] or "",
+        "use_tls": bool(row["use_tls"]),
     }
+
+
+def _get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return str(row["value"]) if row else default
+
+
+def _set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO app_settings(key, value)
+        VALUES(?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value or ""),
+    )
+
+
+def _delete_settings(conn: sqlite3.Connection, keys: tuple[str, ...]) -> None:
+    conn.executemany("DELETE FROM app_settings WHERE key = ?", [(key,) for key in keys])
+
+
+def get_saved_login() -> dict[str, Any]:
+    allow_secrets = allow_login_secret_storage()
+    with db() as conn:
+        return {
+            "base_url": _get_setting(conn, "base_url", default_base_url()) or default_base_url(),
+            "auth_mode": _get_setting(conn, "auth_mode", "password") or "password",
+            "username": _get_setting(conn, "username") if allow_secrets else "",
+            "password": _get_setting(conn, "password") if allow_secrets else "",
+            "api_key": _get_setting(conn, "api_key") if allow_secrets else "",
+            "remember": (_get_setting(conn, "remember") == "1") if allow_secrets else False,
+        }
 
 
 def store_login(
@@ -108,75 +182,36 @@ def store_login(
     auth_mode: str = "password",
     api_key: str = "",
 ) -> None:
-    data = load_settings()
-    data["base_url"] = base_url.rstrip("/")
-    data["auth_mode"] = auth_mode
-    if not allow_login_secret_storage():
-        data["remember"] = False
-        data.pop("username", None)
-        data.pop("password", None)
-        data.pop("api_key", None)
-        save_settings(data)
-        return
-    data["username"] = username
-    if remember:
-        data["remember"] = True
-        if auth_mode == "api_key":
-            data["api_key"] = api_key
-            data.pop("password", None)
+    with db() as conn:
+        _set_setting(conn, "base_url", (base_url or default_base_url()).rstrip("/"))
+        _set_setting(conn, "auth_mode", auth_mode or "password")
+        if not allow_login_secret_storage():
+            _set_setting(conn, "remember", "0")
+            _delete_settings(conn, ("username", "password", "api_key"))
+            return
+
+        _set_setting(conn, "username", username or "")
+        _set_setting(conn, "remember", "1" if remember else "0")
+        if remember:
+            if auth_mode == "api_key":
+                _set_setting(conn, "api_key", api_key or "")
+                _delete_settings(conn, ("password",))
+            else:
+                _set_setting(conn, "password", password or "")
+                _delete_settings(conn, ("api_key",))
         else:
-            data["password"] = password
-            data.pop("api_key", None)
-    else:
-        data["remember"] = False
-        data.pop("password", None)
-        data.pop("api_key", None)
-    save_settings(data)
-
-
-def _normalize_scope(scope: str) -> str:
-    value = (scope or MAIL_SCOPE_INTERNAL).strip().lower()
-    return value if value in MAIL_SCOPES else MAIL_SCOPE_INTERNAL
-
-
-def _normalize_email_server(server: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "smtp_host": (server.get("smtp_host") or "").strip(),
-        "smtp_port": int(server.get("smtp_port") or 25),
-        "smtp_from": (server.get("smtp_from") or "").strip(),
-        "use_tls": bool(server.get("use_tls", False)),
-    }
-
-
-def _normalize_email_auth(email: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "smtp_user": (email.get("smtp_user") or "").strip(),
-        "smtp_password": email.get("smtp_password") or "",
-        "smtp_from": (email.get("smtp_from") or "").strip(),
-        "contacts_to": email.get("contacts_to", []),
-        "contacts_cc": email.get("contacts_cc", []),
-    }
-
-
-def _normalize_contacts(contacts: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "contacts_to": contacts.get("contacts_to") or contacts.get("to") or [],
-        "contacts_cc": contacts.get("contacts_cc") or contacts.get("cc") or [],
-    }
+            _delete_settings(conn, ("password", "api_key"))
 
 
 def get_email_server_settings(scope: str) -> dict[str, Any]:
     """读取管理员维护的内网/外网 SMTP 服务器配置。"""
     scope = _normalize_scope(scope)
-    data = load_settings()
-    servers = data.get("email_servers") or {}
-    server = servers.get(scope) or {}
-
-    # 兼容旧版本：原来的全局 email 视作外网服务器默认值。
-    if not server and scope == MAIL_SCOPE_EXTERNAL:
-        legacy = data.get("email") or {}
-        server = legacy
-    return _normalize_email_server(server)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT smtp_host, smtp_port, smtp_from, use_tls FROM mail_servers WHERE scope = ?",
+            (scope,),
+        ).fetchone()
+    return _row_to_email_server(row)
 
 
 def store_email_server_settings(
@@ -188,49 +223,133 @@ def store_email_server_settings(
     use_tls: bool,
 ) -> None:
     scope = _normalize_scope(scope)
-    data = load_settings()
-    servers = data.get("email_servers") or {}
-    servers[scope] = {
-        "smtp_host": (smtp_host or "").strip(),
-        "smtp_port": int(smtp_port or 25),
-        "smtp_from": (smtp_from or "").strip(),
-        "use_tls": bool(use_tls),
-    }
-    data["email_servers"] = servers
-    save_settings(data)
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO mail_servers(scope, smtp_host, smtp_port, smtp_from, use_tls, updated_at)
+            VALUES(?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(scope) DO UPDATE SET
+                smtp_host = excluded.smtp_host,
+                smtp_port = excluded.smtp_port,
+                smtp_from = excluded.smtp_from,
+                use_tls = excluded.use_tls,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                scope,
+                (smtp_host or "").strip(),
+                int(smtp_port or 25),
+                (smtp_from or "").strip(),
+                1 if use_tls else 0,
+            ),
+        )
+
+
+def _get_contacts(owner_type: str, user_key: str, scope: str, contact_type: str) -> list[str]:
+    scope = _normalize_scope(scope)
+    contact_type = _normalize_contact_type(contact_type)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT email
+            FROM contacts
+            WHERE owner_type = ? AND user_key = ? AND scope = ? AND contact_type = ?
+            ORDER BY display_order ASC, id ASC
+            """,
+            (owner_type, user_key or "", scope, contact_type),
+        ).fetchall()
+    return [str(row["email"]) for row in rows]
+
+
+def _replace_contacts(
+    conn: sqlite3.Connection,
+    *,
+    owner_type: str,
+    user_key: str,
+    scope: str,
+    contact_type: str,
+    emails: list[str],
+) -> None:
+    scope = _normalize_scope(scope)
+    contact_type = _normalize_contact_type(contact_type)
+    user_key = user_key or ""
+    conn.execute(
+        """
+        DELETE FROM contacts
+        WHERE owner_type = ? AND user_key = ? AND scope = ? AND contact_type = ?
+        """,
+        (owner_type, user_key, scope, contact_type),
+    )
+    for idx, email in enumerate(_clean_email_list(emails)):
+        conn.execute(
+            """
+            INSERT INTO contacts(owner_type, user_key, scope, contact_type, email, display_order)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (owner_type, user_key, scope, contact_type, email, idx),
+        )
 
 
 def get_internal_contact_settings() -> dict[str, Any]:
-    data = load_settings()
-    contacts = data.get("internal_contacts") or {}
-
-    # 兼容旧版本：原全局 contacts 可作为内网联系人初始值。
-    if not contacts:
-        legacy = data.get("email") or {}
-        contacts = {
-            "contacts_to": legacy.get("contacts_to", []),
-            "contacts_cc": legacy.get("contacts_cc", []),
-        }
-    return _normalize_contacts(contacts)
+    return {
+        "contacts_to": _get_contacts(GLOBAL_OWNER, "", MAIL_SCOPE_INTERNAL, CONTACT_TO),
+        "contacts_cc": _get_contacts(GLOBAL_OWNER, "", MAIL_SCOPE_INTERNAL, CONTACT_CC),
+    }
 
 
 def store_internal_contact_settings(*, contacts_to: list[str], contacts_cc: list[str]) -> None:
-    data = load_settings()
-    data["internal_contacts"] = {
-        "contacts_to": contacts_to,
-        "contacts_cc": contacts_cc,
-    }
-    save_settings(data)
+    with db() as conn:
+        _replace_contacts(
+            conn,
+            owner_type=GLOBAL_OWNER,
+            user_key="",
+            scope=MAIL_SCOPE_INTERNAL,
+            contact_type=CONTACT_TO,
+            emails=contacts_to,
+        )
+        _replace_contacts(
+            conn,
+            owner_type=GLOBAL_OWNER,
+            user_key="",
+            scope=MAIL_SCOPE_INTERNAL,
+            contact_type=CONTACT_CC,
+            emails=contacts_cc,
+        )
 
 
 def get_user_external_email_settings(user_key: str) -> dict[str, Any]:
-    data = load_user_settings(user_key)
-    email = data.get("external_email") or {}
-
-    # 兼容旧版本：原来的用户 email 视作外网个人账号和外网联系人。
-    if not email:
-        email = data.get("email") or {}
-    return _normalize_email_auth(email)
+    if not user_key:
+        return {
+            "smtp_user": "",
+            "smtp_password": "",
+            "smtp_from": "",
+            "contacts_to": [],
+            "contacts_cc": [],
+        }
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT smtp_user, smtp_password, smtp_from
+            FROM user_external_email
+            WHERE user_key = ?
+            """,
+            (user_key,),
+        ).fetchone()
+    if row is None:
+        smtp_user = ""
+        smtp_password = ""
+        smtp_from = ""
+    else:
+        smtp_user = row["smtp_user"] or ""
+        smtp_password = row["smtp_password"] or ""
+        smtp_from = row["smtp_from"] or ""
+    return {
+        "smtp_user": smtp_user,
+        "smtp_password": smtp_password,
+        "smtp_from": smtp_from,
+        "contacts_to": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL, CONTACT_TO),
+        "contacts_cc": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL, CONTACT_CC),
+    }
 
 
 def store_user_external_email_settings(
@@ -242,18 +361,44 @@ def store_user_external_email_settings(
     contacts_to: list[str],
     contacts_cc: list[str],
 ) -> None:
-    data = load_user_settings(user_key)
-    data["external_email"] = {
-        "smtp_user": (smtp_user or "").strip(),
-        "smtp_password": smtp_password or "",
-        "smtp_from": (smtp_from or "").strip(),
-        "contacts_to": contacts_to,
-        "contacts_cc": contacts_cc,
-    }
-    save_user_settings(user_key, data)
+    if not user_key:
+        return
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_external_email(user_key, smtp_user, smtp_password, smtp_from, updated_at)
+            VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_key) DO UPDATE SET
+                smtp_user = excluded.smtp_user,
+                smtp_password = excluded.smtp_password,
+                smtp_from = excluded.smtp_from,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                user_key,
+                (smtp_user or "").strip(),
+                smtp_password or "",
+                (smtp_from or "").strip(),
+            ),
+        )
+        _replace_contacts(
+            conn,
+            owner_type=USER_OWNER,
+            user_key=user_key,
+            scope=MAIL_SCOPE_EXTERNAL,
+            contact_type=CONTACT_TO,
+            emails=contacts_to,
+        )
+        _replace_contacts(
+            conn,
+            owner_type=USER_OWNER,
+            user_key=user_key,
+            scope=MAIL_SCOPE_EXTERNAL,
+            contact_type=CONTACT_CC,
+            emails=contacts_cc,
+        )
 
 
-# 旧接口保留，便于历史代码或脚本继续使用。
 def get_email_settings() -> dict[str, Any]:
     server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
     contacts = get_internal_contact_settings()
@@ -295,7 +440,13 @@ def store_email_settings(
     contacts_to: list[str],
     contacts_cc: list[str],
 ) -> None:
-    store_email_server_settings(MAIL_SCOPE_EXTERNAL, smtp_host=smtp_host, smtp_port=smtp_port, smtp_from=smtp_from, use_tls=use_tls)
+    store_email_server_settings(
+        MAIL_SCOPE_EXTERNAL,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_from=smtp_from,
+        use_tls=use_tls,
+    )
     store_internal_contact_settings(contacts_to=contacts_to, contacts_cc=contacts_cc)
 
 
@@ -311,7 +462,6 @@ def store_user_email_settings(
     contacts_to: list[str],
     contacts_cc: list[str],
 ) -> None:
-    # 普通用户不能修改 SMTP 服务器；仅保存个人外网账号和外网联系人。
     store_user_external_email_settings(
         user_key,
         smtp_user=smtp_user,
@@ -323,10 +473,10 @@ def store_user_email_settings(
 
 
 def get_last_project() -> str:
-    return load_settings().get("last_project", "")
+    with db() as conn:
+        return _get_setting(conn, "last_project", "")
 
 
 def set_last_project(project_id: str) -> None:
-    data = load_settings()
-    data["last_project"] = project_id
-    save_settings(data)
+    with db() as conn:
+        _set_setting(conn, "last_project", project_id or "")
