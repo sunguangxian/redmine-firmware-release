@@ -21,7 +21,7 @@ Changelog_for_5X
 <!-- RELEASE_CONFIG_BEGIN -->
 ```yaml
 mode: multi_list
-main_page: Changelog_for_5X
+main_page: Release_Notes
 categories:
   - key: Regular
     title: 常规版本 (5X)

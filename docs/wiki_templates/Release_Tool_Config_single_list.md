@@ -2,7 +2,7 @@
 
 将本页面内容复制到项目 Wiki 页面：`Release_Tool_Config`。
 
-适用项目：TP35 这类只有一个 Release 列表页的项目。
+适用项目：TP35 这类只有一个 Release 分类，主页面直接显示完整版本列表的项目。
 
 ## Wiki 结构图
 
@@ -25,22 +25,7 @@ release_page_prefix: Release_TP35_FW_
 ```
 <!-- RELEASE_CONFIG_END -->
 
-## 页面说明
+## 页面生成规则
 
-- `mode: single_list` 表示所有 Release 页面统一写入一个版本列表页。
-- `main_page` 是工具要自动更新的主版本列表页。
-- `release_page_prefix` 仅用于说明当前项目的 Release 页面命名习惯，当前工具主要根据 `Release_..._FW_...` 识别版本页。
-
-## Release_Notes 页面建议内容
-
-```text
-# Release Notes
-
-本页面记录当前项目固件发布历史。
-
-## 版本列表
-
-<!-- RELEASE_SYNC_BEGIN -->
-工具会自动生成版本列表
-<!-- RELEASE_SYNC_END -->
-```
+- `Release_Notes` 为主页面，工具自动维护完整版本列表。
+- Release 明细页会自动挂到 `Release_Notes` 父页面下。

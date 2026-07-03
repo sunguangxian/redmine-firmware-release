@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote, urlparse
+
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient
 from .release_page import (
@@ -98,23 +100,46 @@ class ReleasePublisher:
 
     def _upload_files(self, form: ReleaseForm, version_id: int) -> list[dict]:
         linked: list[dict] = []
+        existing_by_name = self._project_files_by_name(form.project_id, version_id)
         for filename, description, content in form.files:
             if not content:
                 continue
+            existing = existing_by_name.get(filename)
+            if existing:
+                linked.append(
+                    {
+                        "filename": filename,
+                        "description": existing.get("description") or description,
+                        "url": self._project_file_url(existing, filename),
+                    }
+                )
+                continue
+
             token = self.client.upload_file(filename, content)
             file_obj = self.client.create_project_file(
                 form.project_id, version_id, filename, token
             )
-            url = file_obj.get("content_url", "")
-            if url and url.startswith("http"):
-                from urllib.parse import urlparse
-
-                url = urlparse(url).path
-            elif file_obj.get("id"):
-                from urllib.parse import quote
-
-                url = f"/attachments/download/{file_obj['id']}/{quote(filename)}"
-            else:
-                url = None
+            if not self._project_file_url(file_obj, filename):
+                file_obj = self._project_files_by_name(form.project_id, version_id).get(filename, {})
+            url = self._project_file_url(file_obj, filename)
             linked.append({"filename": filename, "description": description, "url": url})
         return linked
+
+    def _project_files_by_name(self, project_id: str, version_id: int) -> dict[str, dict]:
+        result: dict[str, dict] = {}
+        for item in self.client.list_project_files(project_id):
+            filename = item.get("filename")
+            if not filename or (item.get("version") or {}).get("id") != version_id:
+                continue
+            result.setdefault(filename, item)
+        return result
+
+    def _project_file_url(self, file_obj: dict, filename: str) -> str | None:
+        url = file_obj.get("content_url", "")
+        if url and url.startswith("http"):
+            return urlparse(url).path
+        if url:
+            return url
+        if file_obj.get("id"):
+            return f"/attachments/download/{file_obj['id']}/{quote(filename)}"
+        return None

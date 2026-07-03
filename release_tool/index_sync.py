@@ -22,6 +22,7 @@ from .wiki_config import CONFIG_PAGE_TITLE, ConfigCategory, parse_release_wiki_c
 
 SYNC_BEGIN = "<!-- RELEASE_SYNC_BEGIN -->"
 SYNC_END = "<!-- RELEASE_SYNC_END -->"
+MAIN_RECENT_LIMIT = 5
 
 CATEGORY_META = {
     "Regular": {"title": "常规版本 (5X)", "hub": "Release_Notes_Regular"},
@@ -106,7 +107,11 @@ class IndexSync:
             )
 
         if config.mode == "single_list":
-            profile = WikiProfile(mode="single_list", main_page=config.main_page, categories=[])
+            profile = WikiProfile(
+                mode="single_list",
+                main_page=config.main_page,
+                categories=[],
+            )
         else:
             categories = [self._category_from_config(c) for c in config.categories]
             profile = WikiProfile(mode="multi_list", main_page=config.main_page, categories=categories)
@@ -181,17 +186,30 @@ class IndexSync:
                 continue
 
             lines = self._format_release_lines(group)
+            list_fallback = (
+                f"{SYNC_BEGIN}\n{lines}\n{SYNC_END}\n"
+                if cat_profile.list_page != cat_profile.hub
+                else self._build_category_page(profile, cat_profile, lines)
+            )
             self._put_generated_page(
                 cat_profile.list_page,
                 lines,
                 comment="auto sync list",
-                fallback_text=self._build_category_page(profile, cat_profile, lines),
+                fallback_text=list_fallback,
                 section_title="版本列表",
+                parent_title=cat_profile.hub if cat_profile.list_page != cat_profile.hub else None,
             )
 
-            if cat_profile.list_page != cat_profile.hub and not self._get_page(cat_profile.hub):
+            if cat_profile.list_page != cat_profile.hub:
                 hub_text = self._build_category_hub(profile, cat_profile)
-                self.client.put_wiki_page(self.project_id, cat_profile.hub, hub_text, "产品线索引")
+                self.client.put_wiki_page(
+                    self.project_id,
+                    cat_profile.hub,
+                    hub_text,
+                    "auto sync category structure",
+                    parent_title=profile.main_page,
+                )
+                self._page_cache[cat_profile.hub] = {"title": cat_profile.hub, "text": hub_text}
 
             if set_parents:
                 for item in group:
@@ -207,19 +225,20 @@ class IndexSync:
 
         if update_main:
             main = self._build_main(profile, items)
-            self._put_generated_page(
+            self.client.put_wiki_page(
+                self.project_id,
                 profile.main_page,
                 main,
                 comment="auto sync main counts",
-                fallback_text=main,
-                section_title="产品线索引",
             )
+            self._page_cache[profile.main_page] = {"title": profile.main_page, "text": main}
 
     def _refresh_single(self, profile: WikiProfile, items: list[dict[str, Any]] | None = None) -> int:
         items = items or self._build_items(profile)
         if not items:
             return 0
-        lines = self._format_release_lines(sorted(items, key=lambda x: x["date"], reverse=True))
+        sorted_items = sorted(items, key=lambda x: x["date"], reverse=True)
+        lines = self._format_release_lines(sorted_items)
         tag = proj_tag_from_project(self.project_id, items[0]["page"])
         fallback = (
             f"# Release Notes\n\n"
@@ -230,13 +249,23 @@ class IndexSync:
             f"## 版本列表\n\n"
             f"{lines}"
         )
-        self._put_generated_page(
+        self.client.put_wiki_page(
+            self.project_id,
             profile.main_page,
-            lines,
+            fallback,
             comment="Release Notes 索引",
-            fallback_text=fallback,
-            section_title="版本列表",
         )
+        self._page_cache[profile.main_page] = {"title": profile.main_page, "text": fallback}
+        for item in sorted_items:
+            page = self._get_page(item["page"])
+            if page and (page.get("parent") or {}).get("title") != profile.main_page:
+                self.client.put_wiki_page(
+                    self.project_id,
+                    item["page"],
+                    page["text"],
+                    "set parent",
+                    parent_title=profile.main_page,
+                )
         return len(items)
 
     def _put_generated_page(
@@ -246,6 +275,7 @@ class IndexSync:
         comment: str,
         fallback_text: str,
         section_title: str,
+        parent_title: str | None = None,
     ) -> None:
         page = self._get_page(title)
         current = (page or {}).get("text", "")
@@ -253,7 +283,7 @@ class IndexSync:
             new_text = fallback_text
         else:
             new_text = self._replace_generated_region(current, generated, section_title)
-        self.client.put_wiki_page(self.project_id, title, new_text, comment)
+        self.client.put_wiki_page(self.project_id, title, new_text, comment, parent_title=parent_title)
         self._page_cache[title] = {"title": title, "text": new_text}
 
     def _replace_generated_region(self, text: str, generated: str, section_title: str) -> str:
@@ -310,48 +340,49 @@ class IndexSync:
     def _build_category_hub(self, profile: WikiProfile, category: CategoryProfile) -> str:
         return (
             f"# {category.title}\n\n"
-            f"[[{profile.main_page}|← 返回 Release Notes]]\n\n"
+            f"[[{profile.main_page}|返回 Release Notes]]\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
-            f"## 版本列表\n\n"
+            f"## Version List\n\n"
             f"{{{{include({category.list_page})}}}}"
         )
 
     def _build_main(self, profile: WikiProfile, items: list[dict[str, Any]]) -> str:
         tag = proj_tag_from_project(self.project_id, items[0]["page"] if items else None)
         lines = [
-            "## 产品线索引",
+            "## Product Lines",
             "",
         ]
         for category in profile.categories:
             count = sum(1 for i in items if i["cat"] == category.key)
-            if count:
-                lines.append(f"- [[{category.hub}|{category.title}]] ({count})")
+            suffix = f" ({count})" if count else ""
+            lines.append(f"- [[{category.hub}|{category.title}]]{suffix}")
         lines.append("")
         for category in profile.categories:
-            if not any(i["cat"] == category.key for i in items):
+            group = sorted(
+                [i for i in items if i["cat"] == category.key],
+                key=lambda x: x["date"],
+                reverse=True,
+            )
+            if not group:
                 continue
             lines.extend(
                 [
                     f"## {category.title}",
                     "",
-                    f"[[{category.hub}|独立页面]]",
+                    f"[[{category.hub}|查看全部]]",
                     "",
-                    f"{{{{include({category.list_page})}}}}",
+                    self._format_release_lines(group[:MAIN_RECENT_LIMIT]),
                     "",
                 ]
             )
 
         generated = "\n".join(lines).rstrip()
-        current = self._page_text(profile.main_page)
-        if current:
-            return generated
-
         return (
             f"# Release Notes\n\n"
-            f"{tag} 固件发布记录，按产品线分类。固件 bin 在 "
-            f"[项目文件](/projects/{self.project_id}/files)，Wiki 仅记录变更。\n\n"
-            f"> 版本列表由 `{{include(...)}}` 动态嵌入；通过版本发布工具保存后自动同步。\n\n"
+            f"{tag} firmware release index. Firmware binaries are stored in "
+            f"[project files](/projects/{self.project_id}/files); this Wiki keeps release notes and category indexes.\n\n"
+            f"> Version lists are maintained by the release tool in the `*_List` pages.\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
             f"{generated}"

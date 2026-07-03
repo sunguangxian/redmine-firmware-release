@@ -58,17 +58,10 @@ release_page_prefix: Release_{tag}_FW_
 ```
 {CONFIG_END}
 
-## Release_Notes 页面建议内容
+## 页面生成规则
 
-```text
-# Release Notes
-
-## 版本列表
-
-<!-- RELEASE_SYNC_BEGIN -->
-工具会自动生成版本列表
-<!-- RELEASE_SYNC_END -->
-```
+- Release_Notes 为主页面，工具自动维护完整版本列表。
+- Release 明细页会自动挂到 Release_Notes 父页面下。
 """
 
 
@@ -81,14 +74,13 @@ def _multi_list_include_template() -> str:
 
 ```text
 Changelog_for_5X
-├── Release_Notes_Regular
-│   └── include Release_Notes_Regular_List
-├── Release_Notes_Trunking
-│   └── include Release_Notes_Trunking_List
-├── Release_Notes_Record
-│   └── include Release_Notes_Record_List
-└── Release_Notes_NP500
-    └── include Release_Notes_NP500_List
+└── {{include(Release_Notes)}}
+
+Release_Notes
+├── Release_Notes_Regular -> {{include(Release_Notes_Regular_List)}}
+├── Release_Notes_Trunking -> {{include(Release_Notes_Trunking_List)}}
+├── Release_Notes_Record -> {{include(Release_Notes_Record_List)}}
+└── Release_Notes_NP500 -> {{include(Release_Notes_NP500_List)}}
 ```
 
 ## 工具配置
@@ -98,7 +90,7 @@ Changelog_for_5X
 {CONFIG_BEGIN}
 ```yaml
 mode: multi_list
-main_page: Changelog_for_5X
+main_page: Release_Notes
 categories:
   - key: Regular
     title: 常规版本 (5X)
@@ -121,6 +113,13 @@ categories:
     list_page: Release_Notes_NP500_List
 ```
 {CONFIG_END}
+
+## 页面生成规则
+
+- Changelog_for_5X 仅作为旧入口，内容为 `{{include(Release_Notes)}}`。
+- Release_Notes 为主页面，工具自动生成分类入口和每类最近版本。
+- Release_Notes_xxx 为分类页，工具自动生成固定结构。
+- Release_Notes_xxx_List 为完整列表页，工具自动维护列表内容。
 """
 
 
@@ -146,7 +145,7 @@ Changelog_for_5X
 {CONFIG_BEGIN}
 ```yaml
 mode: multi_list
-main_page: Changelog_for_5X
+main_page: Release_Notes
 categories:
   - key: Regular
     title: 常规版本 (5X)

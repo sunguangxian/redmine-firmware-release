@@ -155,6 +155,10 @@ class RedmineClient:
         token = resp.json()["upload"]["token"]
         return token
 
+    def list_project_files(self, project_id: str) -> list[dict[str, Any]]:
+        data = self._request("GET", f"/projects/{quote(project_id)}/files.json")
+        return data.get("files", []) if isinstance(data, dict) else []
+
     def create_project_file(
         self,
         project_id: str,
@@ -171,7 +175,7 @@ class RedmineClient:
             }
         }
         data = self._request("POST", f"/projects/{quote(project_id)}/files.json", json=payload)
-        return data.get("file", {})
+        return data.get("file", {}) if isinstance(data, dict) else {}
 
 
 RELEASE_PAGE_RE = re.compile(r"^Release_[A-Za-z0-9]+(?:_NP500)?_FW_", re.I)

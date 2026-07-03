@@ -1,21 +1,20 @@
-# Release Tool Config - 多分类 include 结构模板
+# Release Tool Config - 多分类固定结构模板
 
 将本页面内容复制到项目 Wiki 页面：`Release_Tool_Config`。
 
-适用项目：DP5X 这类有主页面、产品线页面，并且产品线页面通过 `{{include(...)}}` 引入独立列表页的结构。
+适用项目：DP5X 这类有多个产品线分类，并且希望主页面只显示分类入口和每类最近版本，完整列表放在独立 `_List` 页面中的项目。
 
 ## Wiki 结构图
 
 ```text
 Changelog_for_5X
-├── Release_Notes_Regular
-│   └── {{include(Release_Notes_Regular_List)}}
-├── Release_Notes_Trunking
-│   └── {{include(Release_Notes_Trunking_List)}}
-├── Release_Notes_Record
-│   └── {{include(Release_Notes_Record_List)}}
-└── Release_Notes_NP500
-    └── {{include(Release_Notes_NP500_List)}}
+└── {{include(Release_Notes)}}
+
+Release_Notes
+├── Release_Notes_Regular -> {{include(Release_Notes_Regular_List)}}
+├── Release_Notes_Trunking -> {{include(Release_Notes_Trunking_List)}}
+├── Release_Notes_Record -> {{include(Release_Notes_Record_List)}}
+└── Release_Notes_NP500 -> {{include(Release_Notes_NP500_List)}}
 ```
 
 ## 工具配置
@@ -25,7 +24,7 @@ Changelog_for_5X
 <!-- RELEASE_CONFIG_BEGIN -->
 ```yaml
 mode: multi_list
-main_page: Changelog_for_5X
+main_page: Release_Notes
 categories:
   - key: Regular
     title: 常规版本 (5X)
@@ -49,40 +48,10 @@ categories:
 ```
 <!-- RELEASE_CONFIG_END -->
 
-## 主页面建议内容
+## 页面生成规则
 
-`Changelog_for_5X`：
-
-```text
-# Changelog for 5X
-
-## 产品线索引
-
-<!-- RELEASE_SYNC_BEGIN -->
-工具会自动生成产品线索引和 include 区域
-<!-- RELEASE_SYNC_END -->
-```
-
-## 产品线页面建议内容
-
-例如 `Release_Notes_Regular`：
-
-```text
-# 常规版本 (5X)
-
-[[Changelog_for_5X|返回主页面]]
-
-## 版本列表
-
-{{include(Release_Notes_Regular_List)}}
-```
-
-## 列表页建议内容
-
-例如 `Release_Notes_Regular_List`：
-
-```text
-<!-- RELEASE_SYNC_BEGIN -->
-工具会自动生成版本列表
-<!-- RELEASE_SYNC_END -->
-```
+- `Changelog_for_5X` 仅作为旧入口，内容为 `{{include(Release_Notes)}}`。
+- `Release_Notes` 为主页面，工具自动生成分类入口和每类最近版本。
+- `Release_Notes_xxx` 为分类页，工具自动生成固定结构。
+- `Release_Notes_xxx_List` 为完整列表页，工具自动维护列表内容。
+- 发布或刷新索引时，工具会自动设置分类页、列表页和 Release 明细页的父页面关系。

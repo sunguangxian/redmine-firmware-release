@@ -15,10 +15,12 @@ run.bat
 ## 功能
 
 - 图形界面（Gradio，浏览器打开）
-- 服务器地址支持用户输入，默认读取上次保存的地址；没有保存时使用当前内网默认地址 `http://192.168.1.208:3000`
-- 可通过环境变量 `REDMINE_BASE_URL` 覆盖默认服务器地址
+- Redmine 地址由工具服务器统一配置；可通过环境变量 `REDMINE_BASE_URL` 覆盖默认地址
 - 支持两种 Redmine 登录方式：用户名密码、API Key
-- **记住登录信息**：保存到本地 `%LOCALAPPDATA%\redmine-release-tool\settings.json`
+- 多人使用：每个浏览器会话独立保存当前 Redmine 登录状态，互不共享
+- 登录首页可勾选“在本机浏览器记住账号密码”，凭据只保存到当前浏览器
+- 邮件配置、常用收件人/抄送按 Redmine 用户保存到工具服务器，同一用户换电脑登录后可同步
+- 服务器默认不保存 Redmine 密码/API Key；如确需服务器端个人模式保存，启动前设置 `RELEASE_TOOL_SAVE_LOGIN_SECRETS=1`
 - 多项目：连接后列出所有可访问项目
 - 管理员结构管理：在工具中生成、读取、检测、保存每个项目的 `Release_Tool_Config`
 - 查看已有 Release 列表
@@ -32,11 +34,11 @@ run.bat
 
 ### 用户名密码
 
-在「连接设置」中选择“用户名密码”，填写 Redmine 地址、用户名、密码后连接。
+在登录首页选择“用户名密码”，填写用户名、密码后登录。
 
 ### API Key
 
-在「连接设置」中选择“API Key”，填写 Redmine 地址和 API Key 后连接。工具会通过请求头：
+在登录首页选择“API Key”，填写 API Key 后登录。工具会通过请求头：
 
 ```text
 X-Redmine-API-Key: <your api key>
@@ -46,11 +48,44 @@ X-Redmine-API-Key: <your api key>
 
 API Key 方式适合管理员给发布工具单独授权，也避免用户在工具里保存 Redmine 密码。
 
+登录首页的“在本机浏览器记住账号密码”会把登录方式、用户名密码或 API Key 保存到当前浏览器的 `localStorage`。这些信息不会写入服务器工作区，不会被其他电脑或其他浏览器共享。
+
+邮件配置、SMTP 账号、常用收件人和抄送属于个人设置。用户登录 Redmine 后，工具会按 Redmine 登录名把这些设置保存到服务器工作区：
+
+```text
+项目工作区\.redmine-release-tool\users\
+```
+
+因此同一个用户从不同电脑访问同一台工具服务器并登录后，可以同步自己的邮件和联系人设置。部署时需要持久化 `.redmine-release-tool` 目录；如果换服务器或清空该目录，个人设置不会自动同步过去。
+
+## 服务器部署
+
+工具可以部署到内网服务器供开发人员使用。推荐使用 API Key 登录，并在反向代理、VPN 或 Gradio 访问密码后面运行。
+
+```powershell
+$env:RELEASE_TOOL_HOST="0.0.0.0"
+$env:RELEASE_TOOL_PORT="7860"
+$env:RELEASE_TOOL_AUTH="release:change-this-password"
+python -m release_tool.app
+```
+
+环境变量：
+
+| 变量 | 说明 |
+|------|------|
+| `RELEASE_TOOL_HOST` | 监听地址，默认 `127.0.0.1`；服务器部署可设为 `0.0.0.0` |
+| `RELEASE_TOOL_PORT` | 监听端口，默认 `7860` |
+| `RELEASE_TOOL_AUTH` | 可选的 Gradio 访问密码，格式 `用户名:密码` |
+| `REDMINE_BASE_URL` | 工具连接的 Redmine 地址 |
+| `RELEASE_TOOL_SAVE_LOGIN_SECRETS` | 默认不在服务器保存 Redmine 登录凭据；只有设为 `1` 时才允许服务器端保存 |
+
+多人部署时不要设置 `RELEASE_TOOL_SAVE_LOGIN_SECRETS=1`。服务器上的 `.redmine-release-tool\settings.json` 只保存共享默认配置；个人邮件和联系人设置保存到 `.redmine-release-tool\users\`。
+
 ## 管理员结构管理
 
 管理员可以在工具的「结构管理」页维护每个项目的 Wiki 结构：
 
-1. 先在「连接设置」连接 Redmine
+1. 先在登录首页登录 Redmine
 2. 打开「结构管理」
 3. 选择项目
 4. 选择结构模板
@@ -105,8 +140,8 @@ main_page: Release_Notes
 
 | 结构 | 模板文件 | 适用场景 |
 |------|----------|----------|
-| 单列表 | `docs/wiki_templates/Release_Tool_Config_single_list.md` | TP35 这类只有一个 `Release_Notes` 列表的项目 |
-| 多分类 include | `docs/wiki_templates/Release_Tool_Config_multi_list_include.md` | DP5X 这类主页面 + 分类页面 + 独立 List 页面结构 |
+| 单列表 | `docs/wiki_templates/Release_Tool_Config_single_list.md` | TP35 这类只有一个 Release 分类，主页面直接显示完整版本列表的项目 |
+| 多分类 include | `docs/wiki_templates/Release_Tool_Config_multi_list_include.md` | DP5X 这类主页面显示最近版本，分类页面 + 独立 List 页面显示完整列表的结构 |
 | 多分类直接列表 | `docs/wiki_templates/Release_Tool_Config_multi_list_direct.md` | 主页面 + 分类页面，但不额外拆 `xxx_List` 页面 |
 
 ### 单列表结构
@@ -128,7 +163,7 @@ main_page: Release_Notes
 release_page_prefix: Release_TP35_FW_
 ```
 
-工具会自动更新 `Release_Notes` 的“版本列表”章节。
+工具会自动维护 `Release_Notes` 的完整版本列表。
 
 ### 多分类 include 结构
 
@@ -136,21 +171,20 @@ release_page_prefix: Release_TP35_FW_
 
 ```text
 Changelog_for_5X
-├── Release_Notes_Regular
-│   └── {{include(Release_Notes_Regular_List)}}
-├── Release_Notes_Trunking
-│   └── {{include(Release_Notes_Trunking_List)}}
-├── Release_Notes_Record
-│   └── {{include(Release_Notes_Record_List)}}
-└── Release_Notes_NP500
-    └── {{include(Release_Notes_NP500_List)}}
+└── {{include(Release_Notes)}}
+
+Release_Notes
+├── Release_Notes_Regular -> {{include(Release_Notes_Regular_List)}}
+├── Release_Notes_Trunking -> {{include(Release_Notes_Trunking_List)}}
+├── Release_Notes_Record -> {{include(Release_Notes_Record_List)}}
+└── Release_Notes_NP500 -> {{include(Release_Notes_NP500_List)}}
 ```
 
 配置示例：
 
 ```yaml
 mode: multi_list
-main_page: Changelog_for_5X
+main_page: Release_Notes
 categories:
   - key: Regular
     title: 常规版本 (5X)
@@ -173,13 +207,15 @@ categories:
     list_page: Release_Notes_NP500_List
 ```
 
+工具会自动生成固定结构：`Release_Notes` 只显示分类入口和每类最近版本，分类页显示完整列表；`Changelog_for_5X` 可作为旧入口，仅 include `Release_Notes`。
+
 ### 多分类直接列表结构
 
 如果不想建立独立 `xxx_List` 页面，可以把 `list_page` 设置成和 `hub_page` 一样：
 
 ```yaml
 mode: multi_list
-main_page: Changelog_for_5X
+main_page: Release_Notes
 categories:
   - key: Regular
     title: 常规版本 (5X)
@@ -217,7 +253,7 @@ categories:
 
 工具支持发布成功后发送邮件通知：
 
-1. 在“邮件设置”中填写 SMTP 服务器、端口、发件人、常用收件人、常用抄送并保存
+1. 登录后在“邮件设置”中填写 SMTP 服务器、端口、发件人、常用收件人、常用抄送并保存
 2. 在“版本发布”页勾选“发布成功后发送邮件”
 3. 从已保存的联系人里选择收件人和抄送
 4. 点击“发布到 Redmine”
@@ -230,7 +266,7 @@ categories:
 - 项目文件链接
 - 本次选择的 `.bin` 文件附件
 
-说明：当前版本在发布页通过“选择”联系人发送；需要新增联系人时，到“邮件设置”里输入并保存后再选择。
+说明：联系人和邮件配置按当前 Redmine 用户保存；需要新增联系人时，到“邮件设置”里输入并保存后再选择。
 
 ## 推荐的自动同步标记
 
@@ -258,35 +294,29 @@ categories:
 3. 打开「邮件设置」配置 SMTP 和常用联系人（需要发邮件时）
 4. 切换到「版本发布」→ 选项目 → 填写表单 → 「发布到 Redmine」
 
-## 凭据文件位置
+## 服务器配置目录
 
 ```text
-%LOCALAPPDATA%\redmine-release-tool\settings.json
+项目工作区\.redmine-release-tool\
 ```
 
-示例：
+共享配置文件：
 
 ```json
 {
   "base_url": "http://192.168.1.208:3000",
   "auth_mode": "api_key",
-  "username": "",
-  "api_key": "your_redmine_api_key",
-  "remember": true,
-  "last_project": "dp5x",
-  "email": {
-    "smtp_host": "smtp.company.com",
-    "smtp_port": 587,
-    "smtp_user": "firmware@company.com",
-    "smtp_from": "firmware@company.com",
-    "use_tls": true,
-    "contacts_to": ["dev@example.com"],
-    "contacts_cc": ["qa@example.com"]
-  }
+  "remember": false
 }
 ```
 
-> 登录信息以明文保存在本机，仅适用于内网环境。请勿在公网机器上勾选记住登录信息。
+个人邮件配置和联系人保存到：
+
+```text
+项目工作区\.redmine-release-tool\users\
+```
+
+登录账号密码/API Key 默认不写入服务器配置文件，只保存在用户自己的浏览器 `localStorage`。
 
 ## 命令行启动
 
