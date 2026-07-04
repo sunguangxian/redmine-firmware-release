@@ -33,6 +33,33 @@ npm run dev
 http://127.0.0.1:5173
 ```
 
+## 生产部署
+
+生产环境建议使用 `scripts` 下的 PowerShell 脚本部署：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-production.ps1
+powershell -ExecutionPolicy Bypass -File scripts\start-production.ps1
+```
+
+生产配置模板：
+
+```text
+scripts\production.env.example
+```
+
+Windows 服务注册脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-windows-service.ps1
+```
+
+详细说明见：
+
+```text
+docs\production_deployment.md
+```
+
 ## 功能
 
 - Vue 3 + Element Plus 图形界面。
