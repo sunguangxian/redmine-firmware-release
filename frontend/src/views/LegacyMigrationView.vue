@@ -27,7 +27,7 @@
     <el-card v-if="previewData" class="card">
       <template #header>升级预览</template>
       <div class="migration-summary">
-        <div>型号：{{ previewData.model_count }}</div>
+        <div>分类/型号：{{ previewData.model_count }}</div>
         <div>源页面：{{ previewData.source_page_count }}</div>
         <div>历史版本：{{ previewData.release_count }}</div>
         <div>附件引用：{{ previewData.attachment_ref_count }}</div>
@@ -52,7 +52,7 @@
       </el-alert>
 
       <el-table :data="previewData.source_pages" border height="300">
-        <el-table-column prop="model" label="型号" width="140" />
+        <el-table-column prop="model" label="分类/型号" width="180" />
         <el-table-column prop="title" label="源 Wiki 页面" min-width="220" />
         <el-table-column prop="release_count" label="版本数" width="100" />
         <el-table-column prop="attachment_ref_count" label="附件引用" width="110" />
@@ -66,14 +66,33 @@
         <el-table-column prop="message" label="问题" min-width="260" />
       </el-table>
     </el-card>
+
+    <el-dialog
+      v-model="progressVisible"
+      title="旧项目升级进度"
+      width="760px"
+      :close-on-click-modal="!executing"
+      :close-on-press-escape="!executing"
+    >
+      <div class="toolbar">
+        <span>状态：{{ jobStatusText }}</span>
+        <span v-if="currentJobId" class="muted">任务：{{ currentJobId }}</span>
+      </div>
+      <div ref="progressLogEl" class="release-log migration-progress-log">
+        <div v-for="(item, index) in progressLogs" :key="index">{{ index + 1 }}. {{ item }}</div>
+      </div>
+      <template #footer>
+        <el-button :disabled="executing" @click="progressVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { errorMessage, executeLegacyMigration, previewLegacyMigration } from '../api/http'
-import type { LegacyMigrationPreview, Project } from '../types'
+import { errorMessage, getLegacyMigrationJob, previewLegacyMigration, startLegacyMigrationJob } from '../api/http'
+import type { LegacyMigrationJob, LegacyMigrationPreview, Project } from '../types'
 
 const props = defineProps<{ projects: Project[] }>()
 const projectId = ref(props.projects[0]?.identifier || '')
@@ -83,7 +102,19 @@ const previewing = ref(false)
 const executing = ref(false)
 const message = ref('')
 const ok = ref(true)
+const progressVisible = ref(false)
+const progressLogs = ref<string[]>([])
+const progressLogEl = ref<HTMLDivElement | null>(null)
+const currentJobId = ref('')
+const currentJobStatus = ref<'idle' | 'running' | 'succeeded' | 'failed'>('idle')
+let pollTimer: number | undefined
 const executeDisabled = computed(() => !previewData.value || (previewData.value.attachment_ref_count > 0 && !previewData.value.can_read_project_files))
+const jobStatusText = computed(() => {
+  if (currentJobStatus.value === 'running') return '执行中'
+  if (currentJobStatus.value === 'succeeded') return '已完成'
+  if (currentJobStatus.value === 'failed') return '失败'
+  return '未开始'
+})
 
 watch(
   () => props.projects,
@@ -93,13 +124,69 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => [progressLogs.value.length, progressVisible.value],
+  scrollProgressToBottom,
+  { flush: 'post' }
+)
+
 function entryPages(): string[] {
-  return entryPagesText.value.split(/[,，;\s]+/).map((item) => item.trim()).filter(Boolean)
+  const pages = entryPagesText.value.split(/[,，;\s]+/).map((item) => item.trim()).filter(Boolean)
+  return pages.length ? pages : ['Changelog']
 }
 
 function clearPreview() {
   previewData.value = null
   message.value = ''
+}
+
+function stopPolling() {
+  if (pollTimer !== undefined) {
+    window.clearTimeout(pollTimer)
+    pollTimer = undefined
+  }
+}
+
+async function scrollProgressToBottom() {
+  await nextTick()
+  const el = progressLogEl.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+function applyJob(job: LegacyMigrationJob) {
+  currentJobId.value = job.job_id
+  currentJobStatus.value = job.status
+  progressLogs.value = job.logs || []
+  if (job.status === 'succeeded' && job.result) {
+    previewData.value = job.result.preview
+    message.value = job.result.message
+    ok.value = true
+    executing.value = false
+    stopPolling()
+    ElMessage.success(job.result.message)
+  } else if (job.status === 'failed') {
+    message.value = job.error || '旧项目升级失败'
+    ok.value = false
+    executing.value = false
+    stopPolling()
+    ElMessage.error(message.value)
+  }
+}
+
+async function pollJob() {
+  if (!currentJobId.value || !executing.value) return
+  try {
+    const job = await getLegacyMigrationJob(currentJobId.value)
+    applyJob(job)
+    if (job.status === 'running') {
+      pollTimer = window.setTimeout(pollJob, 1000)
+    }
+  } catch (error) {
+    progressLogs.value = [...progressLogs.value, `查询进度失败：${errorMessage(error)}`]
+    executing.value = false
+    currentJobStatus.value = 'failed'
+    stopPolling()
+  }
 }
 
 async function preview() {
@@ -129,16 +216,27 @@ async function execute() {
   }
 
   executing.value = true
+  progressVisible.value = true
+  progressLogs.value = []
+  currentJobId.value = ''
+  currentJobStatus.value = 'running'
+  stopPolling()
   try {
-    const result = await executeLegacyMigration({ project_id: projectId.value, entry_pages: entryPages() })
-    previewData.value = result.preview
-    message.value = result.message
-    ok.value = true
-    ElMessage.success(result.message)
+    const job = await startLegacyMigrationJob({ project_id: projectId.value, entry_pages: entryPages() })
+    applyJob(job)
+    if (job.status === 'running') {
+      pollTimer = window.setTimeout(pollJob, 1000)
+    }
   } catch (error) {
-    ElMessage.error(errorMessage(error))
-  } finally {
+    const msg = errorMessage(error)
+    progressLogs.value = [`启动失败：${msg}`]
+    currentJobStatus.value = 'failed'
+    message.value = msg
+    ok.value = false
     executing.value = false
+    ElMessage.error(msg)
   }
 }
+
+onBeforeUnmount(stopPolling)
 </script>

@@ -585,7 +585,7 @@ class IndexSync:
     def _extract_version(self, text: str, tag: str, title: str = "") -> str:
         m = re.search(rf"# Release {re.escape(tag)} (?:NP500 )?FW ([^\r\n]+)", text, re.I)
         if not m:
-            m = re.search(r"# Release [A-Za-z0-9]+(?: NP500)? FW ([^\r\n]+)", text, re.I)
+            m = re.search(r"# Release [A-Za-z0-9_+-]+(?: NP500)? FW ([^\r\n]+)", text, re.I)
         if m:
             return m.group(1).strip()
         if "_FW_" in title:

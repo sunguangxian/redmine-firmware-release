@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -96,6 +97,22 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_contacts_lookup
             ON contacts(owner_type, user_key, scope, contact_type, display_order, id);
+
+        CREATE TABLE IF NOT EXISTS contact_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_type TEXT NOT NULL,
+            user_key TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL,
+            name TEXT NOT NULL,
+            contacts_to TEXT NOT NULL DEFAULT '[]',
+            contacts_cc TEXT NOT NULL DEFAULT '[]',
+            display_order INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner_type, user_key, scope, name)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_contact_templates_lookup
+            ON contact_templates(owner_type, user_key, scope, display_order, id);
         """
     )
 
@@ -130,6 +147,52 @@ def _clean_email_list(items: list[str] | tuple[str, ...] | None) -> list[str]:
             continue
         seen.add(key)
         result.append(email)
+    return result
+
+
+def _contact_from_email(email: str) -> dict[str, str]:
+    value = str(email or "").strip()
+    return {"name": value.split("@")[0] or value, "email": value}
+
+
+def _clean_contact_list(items: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        if isinstance(item, str):
+            email = item.strip()
+            name = ""
+        else:
+            email = str((item or {}).get("email") or "").strip()
+            name = str((item or {}).get("name") or "").strip()
+        if not email or "@" not in email:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({"name": name or email.split("@")[0], "email": email})
+    return result
+
+
+def _clean_template_list(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        name = str((item or {}).get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(
+            {
+                "name": name,
+                "contacts_to": _clean_contact_list((item or {}).get("contacts_to") or []),
+                "contacts_cc": _clean_contact_list((item or {}).get("contacts_cc") or []),
+            }
+        )
     return result
 
 
@@ -299,14 +362,104 @@ def _replace_contacts(
         )
 
 
+def _get_contact_templates(owner_type: str, user_key: str, scope: str) -> list[dict[str, Any]]:
+    scope = _normalize_scope(scope)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT name, contacts_to, contacts_cc
+            FROM contact_templates
+            WHERE owner_type = ? AND user_key = ? AND scope = ?
+            ORDER BY display_order ASC, id ASC
+            """,
+            (owner_type, user_key or "", scope),
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            contacts_to = json.loads(row["contacts_to"] or "[]")
+            contacts_cc = json.loads(row["contacts_cc"] or "[]")
+        except json.JSONDecodeError:
+            contacts_to = []
+            contacts_cc = []
+        result.append(
+            {
+                "name": row["name"] or "",
+                "contacts_to": _clean_contact_list(contacts_to),
+                "contacts_cc": _clean_contact_list(contacts_cc),
+            }
+        )
+    return result
+
+
+def _replace_contact_templates(
+    conn: sqlite3.Connection,
+    *,
+    owner_type: str,
+    user_key: str,
+    scope: str,
+    templates: list[dict[str, Any]],
+) -> None:
+    scope = _normalize_scope(scope)
+    user_key = user_key or ""
+    conn.execute(
+        """
+        DELETE FROM contact_templates
+        WHERE owner_type = ? AND user_key = ? AND scope = ?
+        """,
+        (owner_type, user_key, scope),
+    )
+    for idx, item in enumerate(_clean_template_list(templates)):
+        conn.execute(
+            """
+            INSERT INTO contact_templates(owner_type, user_key, scope, name, contacts_to, contacts_cc, display_order, updated_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                owner_type,
+                user_key,
+                scope,
+                item["name"],
+                json.dumps(item["contacts_to"], ensure_ascii=False),
+                json.dumps(item["contacts_cc"], ensure_ascii=False),
+                idx,
+            ),
+        )
+
+
+def _templates_or_default(name: str, contacts_to: list[str], contacts_cc: list[str], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if templates:
+        return templates
+    if contacts_to or contacts_cc:
+        return [
+            {
+                "name": name,
+                "contacts_to": [_contact_from_email(email) for email in _clean_email_list(contacts_to)],
+                "contacts_cc": [_contact_from_email(email) for email in _clean_email_list(contacts_cc)],
+            }
+        ]
+    return []
+
+
 def get_internal_contact_settings() -> dict[str, Any]:
+    contacts_to = _get_contacts(GLOBAL_OWNER, "", MAIL_SCOPE_INTERNAL, CONTACT_TO)
+    contacts_cc = _get_contacts(GLOBAL_OWNER, "", MAIL_SCOPE_INTERNAL, CONTACT_CC)
     return {
-        "contacts_to": _get_contacts(GLOBAL_OWNER, "", MAIL_SCOPE_INTERNAL, CONTACT_TO),
-        "contacts_cc": _get_contacts(GLOBAL_OWNER, "", MAIL_SCOPE_INTERNAL, CONTACT_CC),
+        "contacts": _clean_email_list([*contacts_to, *contacts_cc]),
+        "contacts_to": contacts_to,
+        "contacts_cc": contacts_cc,
     }
 
 
-def store_internal_contact_settings(*, contacts_to: list[str], contacts_cc: list[str]) -> None:
+def store_internal_contact_settings(
+    *,
+    contacts: list[str] | None = None,
+    contacts_to: list[str] | None = None,
+    contacts_cc: list[str] | None = None,
+) -> None:
+    if contacts is not None:
+        contacts_to = contacts
+        contacts_cc = []
     with db() as conn:
         _replace_contacts(
             conn,
@@ -314,7 +467,7 @@ def store_internal_contact_settings(*, contacts_to: list[str], contacts_cc: list
             user_key="",
             scope=MAIL_SCOPE_INTERNAL,
             contact_type=CONTACT_TO,
-            emails=contacts_to,
+            emails=contacts_to or [],
         )
         _replace_contacts(
             conn,
@@ -322,7 +475,7 @@ def store_internal_contact_settings(*, contacts_to: list[str], contacts_cc: list
             user_key="",
             scope=MAIL_SCOPE_INTERNAL,
             contact_type=CONTACT_CC,
-            emails=contacts_cc,
+            emails=contacts_cc or [],
         )
 
 
@@ -334,6 +487,7 @@ def get_user_internal_email_settings(user_key: str) -> dict[str, Any]:
             "smtp_from": "",
             "contacts_to": [],
             "contacts_cc": [],
+            "contact_templates": [],
         }
     with db() as conn:
         row = conn.execute(
@@ -358,6 +512,12 @@ def get_user_internal_email_settings(user_key: str) -> dict[str, Any]:
         "smtp_from": smtp_from,
         "contacts_to": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_TO),
         "contacts_cc": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_CC),
+        "contact_templates": _templates_or_default(
+            "默认",
+            _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_TO),
+            _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_CC),
+            _get_contact_templates(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL),
+        ),
     }
 
 
@@ -369,6 +529,7 @@ def store_user_internal_email_settings(
     smtp_from: str,
     contacts_to: list[str],
     contacts_cc: list[str],
+    contact_templates: list[dict[str, Any]] | None = None,
 ) -> None:
     if not user_key:
         return
@@ -406,6 +567,13 @@ def store_user_internal_email_settings(
             contact_type=CONTACT_CC,
             emails=contacts_cc,
         )
+        _replace_contact_templates(
+            conn,
+            owner_type=USER_OWNER,
+            user_key=user_key,
+            scope=MAIL_SCOPE_INTERNAL,
+            templates=contact_templates if contact_templates is not None else _templates_or_default("默认", contacts_to, contacts_cc, []),
+        )
 
 
 def get_user_external_email_settings(user_key: str) -> dict[str, Any]:
@@ -416,6 +584,7 @@ def get_user_external_email_settings(user_key: str) -> dict[str, Any]:
             "smtp_from": "",
             "contacts_to": [],
             "contacts_cc": [],
+            "contact_templates": [],
         }
     with db() as conn:
         row = conn.execute(
@@ -434,12 +603,20 @@ def get_user_external_email_settings(user_key: str) -> dict[str, Any]:
         smtp_user = row["smtp_user"] or ""
         smtp_password = row["smtp_password"] or ""
         smtp_from = row["smtp_from"] or ""
+    contacts_to = _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL, CONTACT_TO)
+    contacts_cc = _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL, CONTACT_CC)
     return {
         "smtp_user": smtp_user,
         "smtp_password": smtp_password,
         "smtp_from": smtp_from,
-        "contacts_to": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL, CONTACT_TO),
-        "contacts_cc": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL, CONTACT_CC),
+        "contacts_to": contacts_to,
+        "contacts_cc": contacts_cc,
+        "contact_templates": _templates_or_default(
+            "默认",
+            contacts_to,
+            contacts_cc,
+            _get_contact_templates(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL),
+        ),
     }
 
 
@@ -451,6 +628,7 @@ def store_user_external_email_settings(
     smtp_from: str,
     contacts_to: list[str],
     contacts_cc: list[str],
+    contact_templates: list[dict[str, Any]] | None = None,
 ) -> None:
     if not user_key:
         return
@@ -487,6 +665,13 @@ def store_user_external_email_settings(
             scope=MAIL_SCOPE_EXTERNAL,
             contact_type=CONTACT_CC,
             emails=contacts_cc,
+        )
+        _replace_contact_templates(
+            conn,
+            owner_type=USER_OWNER,
+            user_key=user_key,
+            scope=MAIL_SCOPE_EXTERNAL,
+            templates=contact_templates if contact_templates is not None else _templates_or_default("默认", contacts_to, contacts_cc, []),
         )
 
 

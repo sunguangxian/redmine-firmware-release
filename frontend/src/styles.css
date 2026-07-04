@@ -62,6 +62,11 @@ body {
   margin-top: 12px;
 }
 
+.migration-progress-log {
+  max-height: 420px;
+  overflow: auto;
+}
+
 .migration-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -77,6 +82,41 @@ body {
   font-size: 13px;
 }
 
+.contact-template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contact-template-item {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+}
+
+.contact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.contact-list-title {
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.contact-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 150px) minmax(160px, 1fr) auto;
+  gap: 8px;
+}
+
 .muted {
   color: #6b7280;
   font-size: 13px;
@@ -88,6 +128,14 @@ body {
   }
 
   .migration-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .contact-template-item {
+    grid-template-columns: 1fr;
+  }
+
+  .contact-row {
     grid-template-columns: 1fr;
   }
 }

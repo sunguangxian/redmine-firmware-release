@@ -186,6 +186,7 @@ def send_release_email(
     subject: str,
     body: str,
     attachments: list[tuple[str, str, bytes]],
+    apply_template_scope: bool = True,
 ) -> None:
     if not settings.smtp_host:
         raise EmailSendError("请先填写 SMTP 服务器")
@@ -194,7 +195,8 @@ def send_release_email(
     if not to_addrs:
         raise EmailSendError("请填写或选择至少一个收件人")
 
-    subject, body = _apply_template_scope(settings, subject, body)
+    if apply_template_scope:
+        subject, body = _apply_template_scope(settings, subject, body)
 
     cc_addrs = cc_addrs or []
     msg = EmailMessage()

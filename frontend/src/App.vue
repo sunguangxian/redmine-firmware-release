@@ -13,10 +13,10 @@
     </el-card>
 
     <el-tabs v-model="activeTab" type="border-card">
-      <el-tab-pane label="结构管理" name="wiki">
+      <el-tab-pane v-if="session.is_admin" label="结构管理" name="wiki">
         <WikiConfigView :projects="session.projects" />
       </el-tab-pane>
-      <el-tab-pane label="旧项目升级" name="legacy">
+      <el-tab-pane v-if="session.is_admin" label="旧项目升级" name="legacy">
         <LegacyMigrationView :projects="session.projects" />
       </el-tab-pane>
       <el-tab-pane label="邮件设置" name="mail">

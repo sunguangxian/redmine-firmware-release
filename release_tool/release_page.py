@@ -53,7 +53,7 @@ class ReleaseForm:
 
 def proj_tag_from_project(project_id: str, page_title: str | None = None) -> str:
     if page_title:
-        match = re.match(r"^Release_([A-Za-z0-9]+?)(?:_NP500)?_FW_", page_title, re.I)
+        match = re.match(r"^Release_([A-Za-z0-9_+-]+?)(?:_NP500)?_FW_", page_title, re.I)
         if match:
             return match.group(1).upper()
     return project_id.upper()

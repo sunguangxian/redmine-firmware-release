@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import threading
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +49,8 @@ from .wiki_templates import TEMPLATE_CHOICES, build_config_template, validate_co
 SESSION_COOKIE = "release_tool_session"
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
 SESSIONS: Dict[str, Dict[str, Any]] = {}
+LEGACY_MIGRATION_JOBS: Dict[str, Dict[str, Any]] = {}
+LEGACY_JOB_LOCK = threading.Lock()
 RECENT_RELEASE_LIMIT = 50
 
 app = FastAPI(title="Redmine Firmware Release API")
@@ -82,8 +86,20 @@ class SmtpServerConfig(BaseModel):
 
 
 class ContactConfig(BaseModel):
+    contacts: List[str] = Field(default_factory=list)
     contacts_to: List[str] = Field(default_factory=list)
     contacts_cc: List[str] = Field(default_factory=list)
+
+
+class ContactPersonConfig(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
+class ContactTemplateConfig(BaseModel):
+    name: str = ""
+    contacts_to: List[ContactPersonConfig] = Field(default_factory=list)
+    contacts_cc: List[ContactPersonConfig] = Field(default_factory=list)
 
 
 class AdminMailSettingsRequest(BaseModel):
@@ -98,6 +114,7 @@ class UserExternalMailRequest(BaseModel):
     smtp_from: str = ""
     contacts_to: List[str] = Field(default_factory=list)
     contacts_cc: List[str] = Field(default_factory=list)
+    contact_templates: List[ContactTemplateConfig] = Field(default_factory=list)
 
 
 class UserInternalMailRequest(BaseModel):
@@ -106,6 +123,7 @@ class UserInternalMailRequest(BaseModel):
     smtp_from: str = ""
     contacts_to: List[str] = Field(default_factory=list)
     contacts_cc: List[str] = Field(default_factory=list)
+    contact_templates: List[ContactTemplateConfig] = Field(default_factory=list)
 
 
 class WikiConfigSaveRequest(BaseModel):
@@ -163,6 +181,16 @@ def _current_client(session: Dict[str, Any] = Depends(_current_session)) -> Redm
     )
 
 
+def _client_from_session(session: Dict[str, Any]) -> RedmineClient:
+    return RedmineClient(
+        session.get("base_url", ""),
+        session.get("username", ""),
+        session.get("password", ""),
+        api_key=session.get("api_key", ""),
+        auth_mode=session.get("auth_mode", "password"),
+    )
+
+
 def _require_admin(session: Dict[str, Any]) -> None:
     if not session.get("is_admin"):
         raise _json_error("只有 Redmine 管理员可以修改该配置", 403)
@@ -184,19 +212,55 @@ def _list_release_rows(client: RedmineClient, project_id: str, product_line: str
     return releases[:RECENT_RELEASE_LIMIT]
 
 
-def _contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, List[str]]:
+def _visible_projects_for_user(client: RedmineClient, projects: List[Dict[str, Any]], is_admin: bool) -> List[Dict[str, Any]]:
+    if is_admin:
+        return projects
+    candidates = client.list_projects(membership=True)
+    visible: List[Dict[str, Any]] = []
+    for project in candidates:
+        identifier = str(project.get("identifier") or "")
+        if not identifier:
+            continue
+        try:
+            client.get_wiki_index(identifier)
+        except RedmineError:
+            continue
+        visible.append(project)
+    return visible
+
+
+def _contact_people(emails: List[str]) -> List[Dict[str, str]]:
+    result: List[Dict[str, str]] = []
+    for email in emails:
+        value = (email or "").strip()
+        if not value or "@" not in value:
+            continue
+        result.append({"name": value.split("@")[0] or value, "email": value})
+    return result
+
+
+def _contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
     if scope == MAIL_SCOPE_INTERNAL:
         global_contacts = get_internal_contact_settings()
         user_contacts = get_user_internal_email_settings(session.get("user_key", ""))
+        contact_candidates = _merge_contact_lists(
+            global_contacts.get("contacts", []),
+            user_contacts.get("contacts_to", []),
+            user_contacts.get("contacts_cc", []),
+        )
+        templates = []
+        templates.extend(user_contacts.get("contact_templates", []))
         return {
-            "contacts_to": _merge_contact_lists(global_contacts.get("contacts_to", []), user_contacts.get("contacts_to", [])),
-            "contacts_cc": _merge_contact_lists(global_contacts.get("contacts_cc", []), user_contacts.get("contacts_cc", [])),
+            "contacts_to": contact_candidates,
+            "contacts_cc": contact_candidates,
+            "contact_templates": templates,
         }
     else:
         contacts = get_user_external_email_settings(session.get("user_key", ""))
     return {
         "contacts_to": contacts.get("contacts_to", []),
         "contacts_cc": contacts.get("contacts_cc", []),
+        "contact_templates": contacts.get("contact_templates", []),
     }
 
 
@@ -214,6 +278,55 @@ def _merge_contact_lists(*groups: List[str]) -> List[str]:
     return result
 
 
+def _job_timestamp() -> str:
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def _append_legacy_job_log(job_id: str, message: str) -> None:
+    with LEGACY_JOB_LOCK:
+        job = LEGACY_MIGRATION_JOBS.get(job_id)
+        if job is not None:
+            job.setdefault("logs", []).append(f"{_job_timestamp()} {message}")
+
+
+def _legacy_job_snapshot(job_id: str) -> Dict[str, Any]:
+    with LEGACY_JOB_LOCK:
+        job = LEGACY_MIGRATION_JOBS.get(job_id)
+        if not job:
+            raise _json_error("旧项目升级任务不存在或已过期", 404)
+        return {
+            "job_id": job_id,
+            "status": job.get("status", "running"),
+            "logs": list(job.get("logs", [])),
+            "result": job.get("result"),
+            "error": job.get("error", ""),
+        }
+
+
+def _set_legacy_job_state(job_id: str, **fields: Any) -> None:
+    with LEGACY_JOB_LOCK:
+        job = LEGACY_MIGRATION_JOBS.get(job_id)
+        if job is not None:
+            job.update(fields)
+
+
+def _run_legacy_migration_job(job_id: str, payload: LegacyMigrationRequest, session: Dict[str, Any]) -> None:
+    try:
+        _append_legacy_job_log(job_id, "后台任务已启动")
+        client = _client_from_session(session)
+        result = LegacyChangelogMigrator(
+            client,
+            payload.project_id,
+            payload.entry_pages,
+            log_callback=lambda message: _append_legacy_job_log(job_id, message),
+        ).execute()
+        _append_legacy_job_log(job_id, result.get("message", "旧项目升级完成"))
+        _set_legacy_job_state(job_id, status="succeeded", result=result)
+    except Exception as exc:
+        _append_legacy_job_log(job_id, f"执行失败：{exc}")
+        _set_legacy_job_state(job_id, status="failed", error=str(exc))
+
+
 def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSettings, List[str], List[str]]:
     if scope == MAIL_SCOPE_INTERNAL:
         server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
@@ -223,6 +336,11 @@ def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSet
         if not user_cfg["smtp_from"] and not server["smtp_from"]:
             raise EmailSendError("内网邮件请先配置个人发件人或管理员默认发件人")
         global_contacts = get_internal_contact_settings()
+        contact_candidates = _merge_contact_lists(
+            global_contacts["contacts"],
+            user_cfg["contacts_to"],
+            user_cfg["contacts_cc"],
+        )
         return (
             EmailSettings(
                 smtp_host=server["smtp_host"],
@@ -233,8 +351,8 @@ def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSet
                 use_tls=server["use_tls"],
                 template_scope=MAIL_SCOPE_INTERNAL,
             ),
-            _merge_contact_lists(global_contacts["contacts_to"], user_cfg["contacts_to"]),
-            _merge_contact_lists(global_contacts["contacts_cc"], user_cfg["contacts_cc"]),
+            contact_candidates,
+            contact_candidates,
         )
 
     server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
@@ -271,12 +389,14 @@ def _send_release_notice(
     mail_scope: str,
     mail_to: List[str],
     mail_cc: List[str],
+    mail_subject: str = "",
+    mail_body: str = "",
 ) -> str:
     settings, _allowed_to, _allowed_cc = _build_email_settings(session, mail_scope)
     to_addrs = split_emails(mail_to)
     cc_addrs = split_emails(mail_cc)
-    subject = build_release_email_subject(project_id, version_name, product_line, mail_scope)
-    body = build_release_email_body(
+    generated_subject = build_release_email_subject(project_id, version_name, product_line, mail_scope)
+    generated_body = build_release_email_body(
         base_url=client.base_url,
         project_id=project_id,
         wiki_title=wiki_title,
@@ -288,7 +408,21 @@ def _send_release_notice(
         attachment_names=[name for name, _desc, _content in file_rows],
         mail_scope=mail_scope,
     )
-    send_release_email(settings, to_addrs=to_addrs, cc_addrs=cc_addrs, subject=subject, body=body, attachments=file_rows)
+    subject = (mail_subject or "").strip() or generated_subject
+    body = (mail_body or "").strip() or generated_body
+    base = client.base_url.rstrip("/")
+    body = body.replace("{{wiki_url}}", f"{base}/projects/{quote(project_id)}/wiki/{quote(wiki_title, safe='')}")
+    body = body.replace("{{files_url}}", f"{base}/projects/{quote(project_id)}/files")
+    custom_content = bool((mail_subject or "").strip() or (mail_body or "").strip())
+    send_release_email(
+        settings,
+        to_addrs=to_addrs,
+        cc_addrs=cc_addrs,
+        subject=subject,
+        body=body,
+        attachments=file_rows,
+        apply_template_scope=not custom_content,
+    )
     return f"{_mail_scope_label(mail_scope)}邮件已发送：收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个，附件 {len(file_rows)} 个"
 
 
@@ -325,6 +459,8 @@ def api_login(payload: LoginRequest, response: Response) -> LoginResponse:
     projects = client.list_projects()
     user = account.get("user", {})
     user_login = user.get("login") or username or "api-key"
+    is_admin = bool(user.get("admin", False))
+    projects = _visible_projects_for_user(client, projects, is_admin)
     session = {
         "connected": True,
         "base_url": base_url,
@@ -334,7 +470,7 @@ def api_login(payload: LoginRequest, response: Response) -> LoginResponse:
         "api_key": api_key,
         "user_login": user_login,
         "user_key": _user_key(base_url, str(user_login)),
-        "is_admin": bool(user.get("admin", False)),
+        "is_admin": is_admin,
         "projects": projects,
     }
     sid = uuid.uuid4().hex
@@ -345,7 +481,9 @@ def api_login(payload: LoginRequest, response: Response) -> LoginResponse:
 
 
 @app.get("/api/auth/me", response_model=LoginResponse)
-def api_me(session: Dict[str, Any] = Depends(_current_session)) -> LoginResponse:
+def api_me(session: Dict[str, Any] = Depends(_current_session), client: RedmineClient = Depends(_current_client)) -> LoginResponse:
+    if not session.get("is_admin"):
+        session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
     return _public_session(session)
 
 
@@ -358,8 +496,25 @@ def api_logout(request: Request, response: Response) -> Dict[str, bool]:
 
 
 @app.get("/api/projects")
-def api_projects(session: Dict[str, Any] = Depends(_current_session)) -> List[Dict[str, Any]]:
+def api_projects(session: Dict[str, Any] = Depends(_current_session), client: RedmineClient = Depends(_current_client)) -> List[Dict[str, Any]]:
+    if not session.get("is_admin"):
+        session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
     return session.get("projects", [])
+
+
+@app.get("/api/projects/{project_id}/release-categories")
+def api_project_release_categories(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
+    try:
+        profile = IndexSync(client, project_id).discover_profile()
+    except RedmineError:
+        return {"mode": "", "categories": []}
+    return {
+        "mode": profile.mode,
+        "categories": [
+            {"key": category.key, "title": category.title}
+            for category in profile.categories
+        ],
+    }
 
 
 @app.get("/api/releases")
@@ -398,6 +553,8 @@ async def api_publish_release(
     mail_scope: str = Form(MAIL_SCOPE_INTERNAL),
     mail_to: str = Form(""),
     mail_cc: str = Form(""),
+    mail_subject: str = Form(""),
+    mail_body: str = Form(""),
     files: Optional[List[UploadFile]] = File(None),
     session: Dict[str, Any] = Depends(_current_session),
     client: RedmineClient = Depends(_current_client),
@@ -456,6 +613,8 @@ async def api_publish_release(
                 mail_scope=scope,
                 mail_to=to_addrs,
                 mail_cc=cc_addrs,
+                mail_subject=mail_subject,
+                mail_body=mail_body,
             )
             logs.append(notice_message)
         except EmailSendError as exc:
@@ -487,16 +646,20 @@ def api_mail_settings(session: Dict[str, Any] = Depends(_current_session)) -> Di
         "user_internal": {
             "smtp_user": user_internal["smtp_user"],
             "smtp_password": "",
+            "smtp_password_set": bool(user_internal.get("smtp_password")),
             "smtp_from": user_internal["smtp_from"],
             "contacts_to": user_internal["contacts_to"],
             "contacts_cc": user_internal["contacts_cc"],
+            "contact_templates": user_internal["contact_templates"],
         },
         "user_external": {
             "smtp_user": user_external["smtp_user"],
             "smtp_password": "",
+            "smtp_password_set": bool(user_external.get("smtp_password")),
             "smtp_from": user_external["smtp_from"],
             "contacts_to": user_external["contacts_to"],
             "contacts_cc": user_external["contacts_cc"],
+            "contact_templates": user_external["contact_templates"],
         },
     }
 
@@ -518,7 +681,11 @@ def api_save_admin_mail_settings(payload: AdminMailSettingsRequest, session: Dic
         smtp_from="",
         use_tls=payload.external_server.use_tls,
     )
-    store_internal_contact_settings(contacts_to=payload.internal_contacts.contacts_to, contacts_cc=payload.internal_contacts.contacts_cc)
+    contacts = payload.internal_contacts.contacts or _merge_contact_lists(
+        payload.internal_contacts.contacts_to,
+        payload.internal_contacts.contacts_cc,
+    )
+    store_internal_contact_settings(contacts=contacts)
     return {"ok": True}
 
 
@@ -534,6 +701,7 @@ def api_save_user_internal_mail_settings(payload: UserInternalMailRequest, sessi
         smtp_from=payload.smtp_from,
         contacts_to=payload.contacts_to,
         contacts_cc=payload.contacts_cc,
+        contact_templates=[item.dict() for item in payload.contact_templates],
     )
     return {"ok": True}
 
@@ -550,12 +718,13 @@ def api_save_user_external_mail_settings(payload: UserExternalMailRequest, sessi
         smtp_from=payload.smtp_from,
         contacts_to=payload.contacts_to,
         contacts_cc=payload.contacts_cc,
+        contact_templates=[item.dict() for item in payload.contact_templates],
     )
     return {"ok": True}
 
 
 @app.get("/api/mail/contacts")
-def api_mail_contacts(scope: str = Query(MAIL_SCOPE_INTERNAL), session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, List[str]]:
+def api_mail_contacts(scope: str = Query(MAIL_SCOPE_INTERNAL), session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
     return _contacts_for_scope(session, _normalize_mail_scope(scope))
 
 
@@ -572,6 +741,35 @@ def api_execute_legacy_migration(
 ) -> Dict[str, Any]:
     _require_admin(session)
     return LegacyChangelogMigrator(client, payload.project_id, payload.entry_pages).execute()
+
+
+@app.post("/api/legacy-migration/execute-job")
+def api_start_legacy_migration_job(
+    payload: LegacyMigrationRequest,
+    session: Dict[str, Any] = Depends(_current_session),
+) -> Dict[str, Any]:
+    _require_admin(session)
+    job_id = uuid.uuid4().hex
+    with LEGACY_JOB_LOCK:
+        LEGACY_MIGRATION_JOBS[job_id] = {
+            "status": "running",
+            "logs": [f"{_job_timestamp()} 准备执行旧项目升级"],
+            "result": None,
+            "error": "",
+        }
+    thread = threading.Thread(
+        target=_run_legacy_migration_job,
+        args=(job_id, payload, dict(session)),
+        daemon=True,
+    )
+    thread.start()
+    return _legacy_job_snapshot(job_id)
+
+
+@app.get("/api/legacy-migration/jobs/{job_id}")
+def api_get_legacy_migration_job(job_id: str, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
+    _require_admin(session)
+    return _legacy_job_snapshot(job_id)
 
 
 @app.get("/api/wiki-config/templates")

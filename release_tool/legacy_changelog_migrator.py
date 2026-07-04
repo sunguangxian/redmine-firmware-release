@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from .index_sync import IndexSync
@@ -15,10 +15,12 @@ from .wiki_config import CONFIG_BEGIN, CONFIG_END, CONFIG_PAGE_TITLE
 
 DEFAULT_ENTRY_PAGES = ["Changelog"]
 VERSION_HEADING_RE = re.compile(
-    r"(?m)^(?:h2\.\s*|##\s*)version\s*:?\s*(?P<version>[^\s(]+)\s*\((?P<date>\d{4}-\d{2}-\d{2})\)"
+    r"(?m)^(?:h[12]\.\s*|#{1,2}\s*)version\s*:?\s*(?P<version>[^\s(]+)\s*\((?P<date>\d{4}-\d{2}-\d{2})\)"
     r"[^\n]*\r?$",
     re.I,
 )
+CHANGELOG_TITLE_RE = re.compile(r"(?im)^(?:#|h1\.)\s*Changelog\s+for\s+(?P<model>[^\r\n]+?)\s*$")
+SECTION_HEADING_RE = re.compile(r"(?m)^(?:#(?!#)|h1\.)\s*(?P<title>[^\r\n]+?)\s*$")
 ATTACHMENT_RE = re.compile(r"attachment:([^\s;,，；]+)", re.I)
 
 
@@ -31,18 +33,18 @@ class LegacyAttachmentRef:
 @dataclass
 class LegacyRelease:
     model: str
+    category_title: str
     source_page: str
     version: str
     date: str
     commit: str
     changelog_items: List[str]
     attachments: List[LegacyAttachmentRef] = field(default_factory=list)
-    target_version_name: str = ""
     target_wiki_title: str = ""
 
     @property
     def version_name(self) -> str:
-        return self.target_version_name or f"{self.model} {self.version}"
+        return self.version
 
     @property
     def wiki_title(self) -> str:
@@ -62,12 +64,23 @@ class LegacySourcePage:
 
 
 class LegacyChangelogMigrator:
-    def __init__(self, client: RedmineClient, project_id: str, entry_pages: Optional[List[str]] = None):
+    def __init__(
+        self,
+        client: RedmineClient,
+        project_id: str,
+        entry_pages: Optional[List[str]] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+    ):
         self.client = client
         self.project_id = project_id
         self.entry_pages = [item.strip() for item in (entry_pages or DEFAULT_ENTRY_PAGES) if item.strip()]
+        self._log_callback = log_callback
         self._wiki_index: Optional[List[Dict[str, Any]]] = None
         self._pages: Dict[str, Optional[Dict[str, Any]]] = {}
+
+    def _log(self, message: str) -> None:
+        if self._log_callback:
+            self._log_callback(message)
 
     def preview(self) -> Dict[str, Any]:
         releases, sources, warnings = self.scan()
@@ -79,7 +92,7 @@ class LegacyChangelogMigrator:
             project_files = self.client.list_project_files(self.project_id)
         except RedmineError as exc:
             can_read_project_files = False
-            warnings.append(f"无法读取项目文件列表：{exc}。预览将无法判断项目文件是否已存在。")
+            warnings.append(f"无法读取项目文件列表：{exc}。预览无法判断项目文件是否已存在，执行带附件迁移前需要先开通项目文件权限。")
 
         version_names = {item.version_name for item in releases}
         release_titles = {item.wiki_title for item in releases}
@@ -102,7 +115,6 @@ class LegacyChangelogMigrator:
 
         problems: List[Dict[str, str]] = []
         duplicate_titles = {title: count for title, count in Counter(item.wiki_title for item in releases).items() if count > 1}
-        duplicate_versions = {name: count for name, count in Counter(item.version_name for item in releases).items() if count > 1}
         for title, count in duplicate_titles.items():
             problems.append(
                 {
@@ -110,15 +122,6 @@ class LegacyChangelogMigrator:
                     "source_page": "",
                     "version": "",
                     "message": f"目标 Release 页面重复 {count} 次：{title}",
-                }
-            )
-        for name, count in duplicate_versions.items():
-            problems.append(
-                {
-                    "level": "error",
-                    "source_page": "",
-                    "version": "",
-                    "message": f"目标 Redmine Version 重复 {count} 次：{name}",
                 }
             )
         for release in releases:
@@ -134,8 +137,8 @@ class LegacyChangelogMigrator:
                     )
         if unmatched_refs:
             warnings.append(f"有 {len(unmatched_refs)} 个附件引用没有匹配到旧 Wiki 附件，执行时会跳过。")
-        if duplicate_titles or duplicate_versions:
-            warnings.append("存在重复目标 Release 页面或 Version，执行迁移前需要先处理冲突。")
+        if duplicate_titles:
+            warnings.append("存在重复目标 Release 页面，执行迁移前需要先处理冲突。")
 
         return {
             "project_id": self.project_id,
@@ -158,14 +161,21 @@ class LegacyChangelogMigrator:
         }
 
     def execute(self) -> Dict[str, Any]:
+        self._log("开始执行旧项目升级：预览并校验迁移计划")
         preview = self.preview()
+        self._log(
+            f"预览完成：源页面 {preview.get('source_page_count', 0)} 个，"
+            f"历史版本 {preview.get('release_count', 0)} 个，附件引用 {preview.get('attachment_ref_count', 0)} 个"
+        )
         blocking = [item for item in preview.get("problems", []) if item.get("level") == "error"]
         if blocking:
             raise RedmineError("迁移预览存在阻塞问题，请先处理重复目标页面或版本。")
         if preview.get("attachment_ref_count") and not preview.get("can_read_project_files"):
             raise RedmineError("当前账号无法读取项目文件列表，不能安全迁移旧附件到项目 Files。请先确认 Redmine 文件模块权限。")
+        self._log("重新扫描旧 Wiki 页面，准备写入 Redmine")
         releases, _sources, _warnings = self.scan()
         if not releases:
+            self._log("没有可迁移的历史版本，执行结束")
             return {
                 "ok": True,
                 "preview": preview,
@@ -175,50 +185,79 @@ class LegacyChangelogMigrator:
                 "message": "没有可迁移的历史版本。",
             }
 
-        self._save_release_tool_config(sorted({release.model for release in releases}))
+        categories = self._release_categories(releases)
+        models = [item["key"] for item in categories]
+        single_list = len(categories) == 1
+        structure = "single_list" if single_list else "multi_list"
+        self._log(f"写入 Release_Tool_Config，结构：{structure}，分类：{', '.join(item['title'] for item in categories)}")
+        self._save_release_tool_config(categories, single_list=single_list)
+        self._log("创建 Release_Notes 索引结构")
+        self._create_release_structure(categories, single_list=single_list)
+        self._update_wiki_home_if_needed(releases)
+        self._log("读取 Redmine Version 列表")
         versions = {item.get("name", ""): item for item in self.client.list_versions(self.project_id)}
         uploaded_files = 0
         created_versions = 0
         updated_pages = 0
 
-        for release in releases:
+        for idx, release in enumerate(releases, 1):
+            self._log(f"处理版本 {idx}/{len(releases)}：{release.version_name}，目标页面 {release.wiki_title}")
             version = versions.get(release.version_name)
             if not version:
-                version = self.client.create_version(
-                    self.project_id,
-                    release.version_name,
-                    release.date,
-                    self._version_description(release),
-                )
+                try:
+                    self._log(f"创建 Redmine Version：{release.version_name}")
+                    version = self.client.create_version(
+                        self.project_id,
+                        release.version_name,
+                        release.date,
+                        self._version_description(release),
+                    )
+                except RedmineError as exc:
+                    raise RedmineError(f"创建 Redmine Version 失败：{release.version_name}；{exc}") from exc
                 versions[release.version_name] = version
                 created_versions += 1
+            else:
+                self._log(f"复用 Redmine Version：{release.version_name}")
 
             linked_files: List[Dict[str, Optional[str]]] = []
-            existing_for_version = self._project_files_by_name(int(version["id"]))
-            for att in release.attachments:
+            try:
+                existing_for_version = self._project_files_by_name(int(version["id"]))
+            except RedmineError as exc:
+                raise RedmineError(f"读取版本文件列表失败：{release.version_name}；{exc}") from exc
+            self._log(f"版本 {release.version_name} 已有项目文件 {len(existing_for_version)} 个，待处理附件 {len(release.attachments)} 个")
+            for att_idx, att in enumerate(release.attachments, 1):
                 if not att.attachment:
+                    self._log(f"跳过未匹配附件 {att_idx}/{len(release.attachments)}：{att.filename}")
                     continue
                 existing = existing_for_version.get(att.filename.lower())
                 if existing:
+                    self._log(f"复用项目文件 {att_idx}/{len(release.attachments)}：{att.filename}")
                     linked_files.append(self._linked_file(existing, att.filename))
                     continue
 
                 content_url = att.attachment.get("content_url") or ""
-                content = self.client.download_content_url(content_url)
-                token = self.client.upload_file(att.filename, content)
-                file_obj = self.client.create_project_file(self.project_id, int(version["id"]), att.filename, token)
-                if not self._project_file_url(file_obj, att.filename):
-                    file_obj = self._project_files_by_name(int(version["id"])).get(att.filename.lower(), file_obj)
+                try:
+                    self._log(f"下载旧 Wiki 附件 {att_idx}/{len(release.attachments)}：{att.filename}")
+                    content = self.client.download_content_url(content_url)
+                    self._log(f"上传附件到 Redmine 临时区：{att.filename}")
+                    token = self.client.upload_file(att.filename, content)
+                    self._log(f"创建项目文件：{att.filename}")
+                    file_obj = self.client.create_project_file(self.project_id, int(version["id"]), att.filename, token)
+                    if not self._project_file_url(file_obj, att.filename):
+                        file_obj = self._project_files_by_name(int(version["id"])).get(att.filename.lower(), file_obj)
+                except RedmineError as exc:
+                    raise RedmineError(f"迁移附件失败：版本 {release.version_name}，附件 {att.filename}；{exc}") from exc
                 linked_files.append(self._linked_file(file_obj, att.filename))
                 uploaded_files += 1
 
+            self._log(f"生成 Release Wiki 内容：{release.wiki_title}")
             form = ReleaseForm(
                 project_id=self.project_id,
                 proj_tag=release.model,
                 version_name=release.version,
                 release_date=release.date,
                 commit=release.commit,
-                product_line=release.model,
+                product_line=release.category_title or release.model,
                 changelog_items=release.changelog_items,
                 files=[],
                 wiki_title=release.wiki_title,
@@ -226,16 +265,26 @@ class LegacyChangelogMigrator:
             )
             text = build_release_markdown(form, int(version["id"]), linked_files)
             text = text.rstrip() + f"\n\n## 迁移来源\n\n- [[{release.source_page}]]\n"
-            self.client.put_wiki_page(
-                self.project_id,
-                release.wiki_title,
-                text,
-                "legacy changelog migration",
-                parent_title=f"Release_Notes_{release.model}",
-            )
+            try:
+                parent_title = "Release_Notes" if single_list else f"Release_Notes_{release.model}"
+                self._log(f"写入 Release Wiki：{release.wiki_title}")
+                self.client.put_wiki_page(
+                    self.project_id,
+                    release.wiki_title,
+                    text,
+                    "legacy changelog migration",
+                    parent_title=parent_title,
+                )
+            except RedmineError as exc:
+                raise RedmineError(f"写入 Release Wiki 失败：{release.wiki_title}；{exc}") from exc
             updated_pages += 1
 
-        refreshed = IndexSync(self.client, self.project_id).refresh_all()
+        try:
+            self._log("重建 Release 索引")
+            refreshed = IndexSync(self.client, self.project_id).refresh_all()
+        except RedmineError as exc:
+            raise RedmineError(f"Release 索引重建失败；{exc}") from exc
+        self._log(f"迁移完成：创建版本 {created_versions} 个，上传项目文件 {uploaded_files} 个，更新 Release Wiki {updated_pages} 页")
         return {
             "ok": True,
             "preview": preview,
@@ -256,25 +305,30 @@ class LegacyChangelogMigrator:
         sources: List[LegacySourcePage] = []
 
         for title in source_titles:
-            model = self._model_from_title(title)
-            if not model:
-                continue
             page = self._get_page(title, include_attachments=True)
             if not page:
                 warnings.append(f"源页面不存在：{title}")
                 continue
             text = page.get("text", "") or ""
+            model = self._model_for_page(title, text)
+            if not model:
+                continue
             attachments = self._attachments_by_name(page.get("attachments") or [])
             parsed = self._parse_releases(title, model, text, attachments)
             if not parsed:
                 continue
             releases.extend(parsed)
+            source_categories = []
+            for item in parsed:
+                title_value = item.category_title or item.model
+                if title_value not in source_categories:
+                    source_categories.append(title_value)
             ref_count = sum(len(item.attachments) for item in parsed)
             matched_count = sum(1 for item in parsed for att in item.attachments if att.attachment)
             sources.append(
                 LegacySourcePage(
                     title=title,
-                    model=model,
+                    model=", ".join(source_categories),
                     release_count=len(parsed),
                     attachment_ref_count=ref_count,
                     matched_attachment_count=matched_count,
@@ -302,27 +356,45 @@ class LegacyChangelogMigrator:
                 seen[base_title] = count
                 suffix = f"_{count}" if count > 1 else ""
                 release.target_wiki_title = f"{base_title}{suffix}"
-                release.target_version_name = f"{model} {version} {release.date}{f' #{count}' if count > 1 else ''}"
 
     def _discover_source_titles(self, warnings: List[str]) -> List[str]:
         titles = [item.get("title", "") for item in self._get_wiki_index() if item.get("title")]
+        title_by_key = {title.lower(): title for title in titles}
         selected: List[str] = []
+        selected_keys: set[str] = set()
+        missing_entries: List[str] = []
+
+        def add_selected(title: str) -> None:
+            canonical = title_by_key.get(title.lower(), title)
+            key = canonical.lower()
+            if key in selected_keys:
+                return
+            selected_keys.add(key)
+            selected.append(canonical)
+
         for entry in self.entry_pages:
             page = self._get_page(entry)
             if not page:
-                warnings.append(f"入口页不存在：{entry}")
+                missing_entries.append(entry)
                 continue
+            if self._page_has_versions(page.get("text", "") or ""):
+                add_selected(str(page.get("title") or entry))
             for link in re.findall(r"\[\[([^\]|]+)", page.get("text", "") or ""):
                 link_title = link.strip()
-                if link_title in titles and link_title not in selected and link_title not in self.entry_pages:
-                    selected.append(link_title)
+                if link_title.lower() in title_by_key and link_title.lower() not in {item.lower() for item in self.entry_pages}:
+                    add_selected(link_title)
 
         for title in titles:
-            if title in self.entry_pages:
+            if title.lower() in {item.lower() for item in self.entry_pages}:
                 continue
-            if self._model_from_title(title) and title not in selected:
-                selected.append(title)
+            if self._model_from_title(title):
+                add_selected(title)
+        if not selected:
+            warnings.extend(f"入口页不存在：{entry}" for entry in missing_entries)
         return selected
+
+    def _page_has_versions(self, text: str) -> bool:
+        return bool(VERSION_HEADING_RE.search(text or ""))
 
     def _parse_releases(
         self,
@@ -338,9 +410,11 @@ class LegacyChangelogMigrator:
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
             body = text[start:end].strip()
             attachment_names = self._attachment_names(body)
+            category_key, category_title = self._category_for_position(text, match.start(), model)
             result.append(
                 LegacyRelease(
-                    model=model,
+                    model=category_key,
+                    category_title=category_title,
                     source_page=source_page,
                     version=match.group("version").strip(),
                     date=match.group("date").strip(),
@@ -397,8 +471,44 @@ class LegacyChangelogMigrator:
             return self._clean_model(title)
         return ""
 
+    def _model_for_page(self, title: str, text: str) -> str:
+        match = CHANGELOG_TITLE_RE.search(text or "")
+        if match:
+            return self._clean_category_key(match.group("model"))
+        if title in self.entry_pages and self._page_has_versions(text):
+            return self._clean_category_key(self.project_id)
+        return self._model_from_title(title)
+
     def _clean_model(self, value: str) -> str:
         return re.sub(r"[^A-Za-z0-9_+-]+", "_", value.strip()).strip("_")
+
+    def _category_for_position(self, text: str, position: int, default_key: str) -> Tuple[str, str]:
+        selected = ""
+        for match in SECTION_HEADING_RE.finditer(text or ""):
+            if match.start() >= position:
+                break
+            heading = match.group("title").strip()
+            if heading.lower().startswith("version"):
+                continue
+            selected = heading
+        if not selected:
+            return default_key, default_key
+        if CHANGELOG_TITLE_RE.match(f"# {selected}"):
+            key = self._clean_category_key(selected.replace("Changelog for", "", 1))
+            return key or default_key, key or default_key
+        key = self._clean_category_key(selected)
+        return key or default_key, selected
+
+    def _clean_category_key(self, value: str) -> str:
+        text = str(value or "").strip()
+        text = re.sub(r"^Changelog\s+for\s+", "", text, flags=re.I).strip()
+        if "模拟" in text and "信令" in text:
+            return "Analog"
+        base = re.split(r"[（(]", text, 1)[0].strip()
+        cleaned = self._clean_model(base)
+        if cleaned:
+            return cleaned
+        return self._clean_model(text)
 
     def _attachments_by_name(self, attachments: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         result: Dict[str, Dict[str, Any]] = {}
@@ -408,7 +518,46 @@ class LegacyChangelogMigrator:
                 result.setdefault(filename.lower(), item)
         return result
 
-    def _save_release_tool_config(self, models: List[str]) -> None:
+    def _release_categories(self, releases: List[LegacyRelease]) -> List[Dict[str, str]]:
+        result: List[Dict[str, str]] = []
+        seen = set()
+        for release in releases:
+            key = release.model
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append({"key": key, "title": release.category_title or key})
+        return result
+
+    def _save_release_tool_config(self, categories: List[Dict[str, str]], *, single_list: bool) -> None:
+        if single_list:
+            self._save_single_list_config(categories[0])
+        else:
+            self._save_multi_list_config(categories)
+
+    def _save_single_list_config(self, category: Dict[str, str]) -> None:
+        lines = [
+            "# Release Tool Config",
+            "",
+            "本页面由旧 Changelog 迁移工具生成，用于配置当前项目的 Release Wiki 管理结构。",
+            "",
+            CONFIG_BEGIN,
+            "```yaml",
+            "mode: single_list",
+            "main_page: Release_Notes",
+            f"release_page_prefix: Release_{category['key']}_FW_",
+            "```",
+            CONFIG_END,
+            "",
+        ]
+        self.client.put_wiki_page(
+            self.project_id,
+            CONFIG_PAGE_TITLE,
+            "\n".join(lines),
+            "legacy changelog migration config",
+        )
+
+    def _save_multi_list_config(self, categories: List[Dict[str, str]]) -> None:
         lines = [
             "# Release Tool Config",
             "",
@@ -421,13 +570,15 @@ class LegacyChangelogMigrator:
             "release_page_prefix: Release_{category}_FW_",
             "categories:",
         ]
-        for model in models:
+        for category in categories:
+            key = category["key"]
+            title = category["title"]
             lines.extend(
                 [
-                    f"  - key: {model}",
-                    f"    title: {model}",
-                    f"    hub_page: Release_Notes_{model}",
-                    f"    list_page: Release_Notes_{model}_List",
+                    f"  - key: {key}",
+                    f"    title: {title}",
+                    f"    hub_page: Release_Notes_{key}",
+                    f"    list_page: Release_Notes_{key}_List",
                     "",
                 ]
             )
@@ -439,15 +590,109 @@ class LegacyChangelogMigrator:
             "legacy changelog migration config",
         )
 
-    def _version_description(self, release: LegacyRelease) -> str:
-        lines = [
-            f"model: {release.model}",
-            f"commit: {release.commit}",
-            f"source: {release.source_page}",
+    def _create_release_structure(self, categories: List[Dict[str, str]], *, single_list: bool) -> None:
+        if single_list:
+            self.client.put_wiki_page(
+                self.project_id,
+                "Release_Notes",
+                self._single_list_placeholder(categories[0]["title"]),
+                "legacy changelog migration structure",
+            )
+            return
+
+        main_lines = [
+            "# Release Notes",
+            "",
+            f"固件 bin 存放在 [项目文件](/projects/{self.project_id}/files)，Wiki 记录版本变更和索引。",
+            "",
+            "## Product Lines",
             "",
         ]
-        lines.extend(f"{idx}. {item}" for idx, item in enumerate(release.changelog_items, 1))
-        return "\n".join(lines).strip()
+        for category in categories:
+            main_lines.append(f"- [[Release_Notes_{category['key']}|{category['title']}]]")
+        self.client.put_wiki_page(
+            self.project_id,
+            "Release_Notes",
+            "\n".join(main_lines).rstrip() + "\n",
+            "legacy changelog migration structure",
+        )
+        for category in categories:
+            key = category["key"]
+            title = category["title"]
+            hub = f"Release_Notes_{key}"
+            list_page = f"Release_Notes_{key}_List"
+            self.client.put_wiki_page(
+                self.project_id,
+                hub,
+                (
+                    f"# {title}\n\n"
+                    "[[Release_Notes|返回 Release Notes]]\n\n"
+                    "## Version List\n\n"
+                    f"{{{{include({list_page})}}}}\n"
+                ),
+                "legacy changelog migration structure",
+                parent_title="Release_Notes",
+            )
+            self.client.put_wiki_page(
+                self.project_id,
+                list_page,
+                f"# {title} 版本列表\n\n",
+                "legacy changelog migration structure",
+                parent_title=hub,
+            )
+
+    def _single_list_placeholder(self, model: str) -> str:
+        return (
+            "# Release Notes\n\n"
+            f"{model} 固件版本发布记录。固件 bin 存放在 "
+            f"[项目文件](/projects/{self.project_id}/files)，Wiki 记录版本变更。\n\n"
+            "## 版本列表\n\n"
+            "迁移完成后由工具自动生成。\n"
+        )
+
+    def _update_wiki_home_if_needed(self, releases: List[LegacyRelease]) -> None:
+        source_titles = sorted({release.source_page for release in releases})
+        for title in source_titles:
+            if title.startswith("Release_") or title == CONFIG_PAGE_TITLE:
+                continue
+            page = self._get_page(title, include_attachments=True)
+            if not page or not self._page_has_versions(page.get("text", "") or ""):
+                continue
+            legacy_title = self._legacy_backup_title(title)
+            if not self._get_page(legacy_title):
+                self.client.put_wiki_page(
+                    self.project_id,
+                    legacy_title,
+                    page.get("text", "") or "",
+                    "legacy changelog backup",
+                )
+                self._log(f"已备份旧 Wiki 页面 {title} 到 {legacy_title}")
+            self.client.put_wiki_page(
+                self.project_id,
+                title,
+                (
+                    "{{include(Release_Notes)}}\n\n"
+                    "## Legacy Changelog\n\n"
+                    f"The original Changelog content is preserved at [[{legacy_title}]].\n"
+                ),
+                "legacy changelog migration home",
+            )
+            self._log(f"已将旧入口页面 {title} 切换为新的 Release_Notes 入口")
+
+    def _legacy_backup_title(self, title: str) -> str:
+        if title == "Wiki":
+            return "Legacy_Changelog"
+        suffix = self._clean_model(title)
+        return f"Legacy_Changelog_{suffix}" if suffix else "Legacy_Changelog"
+
+    def _version_description(self, release: LegacyRelease) -> str:
+        first_change = (release.changelog_items[0] if release.changelog_items else "legacy changelog migration").strip()
+        lines = [
+            f"source: {release.source_page}",
+            f"commit: {release.commit}",
+            f"summary: {first_change}",
+        ]
+        return "\n".join(line for line in lines if not line.endswith(": ")).strip()
 
     def _existing_file_keys(self, project_files: List[Dict[str, Any]]) -> set[Tuple[int, str]]:
         result: set[Tuple[int, str]] = set()

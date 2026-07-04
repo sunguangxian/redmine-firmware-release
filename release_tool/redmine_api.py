@@ -13,6 +13,16 @@ class RedmineError(Exception):
     pass
 
 
+VERSION_DESCRIPTION_LIMIT = 255
+
+
+def _limit_version_description(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) <= VERSION_DESCRIPTION_LIMIT:
+        return text
+    return text[: VERSION_DESCRIPTION_LIMIT - 3].rstrip() + "..."
+
+
 class RedmineClient:
     def __init__(
         self,
@@ -49,7 +59,7 @@ class RedmineClient:
             raise RedmineError(f"资源不存在：{path}")
         if resp.status_code >= 400:
             detail = resp.text[:500]
-            raise RedmineError(f"HTTP {resp.status_code}: {detail}")
+            raise RedmineError(f"Redmine {method} {path} 返回 HTTP {resp.status_code}: {detail}")
         if resp.status_code == 204 or not resp.content:
             return None
         return resp.json()
@@ -57,12 +67,13 @@ class RedmineClient:
     def test_login(self) -> dict[str, Any]:
         return self._request("GET", "/my/account.json")
 
-    def list_projects(self) -> list[dict[str, Any]]:
+    def list_projects(self, *, membership: bool = False) -> list[dict[str, Any]]:
         projects: list[dict[str, Any]] = []
         offset = 0
         limit = 100
+        membership_param = "&membership=true" if membership else ""
         while True:
-            data = self._request("GET", f"/projects.json?limit={limit}&offset={offset}")
+            data = self._request("GET", f"/projects.json?limit={limit}&offset={offset}{membership_param}")
             batch = data.get("projects", [])
             projects.extend(batch)
             total = data.get("total_count", len(projects))
@@ -134,13 +145,15 @@ class RedmineClient:
                 "name": name,
                 "status": "open",
                 "due_date": due_date,
-                "description": description,
+                "description": _limit_version_description(description),
             }
         }
         data = self._request("POST", f"/projects/{quote(project_id)}/versions.json", json=payload)
         return data["version"]
 
     def update_version(self, version_id: int, **fields: Any) -> None:
+        if "description" in fields:
+            fields["description"] = _limit_version_description(str(fields.get("description") or ""))
         self._request("PUT", f"/versions/{version_id}.json", json={"version": fields})
 
     def upload_file(self, filename: str, content: bytes) -> str:
@@ -188,4 +201,4 @@ class RedmineClient:
         return data.get("file", {}) if isinstance(data, dict) else {}
 
 
-RELEASE_PAGE_RE = re.compile(r"^Release_[A-Za-z0-9]+(?:_NP500)?_FW_", re.I)
+RELEASE_PAGE_RE = re.compile(r"^Release_[A-Za-z0-9_+-]+(?:_NP500)?_FW_", re.I)

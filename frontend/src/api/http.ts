@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { LegacyMigrationPreview, LegacyMigrationResult, MailSettings, MetaInfo, ReleaseDetail, ReleaseSummary, SessionInfo, WikiRefreshPreview, WikiRefreshResult } from '../types'
+import type { ContactTemplateConfig, LegacyMigrationJob, LegacyMigrationPreview, LegacyMigrationResult, MailSettings, MetaInfo, ProjectReleaseCategories, ReleaseDetail, ReleaseSummary, SessionInfo, WikiRefreshPreview, WikiRefreshResult } from '../types'
 
 const http = axios.create({
   baseURL: '',
@@ -45,6 +45,11 @@ export async function listReleases(projectId: string, productLine = ''): Promise
   return data
 }
 
+export async function getProjectReleaseCategories(projectId: string): Promise<ProjectReleaseCategories> {
+  const { data } = await http.get(`/api/projects/${encodeURIComponent(projectId)}/release-categories`)
+  return data
+}
+
 export async function getReleaseDetail(projectId: string, wikiTitle: string): Promise<ReleaseDetail> {
   const { data } = await http.get('/api/releases/detail', { params: { project_id: projectId, wiki_title: wikiTitle } })
   return data
@@ -72,7 +77,7 @@ export async function saveUserExternalMailSettings(payload: unknown): Promise<vo
   await http.put('/api/mail/user-external-settings', payload)
 }
 
-export async function getContacts(scope: string): Promise<{ contacts_to: string[]; contacts_cc: string[] }> {
+export async function getContacts(scope: string): Promise<{ contacts_to: string[]; contacts_cc: string[]; contact_templates: ContactTemplateConfig[] }> {
   const { data } = await http.get('/api/mail/contacts', { params: { scope } })
   return data
 }
@@ -119,5 +124,15 @@ export async function previewLegacyMigration(payload: { project_id: string; entr
 
 export async function executeLegacyMigration(payload: { project_id: string; entry_pages: string[] }): Promise<LegacyMigrationResult> {
   const { data } = await http.post('/api/legacy-migration/execute', payload)
+  return data
+}
+
+export async function startLegacyMigrationJob(payload: { project_id: string; entry_pages: string[] }): Promise<LegacyMigrationJob> {
+  const { data } = await http.post('/api/legacy-migration/execute-job', payload)
+  return data
+}
+
+export async function getLegacyMigrationJob(jobId: string): Promise<LegacyMigrationJob> {
+  const { data } = await http.get(`/api/legacy-migration/jobs/${encodeURIComponent(jobId)}`)
   return data
 }

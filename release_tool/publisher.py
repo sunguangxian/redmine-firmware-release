@@ -119,18 +119,7 @@ class ReleasePublisher:
         return f"{prefix}{form.wiki_suffix}"
 
     def _configured_version_name(self, form: ReleaseForm, index_sync: IndexSync, profile) -> str:
-        prefix = (getattr(profile, "release_page_prefix", "") or "").strip()
-        if profile.mode != "multi_list" or ("{category}" not in prefix and "{model}" not in prefix):
-            return form.version_name.strip()
-        category = index_sync._categorize(
-            form.page_title,
-            f"**Product Line:** {form.product_line}",
-            ver=form.version_name,
-            commit=form.commit,
-            categories=profile.categories,
-        )
-        category = category or form.product_line.strip()
-        return f"{category} {form.version_name.strip()}".strip()
+        return form.version_name.strip()
 
     def list_releases(self, project_id: str) -> list[dict]:
         pages = self.client.get_wiki_index(project_id)

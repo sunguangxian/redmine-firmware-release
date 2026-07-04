@@ -37,8 +37,20 @@ export interface SmtpServerConfig {
 }
 
 export interface ContactConfig {
+  contacts: string[]
   contacts_to: string[]
   contacts_cc: string[]
+}
+
+export interface ContactPersonConfig {
+  name: string
+  email: string
+}
+
+export interface ContactTemplateConfig {
+  name: string
+  contacts_to: ContactPersonConfig[]
+  contacts_cc: ContactPersonConfig[]
 }
 
 export interface MailSettings {
@@ -51,16 +63,20 @@ export interface MailSettings {
   user_internal: {
     smtp_user: string
     smtp_password: string
+    smtp_password_set: boolean
     smtp_from: string
     contacts_to: string[]
     contacts_cc: string[]
+    contact_templates: ContactTemplateConfig[]
   }
   user_external: {
     smtp_user: string
     smtp_password: string
+    smtp_password_set: boolean
     smtp_from: string
     contacts_to: string[]
     contacts_cc: string[]
+    contact_templates: ContactTemplateConfig[]
   }
 }
 
@@ -68,6 +84,11 @@ export interface MetaInfo {
   product_lines: string[]
   mail_scopes: Array<{ label: string; value: string }>
   today: string
+}
+
+export interface ProjectReleaseCategories {
+  mode: string
+  categories: Array<{ key: string; title: string }>
 }
 
 export interface WikiRefreshPreview {
@@ -141,4 +162,12 @@ export interface LegacyMigrationResult {
   updated_release_pages: number
   refreshed_release_count: number
   message: string
+}
+
+export interface LegacyMigrationJob {
+  job_id: string
+  status: 'running' | 'succeeded' | 'failed'
+  logs: string[]
+  result?: LegacyMigrationResult | null
+  error?: string
 }
