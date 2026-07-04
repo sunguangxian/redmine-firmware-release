@@ -77,6 +77,11 @@ export async function saveUserExternalMailSettings(payload: unknown): Promise<vo
   await http.put('/api/mail/user-external-settings', payload)
 }
 
+export async function testMailConnection(payload: { scope: string; smtp_user: string; smtp_password: string; smtp_from: string }): Promise<{ ok: boolean; message: string }> {
+  const { data } = await http.post('/api/mail/test-connection', payload)
+  return data
+}
+
 export async function getContacts(scope: string): Promise<{ contacts_to: string[]; contacts_cc: string[]; contact_templates: ContactTemplateConfig[] }> {
   const { data } = await http.get('/api/mail/contacts', { params: { scope } })
   return data
