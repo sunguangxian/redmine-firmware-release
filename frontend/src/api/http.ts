@@ -15,6 +15,12 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+export function errorLogs(error: unknown): string[] {
+  if (!axios.isAxiosError(error)) return []
+  const logs = error.response?.data?.logs
+  return Array.isArray(logs) ? logs.filter((item) => typeof item === 'string') : []
+}
+
 export async function getMeta(): Promise<MetaInfo> {
   const { data } = await http.get('/api/meta')
   return data
@@ -44,7 +50,7 @@ export async function getReleaseDetail(projectId: string, wikiTitle: string): Pr
   return data
 }
 
-export async function publishRelease(form: FormData): Promise<{ ok: boolean; title: string; notice_message: string; releases: ReleaseSummary[] }> {
+export async function publishRelease(form: FormData): Promise<{ ok: boolean; title: string; notice_message: string; releases: ReleaseSummary[]; logs: string[] }> {
   const { data } = await http.post('/api/releases/publish', form, { headers: { 'Content-Type': 'multipart/form-data' } })
   return data
 }
@@ -56,6 +62,10 @@ export async function getMailSettings(): Promise<MailSettings> {
 
 export async function saveAdminMailSettings(payload: unknown): Promise<void> {
   await http.put('/api/mail/admin-settings', payload)
+}
+
+export async function saveUserInternalMailSettings(payload: unknown): Promise<void> {
+  await http.put('/api/mail/user-internal-settings', payload)
 }
 
 export async function saveUserExternalMailSettings(payload: unknown): Promise<void> {

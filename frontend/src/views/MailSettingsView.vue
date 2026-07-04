@@ -2,7 +2,7 @@
   <div>
     <el-alert class="card" type="info" :closable="false" show-icon>
       <template #title>
-        邮件服务器和内网联系人只允许 Redmine 管理员修改；普通用户只维护自己的外网账号和外网联系人。
+        邮件服务器和内网联系人只允许 Redmine 管理员修改；每个用户维护自己的内网 SMTP 账号，外网账号和外网联系人。
       </template>
     </el-alert>
 
@@ -15,7 +15,7 @@
         </el-input>
         <el-input-number v-model="settings.admin.internal_server.smtp_port" :min="1" :max="65535" style="width: 100%" />
         <el-input v-model="settings.admin.internal_server.smtp_from" class="full-row" placeholder="firmware@company.local">
-          <template #prepend>发件人</template>
+          <template #prepend>默认发件人</template>
         </el-input>
         <el-checkbox v-model="settings.admin.internal_server.use_tls" class="full-row">内网使用 STARTTLS；465 端口自动 SSL</el-checkbox>
 
@@ -32,6 +32,26 @@
       </div>
       <div class="toolbar" style="margin-top: 16px">
         <el-button type="primary" :loading="savingAdmin" @click="saveAdmin">保存管理员邮件配置</el-button>
+      </div>
+    </el-card>
+
+    <el-card class="card">
+      <template #header>个人内网邮件账号</template>
+      <div v-if="settings" class="form-grid">
+        <el-input v-model="settings.user_internal.smtp_user" placeholder="内网 SMTP 用户名">
+          <template #prepend>SMTP 用户名</template>
+        </el-input>
+        <el-input v-model="settings.user_internal.smtp_password" type="password" show-password placeholder="不填写则保留旧密码">
+          <template #prepend>SMTP 密码</template>
+        </el-input>
+        <el-input v-model="settings.user_internal.smtp_from" class="full-row" placeholder="user@company.local">
+          <template #prepend>内网发件人</template>
+        </el-input>
+        <el-input v-model="userInternalToText" type="textarea" :rows="4" placeholder="个人内网收件人模板，每行或逗号分隔一个邮箱" />
+        <el-input v-model="userInternalCcText" type="textarea" :rows="4" placeholder="个人内网抄送模板，每行或逗号分隔一个邮箱" />
+      </div>
+      <div class="toolbar" style="margin-top: 16px">
+        <el-button type="primary" :loading="savingInternal" @click="saveInternal">保存个人内网账号和联系人</el-button>
       </div>
     </el-card>
 
@@ -61,7 +81,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings } from '../api/http'
+import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings } from '../api/http'
 import type { MailSettings, SessionInfo } from '../types'
 
 function splitText(text: string): string[] {
@@ -73,9 +93,12 @@ const emit = defineEmits<{ changed: [] }>()
 const settings = ref<MailSettings | null>(null)
 const loading = ref(false)
 const savingAdmin = ref(false)
+const savingInternal = ref(false)
 const savingUser = ref(false)
 const internalToText = ref('')
 const internalCcText = ref('')
+const userInternalToText = ref('')
+const userInternalCcText = ref('')
 const externalToText = ref('')
 const externalCcText = ref('')
 
@@ -85,6 +108,8 @@ async function load() {
     settings.value = await getMailSettings()
     internalToText.value = settings.value.admin.internal_contacts.contacts_to.join('\n')
     internalCcText.value = settings.value.admin.internal_contacts.contacts_cc.join('\n')
+    userInternalToText.value = settings.value.user_internal.contacts_to.join('\n')
+    userInternalCcText.value = settings.value.user_internal.contacts_cc.join('\n')
     externalToText.value = settings.value.user_external.contacts_to.join('\n')
     externalCcText.value = settings.value.user_external.contacts_cc.join('\n')
   } catch (error) {
@@ -113,6 +138,27 @@ async function saveAdmin() {
     ElMessage.error(errorMessage(error))
   } finally {
     savingAdmin.value = false
+  }
+}
+
+async function saveInternal() {
+  if (!settings.value) return
+  savingInternal.value = true
+  try {
+    await saveUserInternalMailSettings({
+      smtp_user: settings.value.user_internal.smtp_user,
+      smtp_password: settings.value.user_internal.smtp_password,
+      smtp_from: settings.value.user_internal.smtp_from,
+      contacts_to: splitText(userInternalToText.value),
+      contacts_cc: splitText(userInternalCcText.value)
+    })
+    ElMessage.success('个人内网邮件账号和联系人已保存')
+    emit('changed')
+    await load()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    savingInternal.value = false
   }
 }
 

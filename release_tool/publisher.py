@@ -5,7 +5,7 @@ from __future__ import annotations
 from urllib.parse import quote, urlparse
 
 from .index_sync import IndexSync
-from .redmine_api import RedmineClient
+from .redmine_api import RedmineClient, RedmineError
 from .release_page import (
     ReleaseForm,
     build_release_markdown,
@@ -19,29 +19,40 @@ class ReleasePublisher:
     def __init__(self, client: RedmineClient):
         self.client = client
 
-    def publish(self, form: ReleaseForm) -> str:
-        # 发布前先确认项目已经配置 Release_Tool_Config。
-        # 没有配置页时直接抛错，避免创建版本/上传附件后才发现无法同步索引。
-        index_sync = IndexSync(self.client, form.project_id)
-        index_sync.discover_profile()
+    def publish(self, form: ReleaseForm, logs: list[str] | None = None) -> str:
+        self._log(logs, f"开始处理版本：{form.version_name}")
 
-        version = self._get_or_create_version(form)
+        index_sync = IndexSync(self.client, form.project_id)
+        self._log(logs, "读取项目 Release_Tool_Config 配置")
+        profile = index_sync.discover_profile()
+        self._log(logs, f"项目发布结构：{profile.mode}")
+        self._validate_category(form, index_sync, profile, logs)
+
+        version = self._get_or_create_version(form, logs)
         title = form.page_title
         existing = self.client.get_wiki_page(form.project_id, title)
         existing_text = (existing or {}).get("text", "")
+        self._log(logs, f"Wiki 页面：{'编辑已有页面' if existing else '创建新页面'} {title}")
 
         old_files = parse_release_files(existing_text) if existing_text else []
-        new_files = self._upload_files(form, version["id"])
+        self._log(
+            logs,
+            f"附件策略：{'替换旧附件列表' if form.replace_attachments else '保留旧附件并追加'}；"
+            f"已有 {len(old_files)} 个，本次选择 {len(form.files)} 个",
+        )
+        new_files = self._upload_files(form, version["id"], logs)
         linked_files = merge_release_files(
             old_files,
             new_files,
             replace=form.replace_attachments,
         )
+        self._log(logs, f"附件列表合并完成：最终 {len(linked_files)} 个")
 
         markdown = build_release_markdown(form, version["id"], linked_files)
 
         comment = "release tool update" if existing else "release tool create"
         self.client.put_wiki_page(form.project_id, title, markdown, comment)
+        self._log(logs, "Wiki 页面写入完成")
 
         self.client.update_version(
             version["id"],
@@ -49,9 +60,37 @@ class ReleasePublisher:
             due_date=form.release_date,
             description=self._version_description(form),
         )
+        self._log(logs, "Redmine 版本信息更新完成")
 
         index_sync.sync_after_publish(title, markdown)
+        self._log(logs, "版本索引同步完成")
         return title
+
+    def _validate_category(self, form: ReleaseForm, index_sync: IndexSync, profile, logs: list[str] | None = None) -> None:
+        if profile.mode != "multi_list":
+            self._log(logs, "项目不是 multi_list，版本分类允许为空")
+            return
+
+        if not form.product_line.strip():
+            self._log(logs, "multi_list 分类校验失败：版本分类为空")
+            raise RedmineError("当前项目配置为 multi_list，发布或编辑版本时必须填写版本分类。")
+
+        category = index_sync._categorize(
+            form.page_title,
+            f"**Product Line:** {form.product_line}",
+            ver=form.version_name,
+            commit=form.commit,
+            categories=profile.categories,
+        )
+        if category:
+            self._log(logs, f"multi_list 分类校验通过：{form.product_line}")
+            return
+
+        category_names = "、".join(category.title or category.key for category in profile.categories)
+        self._log(logs, f"multi_list 分类校验失败：{form.product_line} 不在配置中")
+        raise RedmineError(
+            f"版本分类“{form.product_line}”未匹配当前项目 Release_Tool_Config 中的分类：{category_names}"
+        )
 
     def list_releases(self, project_id: str) -> list[dict]:
         pages = self.client.get_wiki_index(project_id)
@@ -76,18 +115,21 @@ class ReleasePublisher:
         releases.sort(key=lambda x: x["date"], reverse=True)
         return releases
 
-    def _get_or_create_version(self, form: ReleaseForm) -> dict:
+    def _get_or_create_version(self, form: ReleaseForm, logs: list[str] | None = None) -> dict:
         name = form.version_name.strip()
         for version in self.client.list_versions(form.project_id):
             if version.get("name", "").strip() == name:
+                self._log(logs, f"复用已有 Redmine 版本：{name}")
                 return version
 
-        return self.client.create_version(
+        version = self.client.create_version(
             form.project_id,
             name,
             form.release_date,
             self._version_description(form),
         )
+        self._log(logs, f"创建 Redmine 版本完成：{name}")
+        return version
 
     def _version_description(self, form: ReleaseForm) -> str:
         lines = [
@@ -98,14 +140,18 @@ class ReleasePublisher:
         lines.extend(f"{idx}. {item}" for idx, item in enumerate(form.changelog_items, 1))
         return "\n".join(lines).strip()
 
-    def _upload_files(self, form: ReleaseForm, version_id: int) -> list[dict]:
+    def _upload_files(self, form: ReleaseForm, version_id: int, logs: list[str] | None = None) -> list[dict]:
         linked: list[dict] = []
         existing_by_name = self._project_files_by_name(form.project_id, version_id)
+        if not form.files:
+            self._log(logs, "本次未选择新附件，跳过附件上传")
         for filename, description, content in form.files:
             if not content:
+                self._log(logs, f"跳过空附件：{filename}")
                 continue
             existing = existing_by_name.get(filename)
             if existing:
+                self._log(logs, f"附件已存在，复用项目文件：{filename}")
                 linked.append(
                     {
                         "filename": filename,
@@ -123,6 +169,7 @@ class ReleasePublisher:
                 file_obj = self._project_files_by_name(form.project_id, version_id).get(filename, {})
             url = self._project_file_url(file_obj, filename)
             linked.append({"filename": filename, "description": description, "url": url})
+            self._log(logs, f"附件上传完成：{filename}")
         return linked
 
     def _project_files_by_name(self, project_id: str, version_id: int) -> dict[str, dict]:
@@ -143,3 +190,7 @@ class ReleasePublisher:
         if file_obj.get("id"):
             return f"/attachments/download/{file_obj['id']}/{quote(filename)}"
         return None
+
+    def _log(self, logs: list[str] | None, message: str) -> None:
+        if logs is not None:
+            logs.append(message)

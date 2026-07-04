@@ -5,7 +5,8 @@
         <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 320px" @change="loadReleases">
           <el-option v-for="project in projects" :key="project.identifier" :label="`${project.name} (${project.identifier})`" :value="project.identifier" />
         </el-select>
-        <el-select v-model="form.product_line" placeholder="产品线" style="width: 220px" @change="loadReleases">
+        <el-select v-model="filterProductLine" clearable placeholder="全部分类" style="width: 220px" @change="loadReleases">
+          <el-option label="全部分类" value="" />
           <el-option v-for="item in meta.product_lines" :key="item" :label="item" :value="item" />
         </el-select>
         <el-button :loading="loadingReleases" @click="loadReleases">刷新列表</el-button>
@@ -14,7 +15,7 @@
       <el-table class="release-table" :data="releases" border height="260">
         <el-table-column prop="version" label="版本" width="160" />
         <el-table-column prop="date" label="日期" width="130" />
-        <el-table-column prop="product_line" label="产品线" width="160" />
+        <el-table-column prop="product_line" label="分类" width="160" />
         <el-table-column prop="title" label="Wiki 页" min-width="240" />
         <el-table-column prop="summary" label="摘要" min-width="240" />
       </el-table>
@@ -26,6 +27,9 @@
         <el-input v-model="form.version_name" placeholder="V5.3.8.3"><template #prepend>版本号</template></el-input>
         <el-input v-model="form.release_date" placeholder="YYYY-MM-DD"><template #prepend>发布日期</template></el-input>
         <el-input v-model="form.commit" class="full-row" placeholder="git commit hash"><template #prepend>Commit</template></el-input>
+        <el-select v-model="form.product_line" class="full-row" clearable filterable allow-create placeholder="版本分类（可选）">
+          <el-option v-for="item in meta.product_lines" :key="item" :label="item" :value="item" />
+        </el-select>
         <el-input v-model="form.changelog" class="full-row" type="textarea" :rows="6" placeholder="每行一条变更说明" />
         <el-upload class="full-row" drag multiple :auto-upload="false" :on-change="onFileChange" :on-remove="onFileRemove">
           <el-icon><UploadFilled /></el-icon>
@@ -46,6 +50,8 @@
         <el-select v-model="mailCc" multiple filterable placeholder="选择抄送">
           <el-option v-for="item in contactsCc" :key="item" :label="item" :value="item" />
         </el-select>
+        <el-input v-model="manualMailTo" class="full-row" type="textarea" :rows="2" placeholder="手动输入收件人，可用逗号、分号、空格或换行分隔" />
+        <el-input v-model="manualMailCc" class="full-row" type="textarea" :rows="2" placeholder="手动输入抄送，可用逗号、分号、空格或换行分隔" />
       </div>
 
       <div class="toolbar" style="margin-top: 16px">
@@ -54,6 +60,9 @@
       <el-alert v-if="status" class="card status-text" type="success" :closable="false" show-icon>
         <template #title>{{ status }}</template>
       </el-alert>
+      <div v-if="logs.length" class="release-log">
+        <div v-for="(item, index) in logs" :key="index">{{ index + 1 }}. {{ item }}</div>
+      </div>
     </el-card>
   </div>
 </template>
@@ -62,35 +71,38 @@
 import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, type UploadFile, type UploadFiles } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { errorMessage, getContacts, listReleases, publishRelease } from '../api/http'
+import { errorLogs, errorMessage, getContacts, listReleases, publishRelease } from '../api/http'
 import type { MetaInfo, Project, ReleaseSummary } from '../types'
 
 const props = defineProps<{ projects: Project[]; meta: MetaInfo; mailVersion: number }>()
 const projectId = ref(props.projects[0]?.identifier || '')
+const filterProductLine = ref('')
 const releases = ref<ReleaseSummary[]>([])
 const loadingReleases = ref(false)
 const publishing = ref(false)
 const status = ref('')
+const logs = ref<string[]>([])
 const noticeEnabled = ref(false)
 const mailScope = ref('internal')
 const contactsTo = ref<string[]>([])
 const contactsCc = ref<string[]>([])
 const mailTo = ref<string[]>([])
 const mailCc = ref<string[]>([])
+const manualMailTo = ref('')
+const manualMailCc = ref('')
 const selectedFiles = ref<File[]>([])
 
 const form = reactive({
   version_name: '',
   release_date: props.meta.today || new Date().toISOString().slice(0, 10),
   commit: '',
-  product_line: props.meta.product_lines[0] || '常规版本 (5X)',
+  product_line: '',
   changelog: ''
 })
 
 watch(
   () => props.meta,
   (value) => {
-    if (!form.product_line && value.product_lines.length) form.product_line = value.product_lines[0]
     if (!form.release_date && value.today) form.release_date = value.today
   },
   { immediate: true }
@@ -118,7 +130,7 @@ async function loadReleases() {
   if (!projectId.value) return
   loadingReleases.value = true
   try {
-    releases.value = await listReleases(projectId.value, form.product_line)
+    releases.value = await listReleases(projectId.value, filterProductLine.value)
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
@@ -142,6 +154,7 @@ async function publish() {
   if (!projectId.value) return ElMessage.warning('请选择项目')
   publishing.value = true
   status.value = ''
+  logs.value = ['已提交发布请求，等待后端执行']
   try {
     const data = new FormData()
     data.append('project_id', projectId.value)
@@ -154,14 +167,18 @@ async function publish() {
     data.append('edit_title', '')
     data.append('notice_enabled', String(noticeEnabled.value))
     data.append('mail_scope', mailScope.value)
-    data.append('mail_to', mailTo.value.join(','))
-    data.append('mail_cc', mailCc.value.join(','))
+    data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(','))
+    data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(','))
     selectedFiles.value.forEach((file) => data.append('files', file))
     const result = await publishRelease(data)
     releases.value = result.releases
+    logs.value = result.logs || []
     status.value = `发布成功：${result.title}${result.notice_message ? '\n' + result.notice_message : ''}`
     ElMessage.success('发布成功')
   } catch (error) {
+    const message = errorMessage(error)
+    const backendLogs = errorLogs(error)
+    logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
     ElMessage.error(errorMessage(error))
   } finally {
     publishing.value = false

@@ -61,7 +61,7 @@ class IndexSync:
         items = self._build_items(profile)
 
         if profile.mode == "multi_list":
-            category = self._categorize(page_title, page_text)
+            category = self._categorize(page_title, page_text, categories=profile.categories)
             self._sync_categories(profile, [category], items, update_main=True)
             cat_profile = self._category_by_key(profile, category)
             if cat_profile:
@@ -149,7 +149,7 @@ class IndexSync:
             date = self._extract_date(text, title)
             commit = self._extract_commit(text)
             summary = self._extract_summary(text, ver)
-            cat = self._categorize(title, text, ver, commit)
+            cat = self._categorize(title, text, ver, commit, profile.categories)
             items.append(
                 {
                     "cat": cat,
@@ -400,10 +400,59 @@ class IndexSync:
         text: str,
         ver: str | None = None,
         commit: str | None = None,
+        categories: list[CategoryProfile] | None = None,
     ) -> str:
         ver = ver or self._extract_version(text, proj_tag_from_project(self.project_id, page_title), page_title)
         commit = commit or self._extract_commit(text)
         product_line = self._extract_product_line(text)
+        categories = categories or []
+        configured = self._match_configured_category(product_line, page_title, categories)
+        if configured:
+            return configured
+        if categories and product_line.strip():
+            return ""
+
+        legacy = self._legacy_category(page_title, text, ver, commit, product_line)
+        if not categories:
+            return legacy
+        if any(category.key == legacy for category in categories):
+            return legacy
+        if len(categories) == 1:
+            return categories[0].key
+        return ""
+
+    def _match_configured_category(
+        self,
+        product_line: str,
+        page_title: str,
+        categories: list[CategoryProfile],
+    ) -> str:
+        product_key = self._category_match_key(product_line)
+        title_key = self._category_match_key(page_title)
+        for category in categories:
+            for candidate in (category.key, category.title):
+                key = self._category_match_key(candidate)
+                if not key:
+                    continue
+                if product_key == key:
+                    return category.key
+            for candidate in (category.hub, category.list_page):
+                key = self._category_match_key(candidate)
+                if key and key in title_key:
+                    return category.key
+        return ""
+
+    def _category_match_key(self, value: str) -> str:
+        return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", (value or "").lower())
+
+    def _legacy_category(
+        self,
+        page_title: str,
+        text: str,
+        ver: str,
+        commit: str,
+        product_line: str,
+    ) -> str:
         if "NP500" in product_line or "_NP500_FW_" in page_title:
             return "NP500"
         if "Trunking" in product_line or "集群" in product_line:
@@ -419,8 +468,14 @@ class IndexSync:
         return "Regular"
 
     def _extract_product_line(self, text: str) -> str:
-        match = re.search(r"\*\*产品线:\*\*\s*([^\r\n]+)", text)
-        return match.group(1).strip() if match else ""
+        for pattern in (
+            r"\*\*(?:产品线|Product Line|Product line):\*\*\s*([^\r\n]+)",
+            r"\*\*(?:分类|Category):\*\*\s*([^\r\n]+)",
+        ):
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1).strip()
+        return ""
 
     def _extract_version(self, text: str, tag: str, title: str = "") -> str:
         m = re.search(rf"# Release {re.escape(tag)} (?:NP500 )?FW ([^\r\n]+)", text, re.I)

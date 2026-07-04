@@ -31,6 +31,8 @@ class ReleaseForm:
         for label, meta in PRODUCT_LINES.items():
             if label == self.product_line:
                 return meta
+        if self.product_line == "NP500":
+            return PRODUCT_LINES["NP500"]
         return PRODUCT_LINES["常规版本 (5X)"]
 
     @property
@@ -69,6 +71,7 @@ def build_release_markdown(
     changes = "\n".join(f"1. {item}" for item in form.changelog_items) or "（见历史 changelog）"
     ver_link = f"/versions/{version_id}" if version_id else f"/projects/{form.project_id}/roadmap"
     files_link = f"/projects/{form.project_id}/files"
+    product_line_block = f"**产品线:** {form.product_line}\n\n" if form.product_line.strip() else ""
 
     rows = []
     for item in linked_files:
@@ -84,7 +87,7 @@ def build_release_markdown(
 
     return (
         f"# Release {form.proj_tag} {title_suffix}\n\n"
-        f"**产品线:** {form.product_line}\n\n"
+        f"{product_line_block}"
         f"**日期:** {form.release_date}\n"
         f"**Commit:** {form.commit}\n\n"
         f"--------------\n\n"
@@ -180,14 +183,17 @@ def parse_release_page(title: str, text: str) -> dict:
     commit_match = re.search(r"\*\*Commit:\*\*\s*([^\r\n]+)", text)
     commit = commit_match.group(1).strip() if commit_match else ""
 
-    if "_NP500_FW_" in title:
+    product_match = re.search(r"\*\*产品线:\*\*\s*([^\r\n]+)", text)
+    if product_match:
+        product_line = product_match.group(1).strip()
+    elif "_NP500_FW_" in title:
         product_line = "NP500"
     elif re.search(r"^V5\.4\.7\.", version_name, re.I):
         product_line = "Trunking 集群"
     elif re.search(r"Record|录音", commit) or re.search(r"录音", text):
         product_line = "Record 录音"
     else:
-        product_line = "常规版本 (5X)"
+        product_line = ""
 
     changelog = []
     section = re.search(r"## 变更说明\s*\n+(.*?)(?:\n## |\Z)", text, re.S)

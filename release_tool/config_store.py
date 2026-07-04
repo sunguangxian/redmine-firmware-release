@@ -36,7 +36,7 @@ def db_path() -> Path:
 
 @contextmanager
 def db() -> Iterable[sqlite3.Connection]:
-    conn = sqlite3.connect(db_path())
+    conn = sqlite3.connect(db_path(), timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         _init_db(conn)
@@ -48,6 +48,7 @@ def db() -> Iterable[sqlite3.Connection]:
 
 def _init_db(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(
         """
@@ -66,6 +67,14 @@ def _init_db(conn: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS user_external_email (
+            user_key TEXT PRIMARY KEY,
+            smtp_user TEXT NOT NULL DEFAULT '',
+            smtp_password TEXT NOT NULL DEFAULT '',
+            smtp_from TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_internal_email (
             user_key TEXT PRIMARY KEY,
             smtp_user TEXT NOT NULL DEFAULT '',
             smtp_password TEXT NOT NULL DEFAULT '',
@@ -311,6 +320,88 @@ def store_internal_contact_settings(*, contacts_to: list[str], contacts_cc: list
             conn,
             owner_type=GLOBAL_OWNER,
             user_key="",
+            scope=MAIL_SCOPE_INTERNAL,
+            contact_type=CONTACT_CC,
+            emails=contacts_cc,
+        )
+
+
+def get_user_internal_email_settings(user_key: str) -> dict[str, Any]:
+    if not user_key:
+        return {
+            "smtp_user": "",
+            "smtp_password": "",
+            "smtp_from": "",
+            "contacts_to": [],
+            "contacts_cc": [],
+        }
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT smtp_user, smtp_password, smtp_from
+            FROM user_internal_email
+            WHERE user_key = ?
+            """,
+            (user_key,),
+        ).fetchone()
+    if row is None:
+        smtp_user = ""
+        smtp_password = ""
+        smtp_from = ""
+    else:
+        smtp_user = row["smtp_user"] or ""
+        smtp_password = row["smtp_password"] or ""
+        smtp_from = row["smtp_from"] or ""
+    return {
+        "smtp_user": smtp_user,
+        "smtp_password": smtp_password,
+        "smtp_from": smtp_from,
+        "contacts_to": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_TO),
+        "contacts_cc": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_CC),
+    }
+
+
+def store_user_internal_email_settings(
+    user_key: str,
+    *,
+    smtp_user: str,
+    smtp_password: str,
+    smtp_from: str,
+    contacts_to: list[str],
+    contacts_cc: list[str],
+) -> None:
+    if not user_key:
+        return
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_internal_email(user_key, smtp_user, smtp_password, smtp_from, updated_at)
+            VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_key) DO UPDATE SET
+                smtp_user = excluded.smtp_user,
+                smtp_password = excluded.smtp_password,
+                smtp_from = excluded.smtp_from,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                user_key,
+                (smtp_user or "").strip(),
+                smtp_password or "",
+                (smtp_from or "").strip(),
+            ),
+        )
+        _replace_contacts(
+            conn,
+            owner_type=USER_OWNER,
+            user_key=user_key,
+            scope=MAIL_SCOPE_INTERNAL,
+            contact_type=CONTACT_TO,
+            emails=contacts_to,
+        )
+        _replace_contacts(
+            conn,
+            owner_type=USER_OWNER,
+            user_key=user_key,
             scope=MAIL_SCOPE_INTERNAL,
             contact_type=CONTACT_CC,
             emails=contacts_cc,

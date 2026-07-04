@@ -6,7 +6,7 @@ import os
 import uuid
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,10 +21,12 @@ from .config_store import (
     get_email_server_settings,
     get_internal_contact_settings,
     get_user_external_email_settings,
+    get_user_internal_email_settings,
     store_email_server_settings,
     store_internal_contact_settings,
     store_login,
     store_user_external_email_settings,
+    store_user_internal_email_settings,
 )
 from .email_sender import (
     EmailSendError,
@@ -43,7 +45,7 @@ from .wiki_templates import TEMPLATE_CHOICES, build_config_template, validate_co
 
 SESSION_COOKIE = "release_tool_session"
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
-SESSIONS: dict[str, dict[str, Any]] = {}
+SESSIONS: Dict[str, Dict[str, Any]] = {}
 RECENT_RELEASE_LIMIT = 50
 
 app = FastAPI(title="Redmine Firmware Release API")
@@ -68,7 +70,7 @@ class LoginResponse(BaseModel):
     connected: bool
     user_login: str
     is_admin: bool
-    projects: list[dict[str, Any]]
+    projects: List[Dict[str, Any]]
 
 
 class SmtpServerConfig(BaseModel):
@@ -79,8 +81,8 @@ class SmtpServerConfig(BaseModel):
 
 
 class ContactConfig(BaseModel):
-    contacts_to: list[str] = Field(default_factory=list)
-    contacts_cc: list[str] = Field(default_factory=list)
+    contacts_to: List[str] = Field(default_factory=list)
+    contacts_cc: List[str] = Field(default_factory=list)
 
 
 class AdminMailSettingsRequest(BaseModel):
@@ -93,8 +95,16 @@ class UserExternalMailRequest(BaseModel):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
-    contacts_to: list[str] = Field(default_factory=list)
-    contacts_cc: list[str] = Field(default_factory=list)
+    contacts_to: List[str] = Field(default_factory=list)
+    contacts_cc: List[str] = Field(default_factory=list)
+
+
+class UserInternalMailRequest(BaseModel):
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    contacts_to: List[str] = Field(default_factory=list)
+    contacts_cc: List[str] = Field(default_factory=list)
 
 
 class WikiConfigSaveRequest(BaseModel):
@@ -118,7 +128,7 @@ def _json_error(message: str, status_code: int = 400) -> HTTPException:
     return HTTPException(status_code=status_code, detail=message)
 
 
-def _normalize_mail_scope(scope: str | None) -> str:
+def _normalize_mail_scope(scope: Optional[str]) -> str:
     value = (scope or MAIL_SCOPE_INTERNAL).strip().lower()
     if value not in MAIL_SCOPES:
         raise _json_error("邮件类型只能是 internal 或 external")
@@ -129,7 +139,7 @@ def _mail_scope_label(scope: str) -> str:
     return "外网" if scope == MAIL_SCOPE_EXTERNAL else "内网"
 
 
-def _current_session(request: Request) -> dict[str, Any]:
+def _current_session(request: Request) -> Dict[str, Any]:
     sid = request.cookies.get(SESSION_COOKIE, "")
     session = SESSIONS.get(sid)
     if not session or not session.get("connected"):
@@ -137,7 +147,7 @@ def _current_session(request: Request) -> dict[str, Any]:
     return session
 
 
-def _current_client(session: dict[str, Any] = Depends(_current_session)) -> RedmineClient:
+def _current_client(session: Dict[str, Any] = Depends(_current_session)) -> RedmineClient:
     return RedmineClient(
         session.get("base_url", ""),
         session.get("username", ""),
@@ -147,12 +157,12 @@ def _current_client(session: dict[str, Any] = Depends(_current_session)) -> Redm
     )
 
 
-def _require_admin(session: dict[str, Any]) -> None:
+def _require_admin(session: Dict[str, Any]) -> None:
     if not session.get("is_admin"):
         raise _json_error("只有 Redmine 管理员可以修改该配置", 403)
 
 
-def _public_session(session: dict[str, Any]) -> LoginResponse:
+def _public_session(session: Dict[str, Any]) -> LoginResponse:
     return LoginResponse(
         connected=True,
         user_login=session.get("user_login", ""),
@@ -161,16 +171,21 @@ def _public_session(session: dict[str, Any]) -> LoginResponse:
     )
 
 
-def _list_release_rows(client: RedmineClient, project_id: str, product_line: str = "") -> list[dict[str, Any]]:
+def _list_release_rows(client: RedmineClient, project_id: str, product_line: str = "") -> List[Dict[str, Any]]:
     releases = ReleasePublisher(client).list_releases(project_id)
     if product_line:
         releases = [item for item in releases if item.get("product_line") == product_line]
     return releases[:RECENT_RELEASE_LIMIT]
 
 
-def _contacts_for_scope(session: dict[str, Any], scope: str) -> dict[str, list[str]]:
+def _contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, List[str]]:
     if scope == MAIL_SCOPE_INTERNAL:
-        contacts = get_internal_contact_settings()
+        global_contacts = get_internal_contact_settings()
+        user_contacts = get_user_internal_email_settings(session.get("user_key", ""))
+        return {
+            "contacts_to": _merge_contact_lists(global_contacts.get("contacts_to", []), user_contacts.get("contacts_to", [])),
+            "contacts_cc": _merge_contact_lists(global_contacts.get("contacts_cc", []), user_contacts.get("contacts_cc", [])),
+        }
     else:
         contacts = get_user_external_email_settings(session.get("user_key", ""))
     return {
@@ -179,29 +194,41 @@ def _contacts_for_scope(session: dict[str, Any], scope: str) -> dict[str, list[s
     }
 
 
-def _validate_selected_contacts(scope: str, selected_to: list[str], selected_cc: list[str], allowed_to: list[str], allowed_cc: list[str]) -> None:
-    selected = {item.lower() for item in split_emails(selected_to, selected_cc)}
-    allowed = {item.lower() for item in split_emails(allowed_to, allowed_cc)}
-    invalid = sorted(selected - allowed)
-    if invalid:
-        raise EmailSendError(f"{_mail_scope_label(scope)}邮件包含不允许的联系人：{', '.join(invalid)}")
+def _merge_contact_lists(*groups: List[str]) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    for group in groups:
+        for item in group:
+            email = (item or "").strip()
+            key = email.lower()
+            if not email or key in seen:
+                continue
+            seen.add(key)
+            result.append(email)
+    return result
 
 
-def _build_email_settings(session: dict[str, Any], scope: str) -> tuple[EmailSettings, list[str], list[str]]:
+def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSettings, List[str], List[str]]:
     if scope == MAIL_SCOPE_INTERNAL:
         server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
-        contacts = get_internal_contact_settings()
+        user_cfg = get_user_internal_email_settings(session.get("user_key", ""))
+        if not user_cfg["smtp_user"] or not user_cfg["smtp_password"]:
+            raise EmailSendError("内网邮件请先配置个人 SMTP 用户名和密码")
+        if not user_cfg["smtp_from"] and not server["smtp_from"]:
+            raise EmailSendError("内网邮件请先配置个人发件人或管理员默认发件人")
+        global_contacts = get_internal_contact_settings()
         return (
             EmailSettings(
                 smtp_host=server["smtp_host"],
                 smtp_port=server["smtp_port"],
-                smtp_user="",
-                smtp_password="",
-                smtp_from=server["smtp_from"],
+                smtp_user=user_cfg["smtp_user"],
+                smtp_password=user_cfg["smtp_password"],
+                smtp_from=user_cfg["smtp_from"] or server["smtp_from"],
                 use_tls=server["use_tls"],
+                template_scope=MAIL_SCOPE_INTERNAL,
             ),
-            contacts["contacts_to"],
-            contacts["contacts_cc"],
+            _merge_contact_lists(global_contacts["contacts_to"], user_cfg["contacts_to"]),
+            _merge_contact_lists(global_contacts["contacts_cc"], user_cfg["contacts_cc"]),
         )
 
     server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
@@ -216,6 +243,7 @@ def _build_email_settings(session: dict[str, Any], scope: str) -> tuple[EmailSet
             smtp_password=user_cfg["smtp_password"],
             smtp_from=user_cfg["smtp_from"],
             use_tls=server["use_tls"],
+            template_scope=MAIL_SCOPE_EXTERNAL,
         ),
         user_cfg["contacts_to"],
         user_cfg["contacts_cc"],
@@ -224,7 +252,7 @@ def _build_email_settings(session: dict[str, Any], scope: str) -> tuple[EmailSet
 
 def _send_release_notice(
     *,
-    session: dict[str, Any],
+    session: Dict[str, Any],
     client: RedmineClient,
     project_id: str,
     wiki_title: str,
@@ -232,17 +260,16 @@ def _send_release_notice(
     release_date: str,
     commit: str,
     product_line: str,
-    changelog_items: list[str],
-    file_rows: list[tuple[str, str, bytes]],
+    changelog_items: List[str],
+    file_rows: List[Tuple[str, str, bytes]],
     mail_scope: str,
-    mail_to: list[str],
-    mail_cc: list[str],
+    mail_to: List[str],
+    mail_cc: List[str],
 ) -> str:
-    settings, allowed_to, allowed_cc = _build_email_settings(session, mail_scope)
+    settings, _allowed_to, _allowed_cc = _build_email_settings(session, mail_scope)
     to_addrs = split_emails(mail_to)
     cc_addrs = split_emails(mail_cc)
-    _validate_selected_contacts(mail_scope, to_addrs, cc_addrs, allowed_to, allowed_cc)
-    subject = build_release_email_subject(project_id, version_name, product_line)
+    subject = build_release_email_subject(project_id, version_name, product_line, mail_scope)
     body = build_release_email_body(
         base_url=client.base_url,
         project_id=project_id,
@@ -253,6 +280,7 @@ def _send_release_notice(
         product_line=product_line,
         changelog_items=changelog_items,
         attachment_names=[name for name, _desc, _content in file_rows],
+        mail_scope=mail_scope,
     )
     send_release_email(settings, to_addrs=to_addrs, cc_addrs=cc_addrs, subject=subject, body=body, attachments=file_rows)
     return f"{_mail_scope_label(mail_scope)}邮件已发送：收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个，附件 {len(file_rows)} 个"
@@ -264,7 +292,7 @@ async def redmine_error_handler(_request: Request, exc: RedmineError) -> JSONRes
 
 
 @app.get("/api/meta")
-def api_meta() -> dict[str, Any]:
+def api_meta() -> Dict[str, Any]:
     return {
         "product_lines": list(PRODUCT_LINES.keys()),
         "mail_scopes": [
@@ -311,12 +339,12 @@ def api_login(payload: LoginRequest, response: Response) -> LoginResponse:
 
 
 @app.get("/api/auth/me", response_model=LoginResponse)
-def api_me(session: dict[str, Any] = Depends(_current_session)) -> LoginResponse:
+def api_me(session: Dict[str, Any] = Depends(_current_session)) -> LoginResponse:
     return _public_session(session)
 
 
 @app.post("/api/auth/logout")
-def api_logout(request: Request, response: Response) -> dict[str, bool]:
+def api_logout(request: Request, response: Response) -> Dict[str, bool]:
     sid = request.cookies.get(SESSION_COOKIE, "")
     SESSIONS.pop(sid, None)
     response.delete_cookie(SESSION_COOKIE)
@@ -324,7 +352,7 @@ def api_logout(request: Request, response: Response) -> dict[str, bool]:
 
 
 @app.get("/api/projects")
-def api_projects(session: dict[str, Any] = Depends(_current_session)) -> list[dict[str, Any]]:
+def api_projects(session: Dict[str, Any] = Depends(_current_session)) -> List[Dict[str, Any]]:
     return session.get("projects", [])
 
 
@@ -333,7 +361,7 @@ def api_releases(
     project_id: str = Query(...),
     product_line: str = Query(""),
     client: RedmineClient = Depends(_current_client),
-) -> list[dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     return _list_release_rows(client, project_id, product_line)
 
 
@@ -342,7 +370,7 @@ def api_release_detail(
     project_id: str = Query(...),
     wiki_title: str = Query(...),
     client: RedmineClient = Depends(_current_client),
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     page = client.get_wiki_page(project_id, wiki_title)
     if not page:
         raise _json_error("未找到版本页面", 404)
@@ -356,7 +384,7 @@ async def api_publish_release(
     version_name: str = Form(...),
     release_date: str = Form(...),
     commit: str = Form(...),
-    product_line: str = Form(...),
+    product_line: str = Form(""),
     changelog: str = Form(...),
     replace_attachments: bool = Form(False),
     edit_title: str = Form(""),
@@ -364,19 +392,24 @@ async def api_publish_release(
     mail_scope: str = Form(MAIL_SCOPE_INTERNAL),
     mail_to: str = Form(""),
     mail_cc: str = Form(""),
-    files: list[UploadFile] | None = File(None),
-    session: dict[str, Any] = Depends(_current_session),
+    files: Optional[List[UploadFile]] = File(None),
+    session: Dict[str, Any] = Depends(_current_session),
     client: RedmineClient = Depends(_current_client),
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
+    logs: List[str] = []
+    action = "编辑版本" if edit_title else "发布新版本"
+    logs.append(f"开始{action}：项目 {project_id}")
     items = [line.strip() for line in changelog.splitlines() if line.strip()]
     if not items:
         raise _json_error("请填写至少一条变更说明")
+    logs.append(f"变更说明校验通过：{len(items)} 条")
 
-    file_rows: list[tuple[str, str, bytes]] = []
+    file_rows: List[Tuple[str, str, bytes]] = []
     for upload in files or []:
         content = await upload.read()
         if upload.filename and content:
             file_rows.append((upload.filename, "", content))
+    logs.append(f"附件读取完成：{len(file_rows)} 个有效附件")
 
     form = ReleaseForm(
         project_id=project_id,
@@ -384,17 +417,25 @@ async def api_publish_release(
         version_name=version_name.strip(),
         release_date=release_date.strip(),
         commit=commit.strip(),
-        product_line=product_line,
+        product_line=product_line.strip(),
         changelog_items=items,
         files=file_rows,
         wiki_title=edit_title or None,
         replace_attachments=bool(replace_attachments),
     )
-    title = ReleasePublisher(client).publish(form)
+    try:
+        title = ReleasePublisher(client).publish(form, logs)
+    except RedmineError as exc:
+        logs.append(f"{action}失败：{exc}")
+        return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
+
     notice_message = ""
     if notice_enabled:
         try:
             scope = _normalize_mail_scope(mail_scope)
+            to_addrs = split_emails(mail_to)
+            cc_addrs = split_emails(mail_cc)
+            logs.append(f"邮件通知已启用：{_mail_scope_label(scope)}，收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个")
             notice_message = _send_release_notice(
                 session=session,
                 client=client,
@@ -403,25 +444,32 @@ async def api_publish_release(
                 version_name=version_name.strip(),
                 release_date=release_date.strip(),
                 commit=commit.strip(),
-                product_line=product_line,
+                product_line=product_line.strip(),
                 changelog_items=items,
                 file_rows=file_rows,
                 mail_scope=scope,
-                mail_to=split_emails(mail_to),
-                mail_cc=split_emails(mail_cc),
+                mail_to=to_addrs,
+                mail_cc=cc_addrs,
             )
+            logs.append(notice_message)
         except EmailSendError as exc:
             notice_message = f"邮件发送失败：{exc}"
+            logs.append(notice_message)
+    else:
+        logs.append("邮件通知未启用，跳过发送")
 
-    releases = _list_release_rows(client, project_id, product_line)
-    return {"ok": True, "title": title, "notice_message": notice_message, "releases": releases}
+    releases = _list_release_rows(client, project_id, product_line.strip())
+    logs.append(f"刷新版本列表完成：返回 {len(releases)} 条")
+    logs.append(f"{action}完成：{title}")
+    return {"ok": True, "title": title, "notice_message": notice_message, "releases": releases, "logs": logs}
 
 
 @app.get("/api/mail/settings")
-def api_mail_settings(session: dict[str, Any] = Depends(_current_session)) -> dict[str, Any]:
+def api_mail_settings(session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
     internal_server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
     external_server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
     internal_contacts = get_internal_contact_settings()
+    user_internal = get_user_internal_email_settings(session.get("user_key", ""))
     user_external = get_user_external_email_settings(session.get("user_key", ""))
     return {
         "is_admin": bool(session.get("is_admin")),
@@ -429,6 +477,13 @@ def api_mail_settings(session: dict[str, Any] = Depends(_current_session)) -> di
             "internal_server": internal_server,
             "external_server": external_server,
             "internal_contacts": internal_contacts,
+        },
+        "user_internal": {
+            "smtp_user": user_internal["smtp_user"],
+            "smtp_password": "",
+            "smtp_from": user_internal["smtp_from"],
+            "contacts_to": user_internal["contacts_to"],
+            "contacts_cc": user_internal["contacts_cc"],
         },
         "user_external": {
             "smtp_user": user_external["smtp_user"],
@@ -441,7 +496,7 @@ def api_mail_settings(session: dict[str, Any] = Depends(_current_session)) -> di
 
 
 @app.put("/api/mail/admin-settings")
-def api_save_admin_mail_settings(payload: AdminMailSettingsRequest, session: dict[str, Any] = Depends(_current_session)) -> dict[str, bool]:
+def api_save_admin_mail_settings(payload: AdminMailSettingsRequest, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, bool]:
     _require_admin(session)
     store_email_server_settings(
         MAIL_SCOPE_INTERNAL,
@@ -461,8 +516,24 @@ def api_save_admin_mail_settings(payload: AdminMailSettingsRequest, session: dic
     return {"ok": True}
 
 
+@app.put("/api/mail/user-internal-settings")
+def api_save_user_internal_mail_settings(payload: UserInternalMailRequest, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, bool]:
+    user_key = session.get("user_key", "")
+    old = get_user_internal_email_settings(user_key)
+    smtp_password = payload.smtp_password or old.get("smtp_password", "")
+    store_user_internal_email_settings(
+        user_key,
+        smtp_user=payload.smtp_user,
+        smtp_password=smtp_password,
+        smtp_from=payload.smtp_from,
+        contacts_to=payload.contacts_to,
+        contacts_cc=payload.contacts_cc,
+    )
+    return {"ok": True}
+
+
 @app.put("/api/mail/user-external-settings")
-def api_save_user_external_mail_settings(payload: UserExternalMailRequest, session: dict[str, Any] = Depends(_current_session)) -> dict[str, bool]:
+def api_save_user_external_mail_settings(payload: UserExternalMailRequest, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, bool]:
     user_key = session.get("user_key", "")
     old = get_user_external_email_settings(user_key)
     smtp_password = payload.smtp_password or old.get("smtp_password", "")
@@ -478,24 +549,24 @@ def api_save_user_external_mail_settings(payload: UserExternalMailRequest, sessi
 
 
 @app.get("/api/mail/contacts")
-def api_mail_contacts(scope: str = Query(MAIL_SCOPE_INTERNAL), session: dict[str, Any] = Depends(_current_session)) -> dict[str, list[str]]:
+def api_mail_contacts(scope: str = Query(MAIL_SCOPE_INTERNAL), session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, List[str]]:
     return _contacts_for_scope(session, _normalize_mail_scope(scope))
 
 
 @app.get("/api/wiki-config/templates")
-def api_wiki_templates() -> list[Any]:
+def api_wiki_templates() -> List[Any]:
     return TEMPLATE_CHOICES
 
 
 @app.post("/api/wiki-config/generate")
-def api_generate_wiki_config(payload: WikiConfigGenerateRequest) -> dict[str, str]:
+def api_generate_wiki_config(payload: WikiConfigGenerateRequest) -> Dict[str, str]:
     text = build_config_template(payload.template_key or "single_list", payload.project_id)
     ok, msg = validate_config_text(text)
     return {"text": text, "message": msg if ok else msg}
 
 
 @app.get("/api/wiki-config/{project_id}")
-def api_get_wiki_config(project_id: str, client: RedmineClient = Depends(_current_client)) -> dict[str, str]:
+def api_get_wiki_config(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, str]:
     page = client.get_wiki_page(project_id, CONFIG_PAGE_TITLE)
     if not page:
         return {"text": "", "message": f"未找到 {CONFIG_PAGE_TITLE}"}
@@ -505,13 +576,13 @@ def api_get_wiki_config(project_id: str, client: RedmineClient = Depends(_curren
 
 
 @app.post("/api/wiki-config/check")
-def api_check_wiki_config(payload: WikiConfigCheckRequest) -> dict[str, Any]:
+def api_check_wiki_config(payload: WikiConfigCheckRequest) -> Dict[str, Any]:
     ok, msg = validate_config_text(payload.text or "")
     return {"ok": ok, "message": msg}
 
 
 @app.put("/api/wiki-config/{project_id}")
-def api_save_wiki_config(project_id: str, payload: WikiConfigSaveRequest, client: RedmineClient = Depends(_current_client)) -> dict[str, str]:
+def api_save_wiki_config(project_id: str, payload: WikiConfigSaveRequest, client: RedmineClient = Depends(_current_client)) -> Dict[str, str]:
     ok, msg = validate_config_text(payload.text or "")
     if not ok:
         raise _json_error(msg)
@@ -524,7 +595,7 @@ def _mount_frontend() -> None:
     index_file = dist / "index.html"
     if not index_file.exists():
         @app.get("/")
-        def frontend_missing() -> dict[str, str]:
+        def frontend_missing() -> Dict[str, str]:
             return {"message": "Vue 前端尚未构建。开发时请运行：cd frontend && npm run dev；发布时请先运行 npm run build。"}
         return
 

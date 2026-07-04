@@ -48,6 +48,13 @@ export interface MailSettings {
     external_server: SmtpServerConfig
     internal_contacts: ContactConfig
   }
+  user_internal: {
+    smtp_user: string
+    smtp_password: string
+    smtp_from: string
+    contacts_to: string[]
+    contacts_cc: string[]
+  }
   user_external: {
     smtp_user: string
     smtp_password: string
