@@ -33,8 +33,6 @@ from .config_store import (
 from .email_sender import (
     EmailSendError,
     EmailSettings,
-    build_release_email_body,
-    build_release_email_subject,
     send_release_email,
     split_emails,
 )
@@ -349,7 +347,6 @@ def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSet
                 smtp_password=user_cfg["smtp_password"],
                 smtp_from=user_cfg["smtp_from"] or server["smtp_from"],
                 use_tls=server["use_tls"],
-                template_scope=MAIL_SCOPE_INTERNAL,
             ),
             contact_candidates,
             contact_candidates,
@@ -367,11 +364,63 @@ def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSet
             smtp_password=user_cfg["smtp_password"],
             smtp_from=user_cfg["smtp_from"],
             use_tls=server["use_tls"],
-            template_scope=MAIL_SCOPE_EXTERNAL,
         ),
         user_cfg["contacts_to"],
         user_cfg["contacts_cc"],
     )
+
+
+def _validate_release_preflight(
+    project_id: str,
+    version_name: str,
+    release_date: str,
+    commit: str,
+    changelog_items: List[str],
+) -> None:
+    if not project_id.strip():
+        raise ValueError("请选择项目")
+    if not version_name.strip():
+        raise ValueError("请填写版本号")
+    if not release_date.strip():
+        raise ValueError("请选择发布日期")
+    try:
+        datetime.strptime(release_date.strip(), "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("发布日期格式必须是 YYYY-MM-DD") from exc
+    if not commit.strip():
+        raise ValueError("请填写 Commit")
+    if not changelog_items:
+        raise ValueError("请填写至少一条变更说明")
+
+
+def _validate_notice_preflight(
+    session: Dict[str, Any],
+    mail_scope: str,
+    mail_to: str,
+    mail_cc: str,
+    mail_subject: str,
+    mail_body: str,
+) -> Tuple[str, List[str], List[str]]:
+    try:
+        scope = _normalize_mail_scope(mail_scope)
+    except HTTPException as exc:
+        raise EmailSendError(str(exc.detail)) from exc
+
+    settings, _allowed_to, _allowed_cc = _build_email_settings(session, scope)
+    if not settings.smtp_host:
+        raise EmailSendError("请先填写 SMTP 服务器")
+    if not settings.smtp_from:
+        raise EmailSendError("请先填写发件人邮箱")
+
+    to_addrs = split_emails(mail_to)
+    cc_addrs = split_emails(mail_cc)
+    if not to_addrs:
+        raise EmailSendError("请填写或选择至少一个收件人")
+    if not (mail_subject or "").strip():
+        raise EmailSendError("请先生成或填写邮件主题")
+    if not (mail_body or "").strip():
+        raise EmailSendError("请先生成或填写邮件正文")
+    return scope, to_addrs, cc_addrs
 
 
 def _send_release_notice(
@@ -380,11 +429,6 @@ def _send_release_notice(
     client: RedmineClient,
     project_id: str,
     wiki_title: str,
-    version_name: str,
-    release_date: str,
-    commit: str,
-    product_line: str,
-    changelog_items: List[str],
     file_rows: List[Tuple[str, str, bytes]],
     mail_scope: str,
     mail_to: List[str],
@@ -395,25 +439,13 @@ def _send_release_notice(
     settings, _allowed_to, _allowed_cc = _build_email_settings(session, mail_scope)
     to_addrs = split_emails(mail_to)
     cc_addrs = split_emails(mail_cc)
-    generated_subject = build_release_email_subject(project_id, version_name, product_line, mail_scope)
-    generated_body = build_release_email_body(
-        base_url=client.base_url,
-        project_id=project_id,
-        wiki_title=wiki_title,
-        version_name=version_name,
-        release_date=release_date,
-        commit=commit,
-        product_line=product_line,
-        changelog_items=changelog_items,
-        attachment_names=[name for name, _desc, _content in file_rows],
-        mail_scope=mail_scope,
-    )
-    subject = (mail_subject or "").strip() or generated_subject
-    body = (mail_body or "").strip() or generated_body
+    subject = (mail_subject or "").strip()
+    body = (mail_body or "").strip()
+    if not subject or not body:
+        raise EmailSendError("请先生成或填写邮件主题和正文")
     base = client.base_url.rstrip("/")
     body = body.replace("{{wiki_url}}", f"{base}/projects/{quote(project_id)}/wiki/{quote(wiki_title, safe='')}")
     body = body.replace("{{files_url}}", f"{base}/projects/{quote(project_id)}/files")
-    custom_content = bool((mail_subject or "").strip() or (mail_body or "").strip())
     send_release_email(
         settings,
         to_addrs=to_addrs,
@@ -421,7 +453,6 @@ def _send_release_notice(
         subject=subject,
         body=body,
         attachments=file_rows,
-        apply_template_scope=not custom_content,
     )
     return f"{_mail_scope_label(mail_scope)}邮件已发送：收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个，附件 {len(file_rows)} 个"
 
@@ -563,9 +594,32 @@ async def api_publish_release(
     action = "编辑版本" if edit_title else "发布新版本"
     logs.append(f"开始{action}：项目 {project_id}")
     items = [line.strip() for line in changelog.splitlines() if line.strip()]
-    if not items:
-        raise _json_error("请填写至少一条变更说明")
-    logs.append(f"变更说明校验通过：{len(items)} 条")
+    notice_scope = ""
+    notice_to_addrs: List[str] = []
+    notice_cc_addrs: List[str] = []
+
+    try:
+        _validate_release_preflight(project_id, version_name, release_date, commit, items)
+        logs.append("基础字段预检查通过")
+        logs.append(f"变更说明校验通过：{len(items)} 条")
+        if notice_enabled:
+            notice_scope, notice_to_addrs, notice_cc_addrs = _validate_notice_preflight(
+                session,
+                mail_scope,
+                mail_to,
+                mail_cc,
+                mail_subject,
+                mail_body,
+            )
+            logs.append(
+                f"邮件预检查通过：{_mail_scope_label(notice_scope)}，"
+                f"收件人 {len(notice_to_addrs)} 个，抄送 {len(notice_cc_addrs)} 个"
+            )
+        else:
+            logs.append("邮件通知未启用，跳过邮件预检查")
+    except (ValueError, EmailSendError) as exc:
+        logs.append(f"预检查失败：{exc}")
+        return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
 
     file_rows: List[Tuple[str, str, bytes]] = []
     for upload in files or []:
@@ -595,24 +649,16 @@ async def api_publish_release(
     notice_message = ""
     if notice_enabled:
         try:
-            scope = _normalize_mail_scope(mail_scope)
-            to_addrs = split_emails(mail_to)
-            cc_addrs = split_emails(mail_cc)
-            logs.append(f"邮件通知已启用：{_mail_scope_label(scope)}，收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个")
+            logs.append(f"邮件通知已启用：{_mail_scope_label(notice_scope)}，收件人 {len(notice_to_addrs)} 个，抄送 {len(notice_cc_addrs)} 个")
             notice_message = _send_release_notice(
                 session=session,
                 client=client,
                 project_id=project_id,
                 wiki_title=title,
-                version_name=version_name.strip(),
-                release_date=release_date.strip(),
-                commit=commit.strip(),
-                product_line=product_line.strip(),
-                changelog_items=items,
                 file_rows=file_rows,
-                mail_scope=scope,
-                mail_to=to_addrs,
-                mail_cc=cc_addrs,
+                mail_scope=notice_scope,
+                mail_to=notice_to_addrs,
+                mail_cc=notice_cc_addrs,
                 mail_subject=mail_subject,
                 mail_body=mail_body,
             )

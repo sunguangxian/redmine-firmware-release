@@ -152,7 +152,9 @@ watch(
     form.commit,
     form.product_line,
     form.changelog,
-    selectedFiles.value.map((file) => file.name).join('|')
+    selectedFiles.value.map((file) => file.name).join('|'),
+    filesInfo.value,
+    replaceAttachments.value
   ],
   () => {
     if (noticeEnabled.value && !mailContentEdited.value) generateMailContent()
@@ -262,17 +264,61 @@ function changelogLines(): string[] {
 }
 
 function attachmentNames(): string[] {
-  return selectedFiles.value.map((file) => file.name).filter(Boolean)
+  const selected = selectedFiles.value.map((file) => file.name).filter(Boolean)
+  if (replaceAttachments.value || selected.length) return selected
+  return filesInfo.value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^-\s*/, '').trim().split(/\s+/)[0])
+    .filter((item) => item && item !== '（无已有附件）')
+}
+
+function uniqueItems(items: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  items.forEach((item) => {
+    const value = item.trim()
+    const key = value.toLowerCase()
+    if (value && !seen.has(key)) {
+      seen.add(key)
+      result.push(value)
+    }
+  })
+  return result
+}
+
+function releaseNameFromAttachments(names: string[]): string {
+  const models: string[] = []
+  let parsedVersion = ''
+  let parsedDate = ''
+  names.forEach((filename) => {
+    const stem = filename.replace(/\.[A-Za-z0-9]+$/, '')
+    const parts = stem.split('_').filter(Boolean)
+    const versionIndex = parts.findIndex((part) => /^V?\d+(?:\.\d+)+$/i.test(part))
+    const dateIndex = parts.findIndex((part) => /^\d{8}$|^\d{4}-\d{2}-\d{2}$/.test(part))
+    if (versionIndex > 0) {
+      const model = parts.slice(0, versionIndex).join('_')
+      if (model) models.push(model)
+      if (!parsedVersion) parsedVersion = parts[versionIndex]
+      if (dateIndex > versionIndex && !parsedDate) parsedDate = parts[dateIndex]
+    } else if (stem) {
+      models.push(stem)
+    }
+  })
+  const cleanModels = uniqueItems(models)
+  const modelText = cleanModels.length > 4 ? `${cleanModels.slice(0, 4).join('/')} 等${cleanModels.length}个机型` : cleanModels.join('/')
+  return [modelText, parsedVersion || form.version_name, parsedDate || form.release_date.replace(/-/g, '')].filter(Boolean).join(' ')
 }
 
 function generatedMailSubject(): string {
+  const releaseName = releaseNameFromAttachments(attachmentNames())
   if (mailScope.value === 'external') {
-    return `[Firmware Release][${projectId.value}] ${form.version_name} - ${form.product_line}`
+    return `Firmware Release ${releaseName}`
   }
-  return `[${projectId.value}] 固件版本发布 ${form.version_name} - ${form.product_line}`
+  return `固件版本发布 ${releaseName}`
 }
 
 function generatedMailBody(): string {
+  const releaseName = releaseNameFromAttachments(attachmentNames())
   const changelog = changelogLines().map((item, index) => `${index + 1}. ${item}`).join('\n') || '（无）'
   const attachments = attachmentNames()
     .map((name) => `- ${name}`)
@@ -283,9 +329,7 @@ function generatedMailBody(): string {
       '',
       '固件版本已发布，请查收。',
       '',
-      `项目：${projectId.value}`,
-      `版本：${form.version_name}`,
-      `产品线：${form.product_line}`,
+      `版本：${releaseName}`,
       `发布日期：${form.release_date}`,
       '',
       `变更说明：\n${changelog}`,
@@ -298,9 +342,7 @@ function generatedMailBody(): string {
   return [
     '固件版本已发布。',
     '',
-    `项目：${projectId.value}`,
-    `版本：${form.version_name}`,
-    `产品线：${form.product_line}`,
+    `版本：${releaseName}`,
     `发布日期：${form.release_date}`,
     `Commit：${form.commit}`,
     '',
