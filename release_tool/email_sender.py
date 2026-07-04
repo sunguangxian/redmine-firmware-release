@@ -108,6 +108,36 @@ def send_release_email(
         raise EmailSendError(str(exc)) from exc
 
 
+def test_smtp_connection(settings: EmailSettings) -> None:
+    """连接 SMTP 并执行登录验证，不发送邮件。"""
+    if not settings.smtp_host:
+        raise EmailSendError("请先填写 SMTP 服务器")
+    if not settings.smtp_user:
+        raise EmailSendError("请填写 SMTP 用户名")
+    if not settings.smtp_password:
+        raise EmailSendError("请填写 SMTP 密码")
+
+    try:
+        if int(settings.smtp_port) == 465:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(settings.smtp_host, int(settings.smtp_port), timeout=20, context=context) as smtp:
+                _smtp_login_if_needed(smtp, settings)
+                smtp.noop()
+        else:
+            with smtplib.SMTP(settings.smtp_host, int(settings.smtp_port), timeout=20) as smtp:
+                smtp.ehlo()
+                if settings.use_tls:
+                    smtp.starttls(context=ssl.create_default_context())
+                    smtp.ehlo()
+                _smtp_login_if_needed(smtp, settings)
+                smtp.noop()
+    except smtplib.SMTPAuthenticationError as exc:
+        detail = exc.smtp_error.decode(errors="ignore") if isinstance(exc.smtp_error, bytes) else str(exc.smtp_error)
+        raise EmailSendError(f"SMTP 用户名或密码验证失败：{detail or exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - 需要把服务器/网络错误直接展示给用户
+        raise EmailSendError(f"SMTP 连通性测试失败：{exc}") from exc
+
+
 def _smtp_login_if_needed(smtp: smtplib.SMTP, settings: EmailSettings) -> None:
     if settings.smtp_user:
         smtp.login(settings.smtp_user, settings.smtp_password or "")
