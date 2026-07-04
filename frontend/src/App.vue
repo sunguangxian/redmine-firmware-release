@@ -16,6 +16,9 @@
       <el-tab-pane label="结构管理" name="wiki">
         <WikiConfigView :projects="session.projects" />
       </el-tab-pane>
+      <el-tab-pane label="旧项目升级" name="legacy">
+        <LegacyMigrationView :projects="session.projects" />
+      </el-tab-pane>
       <el-tab-pane label="邮件设置" name="mail">
         <MailSettingsView :session="session" @changed="mailVersion++" />
       </el-tab-pane>
@@ -33,6 +36,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import LoginView from './views/LoginView.vue'
+import LegacyMigrationView from './views/LegacyMigrationView.vue'
 import MailSettingsView from './views/MailSettingsView.vue'
 import ReleaseEditView from './views/ReleaseEditView.vue'
 import ReleasePublishView from './views/ReleasePublishView.vue'

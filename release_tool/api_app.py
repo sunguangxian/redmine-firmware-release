@@ -37,6 +37,7 @@ from .email_sender import (
     split_emails,
 )
 from .index_sync import IndexSync
+from .legacy_changelog_migrator import LegacyChangelogMigrator
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
 from .release_page import PRODUCT_LINES, ReleaseForm, format_release_files, parse_release_page, proj_tag_from_project
@@ -118,6 +119,11 @@ class WikiConfigCheckRequest(BaseModel):
 class WikiConfigGenerateRequest(BaseModel):
     project_id: str
     template_key: str = "single_list"
+
+
+class LegacyMigrationRequest(BaseModel):
+    project_id: str
+    entry_pages: List[str] = Field(default_factory=lambda: ["Changelog"])
 
 
 def _user_key(base_url: str, login: str) -> str:
@@ -553,6 +559,21 @@ def api_mail_contacts(scope: str = Query(MAIL_SCOPE_INTERNAL), session: Dict[str
     return _contacts_for_scope(session, _normalize_mail_scope(scope))
 
 
+@app.post("/api/legacy-migration/preview")
+def api_preview_legacy_migration(payload: LegacyMigrationRequest, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
+    return LegacyChangelogMigrator(client, payload.project_id, payload.entry_pages).preview()
+
+
+@app.post("/api/legacy-migration/execute")
+def api_execute_legacy_migration(
+    payload: LegacyMigrationRequest,
+    session: Dict[str, Any] = Depends(_current_session),
+    client: RedmineClient = Depends(_current_client),
+) -> Dict[str, Any]:
+    _require_admin(session)
+    return LegacyChangelogMigrator(client, payload.project_id, payload.entry_pages).execute()
+
+
 @app.get("/api/wiki-config/templates")
 def api_wiki_templates() -> List[Any]:
     return TEMPLATE_CHOICES
@@ -563,6 +584,24 @@ def api_generate_wiki_config(payload: WikiConfigGenerateRequest) -> Dict[str, st
     text = build_config_template(payload.template_key or "single_list", payload.project_id)
     ok, msg = validate_config_text(text)
     return {"text": text, "message": msg if ok else msg}
+
+
+@app.get("/api/wiki-config/{project_id}/refresh-preview")
+def api_preview_wiki_refresh(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
+    return IndexSync(client, project_id).preview_refresh_all()
+
+
+@app.post("/api/wiki-config/{project_id}/refresh")
+def api_refresh_wiki_index(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
+    sync = IndexSync(client, project_id)
+    preview = sync.preview_refresh_all()
+    updated_count = sync.refresh_all()
+    return {
+        "ok": True,
+        "updated_release_count": updated_count,
+        "preview": preview,
+        "message": f"已按当前 Release_Tool_Config 重建索引，处理 Release {updated_count} 个。",
+    }
 
 
 @app.get("/api/wiki-config/{project_id}")

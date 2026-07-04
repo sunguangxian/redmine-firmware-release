@@ -60,6 +60,68 @@ http://127.0.0.1:5173
 - 未配置多级分类的项目允许版本分类为空。
 - 其他项目如果有自己的多级 Wiki 或索引结构，应以该项目的 `Release_Tool_Config` 为准。
 
+single 和 multi 互转：
+
+- 先修改并保存项目 `Release_Tool_Config`。
+- 在结构管理页点击“预览重建索引”，确认当前配置会更新哪些页面、哪些 Release 父页面会被调整、哪些 Release 无法归类。
+- 确认无误后点击“确认重建索引”，工具会按当前配置全量重建索引。
+- 重建索引只更新当前配置涉及的主页面、分类页面、列表页面和 Release 父页面，不会删除旧 Wiki 页面。
+- 从 `single_list` 转 `multi_list` 时，历史 Release 如果没有可匹配的分类，预览中会列为“无法归类”，需要先编辑版本分类或调整配置后再重建。
+
+## 旧 Changelog 项目升级
+
+对于旧项目中常见的“一个平台项目包含多个型号，每个型号一个 Changelog 页面”的结构，工具提供通用升级能力，不写死具体项目名。
+
+支持识别的旧结构：
+
+```text
+Changelog
+├─ Changelog_DM181
+├─ Changelog_D705SM
+├─ Changelog_for_DM281
+└─ DM280
+```
+
+旧页面中的版本段支持：
+
+```text
+h2. version:V1.0.0.1 (2021-01-01)
+## version:V1.0.0.1 (2021-01-01)
+```
+
+升级后的目标结构：
+
+```text
+Release_Notes
+├─ Release_Notes_DM181
+│  └─ Release_Notes_DM181_List
+└─ Release_DM181_FW_V1_0_0_1
+```
+
+规则：
+
+- Redmine 项目 identifier 只作为平台/容器，不再写入 Release 页面名。
+- 型号作为分类，例如 `DM181`、`D705SM`。
+- Release Wiki 标题格式为 `Release_{model}_FW_{version}`。
+- Redmine Version 名称格式为 `{model} {version}`。
+- 如果同一型号下存在重复版本号，迁移器会自动追加日期和序号避免覆盖。
+- 旧 Wiki 附件会下载后重新上传到项目 Files，并绑定到对应 Redmine Version。
+- 新 Release Wiki 页面中的附件表指向项目 Files 下载链接。
+- 旧 Changelog 页面和旧 Wiki 附件默认保留，不删除。
+
+升级流程：
+
+1. 在“旧项目升级”页选择项目。
+2. 设置入口页，默认 `Changelog`。
+3. 点击“预览升级”，查看识别到的型号、历史版本、附件匹配、将创建的 Version、将上传的项目文件和问题列表。
+4. 确认无阻塞问题后点击“确认执行升级”。
+
+权限要求：
+
+- 预览需要读取 Wiki、版本和项目文件列表。
+- 如果账号无法读取项目 Files，预览会显示警告；当存在旧附件需要迁移时，执行按钮会被禁用。
+- 执行需要能够创建/更新 Wiki、创建 Version、下载旧附件、上传项目 Files。
+
 ## 邮件配置规则
 
 邮件类型：
@@ -158,6 +220,7 @@ redmine-firmware-release/
 │  ├─ config_store.py
 │  ├─ email_sender.py
 │  ├─ index_sync.py
+│  ├─ legacy_changelog_migrator.py
 │  ├─ publisher.py
 │  ├─ redmine_api.py
 │  ├─ release_page.py
@@ -191,8 +254,12 @@ PUT  /api/mail/admin-settings
 PUT  /api/mail/user-internal-settings
 PUT  /api/mail/user-external-settings
 GET  /api/mail/contacts
+POST /api/legacy-migration/preview
+POST /api/legacy-migration/execute
 GET  /api/wiki-config/templates
 POST /api/wiki-config/generate
+GET  /api/wiki-config/{project_id}/refresh-preview
+POST /api/wiki-config/{project_id}/refresh
 GET  /api/wiki-config/{project_id}
 POST /api/wiki-config/check
 PUT  /api/wiki-config/{project_id}

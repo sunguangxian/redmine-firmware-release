@@ -69,3 +69,76 @@ export interface MetaInfo {
   mail_scopes: Array<{ label: string; value: string }>
   today: string
 }
+
+export interface WikiRefreshPreview {
+  mode: string
+  main_page: string
+  release_count: number
+  categories: Array<{
+    key: string
+    title: string
+    hub: string
+    list_page: string
+    release_count: number
+  }>
+  pages_to_update: string[]
+  parents_to_update: Array<{
+    page: string
+    from: string
+    to: string
+  }>
+  uncategorized: Array<{
+    page: string
+    version: string
+    date: string
+  }>
+  warnings: string[]
+}
+
+export interface WikiRefreshResult {
+  ok: boolean
+  updated_release_count: number
+  preview: WikiRefreshPreview
+  message: string
+}
+
+export interface LegacyMigrationPreview {
+  project_id: string
+  entry_pages: string[]
+  source_page_count: number
+  model_count: number
+  release_count: number
+  attachment_ref_count: number
+  matched_attachment_count: number
+  versions_to_create: number
+  existing_versions: number
+  release_pages_to_create: number
+  existing_release_pages: number
+  project_files_to_upload: number
+  existing_project_files: number
+  can_read_project_files: boolean
+  source_pages: Array<{
+    title: string
+    model: string
+    release_count: number
+    attachment_ref_count: number
+    matched_attachment_count: number
+  }>
+  warnings: string[]
+  problems: Array<{
+    level: string
+    source_page: string
+    version: string
+    message: string
+  }>
+}
+
+export interface LegacyMigrationResult {
+  ok: boolean
+  preview: LegacyMigrationPreview
+  created_versions: number
+  uploaded_files: number
+  updated_release_pages: number
+  refreshed_release_count: number
+  message: string
+}

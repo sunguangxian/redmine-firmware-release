@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { MailSettings, MetaInfo, ReleaseDetail, ReleaseSummary, SessionInfo } from '../types'
+import type { LegacyMigrationPreview, LegacyMigrationResult, MailSettings, MetaInfo, ReleaseDetail, ReleaseSummary, SessionInfo, WikiRefreshPreview, WikiRefreshResult } from '../types'
 
 const http = axios.create({
   baseURL: '',
@@ -99,5 +99,25 @@ export async function saveWikiConfig(projectId: string, text: string): Promise<{
 
 export async function getWikiTemplates(): Promise<Array<[string, string]>> {
   const { data } = await http.get('/api/wiki-config/templates')
+  return data
+}
+
+export async function previewWikiRefresh(projectId: string): Promise<WikiRefreshPreview> {
+  const { data } = await http.get(`/api/wiki-config/${encodeURIComponent(projectId)}/refresh-preview`)
+  return data
+}
+
+export async function refreshWikiIndex(projectId: string): Promise<WikiRefreshResult> {
+  const { data } = await http.post(`/api/wiki-config/${encodeURIComponent(projectId)}/refresh`)
+  return data
+}
+
+export async function previewLegacyMigration(payload: { project_id: string; entry_pages: string[] }): Promise<LegacyMigrationPreview> {
+  const { data } = await http.post('/api/legacy-migration/preview', payload)
+  return data
+}
+
+export async function executeLegacyMigration(payload: { project_id: string; entry_pages: string[] }): Promise<LegacyMigrationResult> {
+  const { data } = await http.post('/api/legacy-migration/execute', payload)
   return data
 }

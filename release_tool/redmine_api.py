@@ -75,11 +75,12 @@ class RedmineClient:
         data = self._request("GET", f"/projects/{quote(project_id)}/wiki/index.json")
         return data.get("wiki_pages", [])
 
-    def get_wiki_page(self, project_id: str, title: str) -> dict[str, Any] | None:
+    def get_wiki_page(self, project_id: str, title: str, *, include_attachments: bool = False) -> dict[str, Any] | None:
+        suffix = "?include=attachments" if include_attachments else ""
         try:
             data = self._request(
                 "GET",
-                f"/projects/{quote(project_id)}/wiki/{quote(title, safe='')}.json",
+                f"/projects/{quote(project_id)}/wiki/{quote(title, safe='')}.json{suffix}",
             )
             return data.get("wiki_page")
         except RedmineError as exc:
@@ -154,6 +155,15 @@ class RedmineClient:
             raise RedmineError(f"上传失败 {filename}: HTTP {resp.status_code} {resp.text[:200]}")
         token = resp.json()["upload"]["token"]
         return token
+
+    def download_content_url(self, content_url: str) -> bytes:
+        url = content_url
+        if content_url.startswith("/"):
+            url = f"{self.base_url}{content_url}"
+        resp = self.session.get(url, timeout=120)
+        if resp.status_code >= 400:
+            raise RedmineError(f"下载附件失败: HTTP {resp.status_code} {resp.text[:200]}")
+        return resp.content
 
     def list_project_files(self, project_id: str) -> list[dict[str, Any]]:
         data = self._request("GET", f"/projects/{quote(project_id)}/files.json")

@@ -45,6 +45,7 @@ class WikiProfile:
     mode: str
     main_page: str
     categories: list[CategoryProfile]
+    release_page_prefix: str = ""
 
 
 class IndexSync:
@@ -87,6 +88,104 @@ class IndexSync:
             self._refresh_single(profile, items)
         return len(items)
 
+    def preview_refresh_all(self) -> dict[str, Any]:
+        profile = self.discover_profile()
+        items = self._build_items(profile)
+        plan = self._build_refresh_plan(profile, items)
+        return {
+            "mode": profile.mode,
+            "main_page": profile.main_page,
+            "release_count": len(items),
+            "categories": [
+                {
+                    "key": category.key,
+                    "title": category.title,
+                    "hub": category.hub,
+                    "list_page": category.list_page,
+                    "release_count": sum(1 for item in items if item["cat"] == category.key),
+                }
+                for category in profile.categories
+            ],
+            "pages_to_update": plan["pages_to_update"],
+            "parents_to_update": plan["parents_to_update"],
+            "uncategorized": plan["uncategorized"],
+            "warnings": plan["warnings"],
+        }
+
+    def _build_refresh_plan(self, profile: WikiProfile, items: list[dict[str, Any]]) -> dict[str, Any]:
+        pages_to_update: list[str] = []
+        parents_to_update: list[dict[str, str]] = []
+        uncategorized: list[dict[str, str]] = []
+        warnings: list[str] = []
+
+        def add_page(title: str) -> None:
+            if title and title not in pages_to_update:
+                pages_to_update.append(title)
+
+        if not items:
+            warnings.append("当前项目没有找到 Release 页面，执行重建不会更新索引。")
+            return {
+                "pages_to_update": [],
+                "parents_to_update": [],
+                "uncategorized": [],
+                "warnings": warnings,
+            }
+
+        add_page(profile.main_page)
+        if profile.mode == "multi_list":
+            category_keys = {category.key for category in profile.categories}
+            for category in profile.categories:
+                add_page(category.list_page)
+                if category.list_page != category.hub:
+                    add_page(category.hub)
+
+            for item in items:
+                category = item["cat"]
+                if category not in category_keys:
+                    uncategorized.append(
+                        {
+                            "page": item["page"],
+                            "version": item["ver"],
+                            "date": item["date"],
+                        }
+                    )
+                    continue
+                cat_profile = self._category_by_key(profile, category)
+                page = self._get_page(item["page"])
+                current_parent = (page or {}).get("parent") or {}
+                if cat_profile and current_parent.get("title") != cat_profile.hub:
+                    parents_to_update.append(
+                        {
+                            "page": item["page"],
+                            "from": current_parent.get("title", ""),
+                            "to": cat_profile.hub,
+                        }
+                    )
+
+            if uncategorized:
+                warnings.append(
+                    f"有 {len(uncategorized)} 个 Release 无法匹配当前分类配置，重建后不会进入分类列表。"
+                )
+        else:
+            for item in items:
+                page = self._get_page(item["page"])
+                current_parent = (page or {}).get("parent") or {}
+                if current_parent.get("title") != profile.main_page:
+                    parents_to_update.append(
+                        {
+                            "page": item["page"],
+                            "from": current_parent.get("title", ""),
+                            "to": profile.main_page,
+                        }
+                    )
+
+        return {
+            "pages_to_update": pages_to_update,
+            "parents_to_update": parents_to_update,
+            "uncategorized": uncategorized,
+            "warnings": warnings,
+        }
+
     def discover_profile(self) -> WikiProfile:
         """从 Release_Tool_Config 读取索引结构；不再自动猜测。"""
         if self._profile_cache:
@@ -111,10 +210,16 @@ class IndexSync:
                 mode="single_list",
                 main_page=config.main_page,
                 categories=[],
+                release_page_prefix=config.release_page_prefix,
             )
         else:
             categories = [self._category_from_config(c) for c in config.categories]
-            profile = WikiProfile(mode="multi_list", main_page=config.main_page, categories=categories)
+            profile = WikiProfile(
+                mode="multi_list",
+                main_page=config.main_page,
+                categories=categories,
+                release_page_prefix=config.release_page_prefix,
+            )
 
         self._profile_cache = profile
         return profile

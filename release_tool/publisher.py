@@ -27,8 +27,13 @@ class ReleasePublisher:
         profile = index_sync.discover_profile()
         self._log(logs, f"项目发布结构：{profile.mode}")
         self._validate_category(form, index_sync, profile, logs)
+        generated_title = self._configured_release_title(form, index_sync, profile)
+        if generated_title and not form.wiki_title:
+            form.wiki_title = generated_title
+            self._log(logs, f"按项目配置生成 Release 页面：{generated_title}")
+        version_name = self._configured_version_name(form, index_sync, profile)
 
-        version = self._get_or_create_version(form, logs)
+        version = self._get_or_create_version(form, logs, version_name=version_name)
         title = form.page_title
         existing = self.client.get_wiki_page(form.project_id, title)
         existing_text = (existing or {}).get("text", "")
@@ -92,6 +97,41 @@ class ReleasePublisher:
             f"版本分类“{form.product_line}”未匹配当前项目 Release_Tool_Config 中的分类：{category_names}"
         )
 
+    def _configured_release_title(self, form: ReleaseForm, index_sync: IndexSync, profile) -> str:
+        prefix = (getattr(profile, "release_page_prefix", "") or "").strip()
+        if not prefix:
+            return ""
+        category = ""
+        if profile.mode == "multi_list":
+            category = index_sync._categorize(
+                form.page_title,
+                f"**Product Line:** {form.product_line}",
+                ver=form.version_name,
+                commit=form.commit,
+                categories=profile.categories,
+            )
+        category = category or form.product_line or form.proj_tag
+        prefix = (
+            prefix.replace("{category}", category)
+            .replace("{model}", category)
+            .replace("{project}", form.proj_tag)
+        )
+        return f"{prefix}{form.wiki_suffix}"
+
+    def _configured_version_name(self, form: ReleaseForm, index_sync: IndexSync, profile) -> str:
+        prefix = (getattr(profile, "release_page_prefix", "") or "").strip()
+        if profile.mode != "multi_list" or ("{category}" not in prefix and "{model}" not in prefix):
+            return form.version_name.strip()
+        category = index_sync._categorize(
+            form.page_title,
+            f"**Product Line:** {form.product_line}",
+            ver=form.version_name,
+            commit=form.commit,
+            categories=profile.categories,
+        )
+        category = category or form.product_line.strip()
+        return f"{category} {form.version_name.strip()}".strip()
+
     def list_releases(self, project_id: str) -> list[dict]:
         pages = self.client.get_wiki_index(project_id)
         releases = []
@@ -115,8 +155,8 @@ class ReleasePublisher:
         releases.sort(key=lambda x: x["date"], reverse=True)
         return releases
 
-    def _get_or_create_version(self, form: ReleaseForm, logs: list[str] | None = None) -> dict:
-        name = form.version_name.strip()
+    def _get_or_create_version(self, form: ReleaseForm, logs: list[str] | None = None, version_name: str | None = None) -> dict:
+        name = (version_name or form.version_name).strip()
         for version in self.client.list_versions(form.project_id):
             if version.get("name", "").strip() == name:
                 self._log(logs, f"复用已有 Redmine 版本：{name}")
