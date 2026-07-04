@@ -58,4 +58,8 @@ $logFile = Join-Path $LogDir ("release-tool-" + (Get-Date -Format "yyyyMMdd-HHmm
 Write-Host "Starting Redmine Release Tool on ${hostValue}:${portValue}"
 Write-Host "Log file: $logFile"
 
-& $VenvPython main.py *>&1 | Tee-Object -FilePath $logFile -Append
+# uvicorn writes normal INFO logs to stderr. In Windows PowerShell 5.1, piping
+# native stderr directly can be surfaced as NativeCommandError when
+# $ErrorActionPreference is Stop. Let cmd.exe merge stderr into stdout first.
+$runCommand = "`"$VenvPython`" main.py 2>&1"
+cmd.exe /d /c $runCommand | Tee-Object -FilePath $logFile -Append
