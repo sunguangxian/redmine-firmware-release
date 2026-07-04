@@ -2,7 +2,7 @@
   <div>
     <el-alert class="card" type="info" :closable="false" show-icon>
       <template #title>
-        邮件服务器和内网联系人只允许 Redmine 管理员修改；每个用户维护自己的内网 SMTP 账号，外网账号和外网联系人。
+        邮件服务器和内网联系人只允许 Redmine 管理员修改；每个用户维护自己的内网 SMTP 账号，外网账号和外网联系人。保存个人账号前会先测试 SMTP 连接和登录。
       </template>
     </el-alert>
 
@@ -80,6 +80,7 @@
         </div>
       </div>
       <div class="toolbar" style="margin-top: 16px">
+        <el-button :loading="testingInternal" @click="testInternal">测试内网账号</el-button>
         <el-button type="primary" :loading="savingInternal" @click="saveInternal">保存个人内网账号和联系人</el-button>
       </div>
     </el-card>
@@ -130,6 +131,7 @@
         </div>
       </div>
       <div class="toolbar" style="margin-top: 16px">
+        <el-button :loading="testingUser" @click="testUser">测试外网账号</el-button>
         <el-button type="primary" :loading="savingUser" @click="saveUser">保存个人外网设置</el-button>
         <el-button :loading="loading" @click="load">重新读取</el-button>
       </div>
@@ -140,7 +142,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings } from '../api/http'
+import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testMailConnection } from '../api/http'
 import type { ContactTemplateConfig, MailSettings, SessionInfo } from '../types'
 
 function splitText(text: string): string[] {
@@ -154,7 +156,10 @@ const loading = ref(false)
 const savingAdmin = ref(false)
 const savingInternal = ref(false)
 const savingUser = ref(false)
+const testingInternal = ref(false)
+const testingUser = ref(false)
 const internalContactText = ref('')
+type MailScope = 'internal' | 'external'
 type EditableContact = { name: string; email: string }
 type EditableTemplate = { name: string; contactsTo: EditableContact[]; contactsCc: EditableContact[] }
 type ContactOption = { name: string; email: string; label: string }
@@ -254,6 +259,40 @@ const internalContactOptions = computed(() =>
 )
 const externalContactOptions = computed(() => collectOptions(userExternalTemplates.value))
 
+async function runMailConnectionTest(scope: MailScope, account: { smtp_user: string; smtp_password: string; smtp_from: string }) {
+  const result = await testMailConnection({
+    scope,
+    smtp_user: account.smtp_user,
+    smtp_password: account.smtp_password,
+    smtp_from: account.smtp_from
+  })
+  ElMessage.success(result.message || 'SMTP 连通性测试通过')
+}
+
+async function testInternal() {
+  if (!settings.value) return
+  testingInternal.value = true
+  try {
+    await runMailConnectionTest('internal', settings.value.user_internal)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    testingInternal.value = false
+  }
+}
+
+async function testUser() {
+  if (!settings.value) return
+  testingUser.value = true
+  try {
+    await runMailConnectionTest('external', settings.value.user_external)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    testingUser.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   try {
@@ -299,6 +338,7 @@ async function saveInternal() {
   if (!settings.value) return
   savingInternal.value = true
   try {
+    await runMailConnectionTest('internal', settings.value.user_internal)
     const templates = saveableTemplates(userInternalTemplates.value)
     await saveUserInternalMailSettings({
       smtp_user: settings.value.user_internal.smtp_user,
@@ -322,6 +362,7 @@ async function saveUser() {
   if (!settings.value) return
   savingUser.value = true
   try {
+    await runMailConnectionTest('external', settings.value.user_external)
     const templates = saveableTemplates(userExternalTemplates.value)
     await saveUserExternalMailSettings({
       smtp_user: settings.value.user_external.smtp_user,
