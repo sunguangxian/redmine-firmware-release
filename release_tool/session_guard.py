@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Callable
 
@@ -10,9 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .api_app import SESSION_COOKIE, SESSIONS
-
-SESSION_TTL_SECONDS = int(os.environ.get("RELEASE_TOOL_SESSION_TTL_SECONDS", "28800"))  # 默认 8 小时
-SESSION_IDLE_SECONDS = int(os.environ.get("RELEASE_TOOL_SESSION_IDLE_SECONDS", "7200"))  # 默认空闲 2 小时
+from .session_config import SESSION_IDLE_SECONDS, SESSION_TTL_SECONDS
 
 
 def _expired(session: dict, now: float) -> bool:
