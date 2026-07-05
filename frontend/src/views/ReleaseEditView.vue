@@ -254,7 +254,7 @@ async function loadHistories() {
   if (!projectId.value || !selectedWikiTitle.value) return
   const [publishData, mailData] = await Promise.all([
     getPublishHistory({ project_id: projectId.value, wiki_title: selectedWikiTitle.value, limit: 20 }),
-    getMailHistory({ project_id: projectId.value, wiki_title: selectedWikiTitle.value, limit: 20 })
+    getMailHistory({ project_id: projectId.value, wiki_title: selectedWikiTitle.value, version_name: form.version_name, limit: 20 })
   ])
   publishHistory.value = publishData.items
   mailHistory.value = mailData.items
