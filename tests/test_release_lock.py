@@ -30,11 +30,14 @@ class ReleaseLockTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "release_tool.config_store.PROJECT_ROOT", Path(temp_dir)
         ):
-            with acquire_publish_lock("demo:V1", owner="owner-a", wait_seconds=0, ttl_seconds=1):
-                pass
-
-            with acquire_publish_lock("demo:V1", owner="owner-b", wait_seconds=0, ttl_seconds=1) as owner:
-                self.assertEqual(owner, "owner-b")
+            context = acquire_publish_lock("demo:V1", owner="owner-a", wait_seconds=0, ttl_seconds=1)
+            context.__enter__()
+            try:
+                with patch("release_tool.release_lock.time.time", return_value=9999999999.0):
+                    with acquire_publish_lock("demo:V1", owner="owner-b", wait_seconds=0, ttl_seconds=1) as owner:
+                        self.assertEqual(owner, "owner-b")
+            finally:
+                context.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
