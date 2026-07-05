@@ -1,13 +1,12 @@
 """FastAPI 应用共享入口。
 
-本模块只保留全局 app、公共导出、邮件/发布 helper 和前端挂载。
+本模块只保留全局 app、公共导出、邮件 helper 和前端挂载。
 具体业务接口由 app_factory 统一注册到独立 *_api 模块。
 """
 
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -41,8 +40,8 @@ from .dependencies import (
 from .email_sender import EmailSendError, EmailSettings, send_release_email, split_emails
 from .legacy_job_store import append_legacy_job_log, legacy_job_snapshot, update_legacy_job
 from .mail_history import record_mail_send
-from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
+from .release_helpers import RECENT_RELEASE_LIMIT, list_release_rows, validate_release_preflight
 from .release_page import parse_inline_ref
 from .schemas import (
     AdminMailSettingsRequest,
@@ -57,7 +56,6 @@ from .schemas import (
 )
 
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
-RECENT_RELEASE_LIMIT = 50
 
 app = FastAPI(title="Redmine Firmware Release API")
 app.add_middleware(
@@ -70,10 +68,7 @@ app.add_middleware(
 
 
 def _list_release_rows(client: RedmineClient, project_id: str, product_line: str = "") -> List[Dict[str, Any]]:
-    releases = ReleasePublisher(client).list_releases(project_id)
-    if product_line:
-        releases = [item for item in releases if item.get("product_line") == product_line]
-    return releases[:RECENT_RELEASE_LIMIT]
+    return list_release_rows(client, project_id, product_line)
 
 
 def _contact_people(emails: List[str]) -> List[Dict[str, str]]:
@@ -196,20 +191,7 @@ def _validate_release_preflight(
     commit: str,
     changelog_items: List[str],
 ) -> None:
-    if not project_id.strip():
-        raise ValueError("请选择项目")
-    if not version_name.strip():
-        raise ValueError("请填写版本号")
-    if not release_date.strip():
-        raise ValueError("请选择发布日期")
-    try:
-        datetime.strptime(release_date.strip(), "%Y-%m-%d")
-    except ValueError as exc:
-        raise ValueError("发布日期格式必须是 YYYY-MM-DD") from exc
-    if not commit.strip():
-        raise ValueError("请填写 Commit")
-    if not changelog_items:
-        raise ValueError("请填写至少一条变更说明")
+    validate_release_preflight(project_id, version_name, release_date, commit, changelog_items)
 
 
 def _validate_notice_preflight(
