@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
+from fastapi import HTTPException
+
 from .email_sender import EmailSendError, split_emails
 from .mail_contact_helpers import normalize_mail_scope
 
@@ -15,7 +17,11 @@ def validate_notice_fields(
     mail_subject: str,
     mail_body: str,
 ) -> Tuple[str, List[str], List[str]]:
-    scope = normalize_mail_scope(mail_scope)
+    try:
+        scope = normalize_mail_scope(mail_scope)
+    except HTTPException as exc:
+        raise EmailSendError(str(exc.detail)) from exc
+
     to_addrs = split_emails(mail_to)
     cc_addrs = split_emails(mail_cc)
     if not to_addrs:
