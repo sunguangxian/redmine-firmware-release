@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from urllib.parse import quote, unquote
 
 PRODUCT_LINES = {
     "常规版本 (5X)": {"key": "Regular", "np500": False},
@@ -11,6 +12,10 @@ PRODUCT_LINES = {
     "Record 录音": {"key": "Record", "np500": False},
     "NP500": {"key": "NP500", "np500": True},
 }
+
+INLINE_REF_PREFIX = "INLINE::"
+INLINE_BEGIN_PREFIX = "<!-- RELEASE_INLINE_BEGIN:"
+INLINE_END_PREFIX = "<!-- RELEASE_INLINE_END:"
 
 
 @dataclass
@@ -53,10 +58,36 @@ class ReleaseForm:
 
 def proj_tag_from_project(project_id: str, page_title: str | None = None) -> str:
     if page_title:
+        inline_ref = parse_inline_ref(page_title)
+        if inline_ref:
+            return project_id.upper()
         match = re.match(r"^Release_([A-Za-z0-9_+-]+?)(?:_NP500)?_FW_", page_title, re.I)
         if match:
             return match.group(1).upper()
     return project_id.upper()
+
+
+def inline_ref(container_page: str, version_name: str) -> str:
+    return f"{INLINE_REF_PREFIX}{quote(container_page or '', safe='')}::{quote(version_name or '', safe='')}"
+
+
+def parse_inline_ref(value: str | None) -> tuple[str, str] | None:
+    text = value or ""
+    if not text.startswith(INLINE_REF_PREFIX):
+        return None
+    rest = text[len(INLINE_REF_PREFIX):]
+    parts = rest.split("::", 1)
+    if len(parts) != 2:
+        return None
+    page = unquote(parts[0]).strip()
+    version = unquote(parts[1]).strip()
+    if not page or not version:
+        return None
+    return page, version
+
+
+def release_anchor(version_name: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "-", (version_name or "").strip().lower()).strip("-") or "release"
 
 
 def build_release_markdown(
@@ -69,12 +100,93 @@ def build_release_markdown(
     title_suffix = (
         f"NP500 FW {form.version_name}" if meta["np500"] else f"FW {form.version_name}"
     )
+    return (
+        f"# Release {form.proj_tag} {title_suffix}\n\n"
+        f"{_release_body_markdown(form, version_id, linked_files)}\n\n"
+        f"[[{(main_page or 'Release_Notes').strip() or 'Release_Notes'}|← 返回 Release Notes]]"
+    )
+
+
+def build_inline_release_block(
+    form: ReleaseForm,
+    version_id: int | None,
+    linked_files: list[dict[str, str | None]],
+    source_page: str = "",
+) -> str:
+    version = form.version_name.strip()
+    source = f"\n\n## 迁移来源\n\n- [[{source_page}]]" if source_page else ""
+    return (
+        f"{INLINE_BEGIN_PREFIX}{version} -->\n"
+        f"## {version} ({form.release_date})\n\n"
+        f"{_release_body_markdown(form, version_id, linked_files)}"
+        f"{source}\n"
+        f"{INLINE_END_PREFIX}{version} -->"
+    )
+
+
+def replace_inline_release_block(page_text: str, version_name: str, block: str) -> str:
+    text = page_text or ""
+    version = (version_name or "").strip()
+    pattern = re.compile(
+        rf"{re.escape(INLINE_BEGIN_PREFIX)}{re.escape(version)}\s*-->.*?{re.escape(INLINE_END_PREFIX)}{re.escape(version)}\s*-->",
+        re.S,
+    )
+    if pattern.search(text):
+        return pattern.sub(block, text, count=1)
+    base = text.rstrip()
+    if not base:
+        base = "# Release Notes\n\n固件版本发布记录。"
+    if "## 版本列表" not in base and "<!-- RELEASE_INLINE_BEGIN:" not in base:
+        base += "\n\n## 版本列表"
+    return base.rstrip() + "\n\n" + block + "\n"
+
+
+def extract_inline_release_block(page_text: str, version_name: str) -> str:
+    version = (version_name or "").strip()
+    pattern = re.compile(
+        rf"{re.escape(INLINE_BEGIN_PREFIX)}{re.escape(version)}\s*-->(.*?){re.escape(INLINE_END_PREFIX)}{re.escape(version)}\s*-->",
+        re.S,
+    )
+    match = pattern.search(page_text or "")
+    return match.group(1).strip() if match else ""
+
+
+def parse_inline_releases(page_text: str, container_page: str) -> list[dict]:
+    result: list[dict] = []
+    pattern = re.compile(
+        rf"{re.escape(INLINE_BEGIN_PREFIX)}(?P<version>.*?)\s*-->(?P<body>.*?){re.escape(INLINE_END_PREFIX)}(?P=version)\s*-->",
+        re.S,
+    )
+    for match in pattern.finditer(page_text or ""):
+        version = match.group("version").strip()
+        body = match.group("body").strip()
+        parsed = parse_release_page(inline_ref(container_page, version), body)
+        if not parsed.get("version_name"):
+            parsed["version_name"] = version
+        result.append(
+            {
+                "title": inline_ref(container_page, parsed.get("version_name") or version),
+                "container_page": container_page,
+                "version": parsed.get("version_name") or version,
+                "date": parsed.get("release_date") or "0000-01-01",
+                "product_line": parsed.get("product_line") or "",
+                "summary": (parsed.get("changelog", "").splitlines() or [""])[0],
+                "text": body,
+                "files": parsed.get("files", []),
+            }
+        )
+    return result
+
+
+def _release_body_markdown(
+    form: ReleaseForm,
+    version_id: int | None,
+    linked_files: list[dict[str, str | None]],
+) -> str:
     changes = "\n".join(f"1. {item}" for item in form.changelog_items) or "（见历史 changelog）"
     ver_link = f"/versions/{version_id}" if version_id else f"/projects/{form.project_id}/roadmap"
     files_link = f"/projects/{form.project_id}/files"
     product_line_block = f"**产品线:** {form.product_line}\n\n" if form.product_line.strip() else ""
-    return_page = (main_page or "Release_Notes").strip() or "Release_Notes"
-
     rows = []
     for item in linked_files:
         name = item.get("filename") or ""
@@ -86,9 +198,7 @@ def build_release_markdown(
         rows.append(f"| {cell} | {desc} |")
     if not rows:
         rows.append("| （无） | |")
-
     return (
-        f"# Release {form.proj_tag} {title_suffix}\n\n"
         f"{product_line_block}"
         f"**日期:** {form.release_date}\n"
         f"**Commit:** {form.commit}\n\n"
@@ -99,8 +209,7 @@ def build_release_markdown(
         f"下载: [版本 {form.version_name}]({ver_link}) | [项目文件]({files_link})\n\n"
         f"| 文件名 | 说明 |\n"
         f"|--------|------|\n"
-        f"{chr(10).join(rows)}\n\n"
-        f"[[{return_page}|← 返回 Release Notes]]"
+        f"{chr(10).join(rows)}"
     )
 
 
@@ -174,12 +283,19 @@ def format_release_files(files: list[dict[str, str | None]]) -> str:
 
 def parse_release_page(title: str, text: str) -> dict:
     version_match = re.search(r"# Release \S+(?: NP500)? FW ([^\r\n]+)", text, re.I)
+    if not version_match:
+        version_match = re.search(r"^##\s+([^\s(]+)\s*\((\d{4}-\d{2}-\d{2})\)", text, re.I | re.M)
     version_name = version_match.group(1).strip() if version_match else ""
+    inline = parse_inline_ref(title)
+    if not version_name and inline:
+        version_name = inline[1]
     if not version_name and "_FW_" in title:
         suffix = title.split("_FW_", 1)[1]
         version_name = "V" + suffix.replace("_", ".").lstrip("Vv")
 
     date_match = re.search(r"\*\*日期:\*\*\s*(\d{4}-\d{2}-\d{2})", text)
+    if not date_match:
+        date_match = re.search(r"^##\s+[^\s(]+\s*\((\d{4}-\d{2}-\d{2})\)", text, re.M)
     release_date = date_match.group(1) if date_match else ""
 
     commit_match = re.search(r"\*\*Commit:\*\*\s*([^\r\n]+)", text)
