@@ -71,6 +71,7 @@ class ReleasePublisher:
                 self._log(logs, f"按项目配置生成 Release 页面：{generated_title}")
             version_name = self._configured_version_name(form, index_sync, profile)
             version = self._get_or_create_version(form, logs, version_name=version_name)
+            self._progress(progress, "release", "success")
         except Exception:
             self._progress(progress, "release", "failed")
             raise
