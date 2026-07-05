@@ -68,7 +68,7 @@ class ReleasePublisher:
         )
         self._log(logs, f"附件列表合并完成：最终 {len(linked_files)} 个")
 
-        markdown = build_release_markdown(form, version["id"], linked_files)
+        markdown = build_release_markdown(form, version["id"], linked_files, main_page=profile.main_page)
 
         comment = "release tool update" if existing else "release tool create"
         self.client.put_wiki_page(form.project_id, title, markdown, comment)
