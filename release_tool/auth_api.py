@@ -8,11 +8,10 @@ from typing import Any, Dict
 
 from fastapi import Depends, FastAPI, Request, Response
 
-from .api_app import (
+from .config_store import clear_local_credentials, default_base_url, store_login
+from .dependencies import (
     SESSION_COOKIE,
     SESSION_STORE,
-    LoginRequest,
-    LoginResponse,
     _current_client,
     _current_session,
     _json_error,
@@ -20,8 +19,8 @@ from .api_app import (
     _user_key,
     _visible_projects_for_user,
 )
-from .config_store import clear_local_credentials, default_base_url, store_login
 from .redmine_api import RedmineClient
+from .schemas import LoginRequest, LoginResponse
 from .session_config import SESSION_COOKIE_SAMESITE, SESSION_COOKIE_SECURE, session_cookie_max_age
 
 
