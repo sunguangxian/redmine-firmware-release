@@ -22,8 +22,10 @@ def _wrap_send(original: Callable[..., str], *, send_type: str) -> Callable[...,
         mail_subject = (kwargs.get("mail_subject") or "").strip()
         file_rows = kwargs.get("file_rows") or []
         sender_user = session.get("user_login", "")
+        original_kwargs = dict(kwargs)
+        original_kwargs.pop("version_name", None)
         try:
-            message = original(**kwargs)
+            message = original(**original_kwargs)
             record_mail_send(
                 project_id=project_id,
                 wiki_title=wiki_title,
