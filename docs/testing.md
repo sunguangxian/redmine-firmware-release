@@ -1,18 +1,34 @@
 # 测试与基础验证
 
-当前项目先使用 Python 标准库 `unittest` 编写后端核心逻辑测试，避免额外引入测试依赖。
+当前项目先使用 Python 标准库 `unittest` 编写后端核心逻辑测试，避免额外引入测试依赖。前端使用 `vue-tsc` 和 Vite 构建做基础类型检查。
 
-## 运行语法检查
+## 运行后端语法检查
 
 ```bash
 python -m compileall release_tool tests
 ```
 
-## 运行单元测试
+## 运行后端单元测试
 
 ```bash
 python -m unittest discover -s tests
 ```
+
+## 运行前端构建检查
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+## GitHub Actions
+
+`.github/workflows/backend-tests.yml` 会在 push 到 `main` 或 PR 到 `main` 时自动执行：
+
+- 后端 `compileall`。
+- 后端 `unittest`。
+- 前端 `npm run build`。
 
 ## 建议重点验证场景
 
@@ -26,6 +42,7 @@ python -m unittest discover -s tests
 8. Redmine 项目文件超过一页时，同名附件检查应覆盖全部文件，而不是只检查第一页。
 9. 发布历史接口应返回中文状态标签，例如 `release_status_label`、`status_summary`、`recover_actions`。
 10. 登录响应 Cookie 应包含 `HttpOnly`、`Max-Age`、`SameSite`，HTTPS 部署时可通过环境变量启用 `Secure`。
+11. 版本操作记录页面应显示中文状态，并在可恢复记录上显示“重建索引 / 继续发布”按钮。
 
 ## 发布状态字段含义
 
