@@ -14,15 +14,26 @@
         <el-table-column prop="version_name" label="版本" width="140" />
         <el-table-column prop="wiki_title" label="Wiki" min-width="220" />
         <el-table-column prop="action" label="操作" width="110" />
-        <el-table-column prop="release_status" label="发布" width="90" />
-        <el-table-column prop="file_status" label="附件" width="90" />
-        <el-table-column prop="wiki_status" label="Wiki" width="90" />
-        <el-table-column prop="index_status" label="索引" width="90" />
-        <el-table-column prop="mail_status" label="邮件" width="90" />
+        <el-table-column label="发布" width="90"><template #default="scope">{{ statusLabel(scope.row, 'release_status') }}</template></el-table-column>
+        <el-table-column label="附件" width="90"><template #default="scope">{{ statusLabel(scope.row, 'file_status') }}</template></el-table-column>
+        <el-table-column label="Wiki" width="90"><template #default="scope">{{ statusLabel(scope.row, 'wiki_status') }}</template></el-table-column>
+        <el-table-column label="索引" width="90"><template #default="scope">{{ statusLabel(scope.row, 'index_status') }}</template></el-table-column>
+        <el-table-column label="邮件" width="90"><template #default="scope">{{ statusLabel(scope.row, 'mail_status') }}</template></el-table-column>
+        <el-table-column prop="status_summary" label="状态摘要" min-width="260" show-overflow-tooltip />
+        <el-table-column prop="error_message" label="错误" min-width="220" show-overflow-tooltip />
         <el-table-column label="恢复" width="220" fixed="right">
           <template #default="scope">
-            <el-button size="small" :loading="recoveringId === scope.row.id" @click="recover(scope.row.id, 'rebuild_index')">重建索引</el-button>
-            <el-button size="small" type="warning" :loading="recoveringId === scope.row.id" @click="recover(scope.row.id, 'continue')">继续</el-button>
+            <template v-if="(scope.row.recover_actions || []).length">
+              <el-button
+                v-for="action in scope.row.recover_actions"
+                :key="action.action"
+                size="small"
+                :type="action.action === 'continue' ? 'warning' : 'primary'"
+                :loading="recoveringId === scope.row.id && recoveringAction === action.action"
+                @click="recover(scope.row, action.action)"
+              >{{ action.label }}</el-button>
+            </template>
+            <span v-else>-</span>
           </template>
         </el-table-column>
       </el-table>
@@ -46,6 +57,7 @@ const wikiTitle = ref('')
 const items = ref<PublishHistoryItem[]>([])
 const loading = ref(false)
 const recoveringId = ref<number | null>(null)
+const recoveringAction = ref('')
 const logs = ref<string[]>([])
 const logDialogVisible = ref(false)
 
@@ -63,11 +75,17 @@ async function loadHistory() {
   }
 }
 
-async function recover(id: number, action: 'rebuild_index' | 'continue') {
-  recoveringId.value = id
+function statusLabel(row: PublishHistoryItem, field: 'release_status' | 'file_status' | 'wiki_status' | 'index_status' | 'mail_status'): string {
+  const record = row as unknown as Record<string, unknown>
+  return String(record[`${field}_label`] || record[field] || '')
+}
+
+async function recover(row: PublishHistoryItem, action: 'rebuild_index' | 'continue') {
+  recoveringId.value = row.id
+  recoveringAction.value = action
   logs.value = []
   try {
-    const result = await recoverPublishHistory(id, action)
+    const result = await recoverPublishHistory(row.id, action)
     logs.value = result.logs || []
     logDialogVisible.value = true
     ElMessage.success(result.message)
@@ -80,6 +98,7 @@ async function recover(id: number, action: 'rebuild_index' | 'continue') {
     ElMessage.error(message)
   } finally {
     recoveringId.value = null
+    recoveringAction.value = ''
   }
 }
 

@@ -32,14 +32,24 @@ def _ensure_table(conn) -> None:
     )
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_mail_send_history_lookup
-            ON mail_send_history(project_id, wiki_title, created_at)
+        DROP INDEX IF EXISTS idx_mail_send_history_lookup
         """
     )
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_mail_send_history_version_lookup
-            ON mail_send_history(project_id, wiki_title, version_name, created_at)
+        DROP INDEX IF EXISTS idx_mail_send_history_version_lookup
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_mail_send_history_recent_lookup
+            ON mail_send_history(project_id, wiki_title, id DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_mail_send_history_version_recent_lookup
+            ON mail_send_history(project_id, wiki_title, version_name, id DESC)
         """
     )
 

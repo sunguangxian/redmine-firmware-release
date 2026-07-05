@@ -1,5 +1,10 @@
+import sqlite3
+import tempfile
 import unittest
+from contextlib import contextmanager
+from unittest.mock import patch
 
+from release_tool import mail_history, release_publish_history
 from release_tool.inline_release_patch import _format_release_lines_inline_aware, _next_block_id
 from release_tool.mail_history import _wiki_title_candidates as mail_title_candidates
 from release_tool.release_page import (
@@ -83,6 +88,81 @@ class InlineReleaseRegressionTest(unittest.TestCase):
         self.assertIn(title, candidates)
         # 查询接口会额外带 version_name，避免同一承载页下多个版本的历史混在一起。
         self.assertEqual(len(candidates), 2)
+
+    def test_inline_history_queries_filter_container_records_by_version(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_file = f"{tmpdir}/history.db"
+
+            @contextmanager
+            def temp_db():
+                conn = sqlite3.connect(db_file)
+                conn.row_factory = sqlite3.Row
+                try:
+                    yield conn
+                    conn.commit()
+                finally:
+                    conn.close()
+
+            with patch("release_tool.mail_history.db", temp_db), patch("release_tool.release_publish_history.db", temp_db):
+                first_publish_id = release_publish_history.create_publish_history(
+                    project_id="dp580",
+                    version_name="V1.0.0",
+                    action="发布",
+                )
+                release_publish_history.update_publish_history(first_publish_id, wiki_title="Release_Notes_DM181")
+                second_publish_id = release_publish_history.create_publish_history(
+                    project_id="dp580",
+                    version_name="V1.0.1",
+                    action="发布",
+                )
+                release_publish_history.update_publish_history(second_publish_id, wiki_title="Release_Notes_DM181")
+                mail_history.record_mail_send(
+                    project_id="dp580",
+                    wiki_title="Release_Notes_DM181",
+                    version_name="V1.0.0",
+                    scope="internal",
+                    subject="V1.0.0",
+                    to_addrs=["a@example.com"],
+                    cc_addrs=[],
+                    attachment_count=0,
+                    sender_user="tester",
+                    status="success",
+                )
+                mail_history.record_mail_send(
+                    project_id="dp580",
+                    wiki_title="Release_Notes_DM181",
+                    version_name="V1.0.1",
+                    scope="internal",
+                    subject="V1.0.1",
+                    to_addrs=["b@example.com"],
+                    cc_addrs=[],
+                    attachment_count=0,
+                    sender_user="tester",
+                    status="success",
+                )
+
+                inline_title = inline_ref("Release_Notes_DM181", "Release_DM181_FW_V1_0_0")
+                publish_rows = release_publish_history.list_publish_history(
+                    project_id="dp580",
+                    wiki_title=inline_title,
+                    version_name="V1.0.0",
+                )
+                mail_rows = mail_history.list_mail_history(
+                    project_id="dp580",
+                    wiki_title=inline_title,
+                    version_name="V1.0.0",
+                )
+
+            self.assertEqual([row["version_name"] for row in publish_rows], ["V1.0.0"])
+            self.assertEqual([row["subject"] for row in mail_rows], ["V1.0.0"])
+
+            conn = sqlite3.connect(db_file)
+            try:
+                index_names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+            finally:
+                conn.close()
+            self.assertIn("idx_release_publish_history_version_recent_lookup", index_names)
+            self.assertIn("idx_mail_send_history_version_recent_lookup", index_names)
 
 
 if __name__ == "__main__":

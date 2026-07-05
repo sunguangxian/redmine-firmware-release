@@ -54,14 +54,24 @@ def _ensure_table(conn) -> None:
         conn.execute("ALTER TABLE release_publish_history ADD COLUMN form_payload TEXT NOT NULL DEFAULT '{}'")
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_release_publish_history_lookup
-            ON release_publish_history(project_id, wiki_title, created_at)
+        DROP INDEX IF EXISTS idx_release_publish_history_lookup
         """
     )
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_release_publish_history_version_lookup
-            ON release_publish_history(project_id, wiki_title, version_name, created_at)
+        DROP INDEX IF EXISTS idx_release_publish_history_version_lookup
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_release_publish_history_recent_lookup
+            ON release_publish_history(project_id, wiki_title, id DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_release_publish_history_version_recent_lookup
+            ON release_publish_history(project_id, wiki_title, version_name, id DESC)
         """
     )
 

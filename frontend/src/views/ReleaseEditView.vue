@@ -261,6 +261,14 @@ async function loadHistories() {
   mailHistory.value = mailData.items
 }
 
+async function loadHistoriesQuietly() {
+  try {
+    await loadHistories()
+  } catch (error) {
+    ElMessage.warning(`历史记录刷新失败：${errorMessage(error)}`)
+  }
+}
+
 async function loadContacts() {
   try {
     const data = await getContacts(mailScope.value)
@@ -400,7 +408,7 @@ async function publish() {
     selectedWikiTitle.value = result.title
     canRetryNotice.value = noticeEnabled.value && result.mail_status === 'failed'
     status.value = [`更新完成：${result.title}`, result.result_summary, result.notice_message].filter(Boolean).join('\n')
-    await loadHistories()
+    await loadHistoriesQuietly()
     ElMessage.success('更新流程完成')
   } catch (error) {
     const message = errorMessage(error)
@@ -422,7 +430,7 @@ async function retryNotice() {
     logs.value = result.logs || []
     status.value = `${status.value}\n邮件重发：成功，${result.message}`
     canRetryNotice.value = false
-    await loadHistories()
+    await loadHistoriesQuietly()
     ElMessage.success('邮件重发成功')
   } catch (error) {
     const message = errorMessage(error)
@@ -445,7 +453,7 @@ async function recoverHistory(row: PublishHistoryItem, action: 'rebuild_index' |
     const result = await recoverPublishHistory(row.id, action)
     logs.value = result.logs || []
     status.value = result.message
-    await loadHistories()
+    await loadHistoriesQuietly()
     if (action === 'continue') await loadReleases()
     ElMessage.success(result.message)
   } catch (error) {

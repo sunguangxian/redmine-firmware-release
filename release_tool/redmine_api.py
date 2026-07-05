@@ -212,8 +212,10 @@ class RedmineClient:
             total = data.get("total_count")
             if total is None:
                 break
+            if not batch:
+                break
             offset += limit
-            if offset >= int(total or 0):
+            if len(files) >= int(total or 0):
                 break
         return files
 
