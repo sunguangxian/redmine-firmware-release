@@ -13,11 +13,11 @@ from .api_app import (
     _mail_scope_label,
     _send_release_notice,
     _validate_notice_preflight,
-    _validate_release_preflight,
 )
 from .dependencies import _current_client, _current_session
 from .email_sender import EmailSendError
 from .redmine_api import RedmineClient, RedmineError
+from .release_helpers import validate_release_preflight
 from .release_planner import ReleasePlanner
 from .release_page import ReleaseForm, proj_tag_from_project
 
@@ -110,7 +110,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         logs: List[str] = []
         items = _split_changelog(changelog)
         try:
-            _validate_release_preflight(project_id, version_name, release_date, commit, items)
+            validate_release_preflight(project_id, version_name, release_date, commit, items)
             logs.append("基础字段预检查通过")
             if notice_enabled:
                 notice_scope, notice_to_addrs, notice_cc_addrs = _validate_notice_preflight(
@@ -173,7 +173,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         logs: List[str] = []
         items = _split_changelog(changelog)
         try:
-            _validate_release_preflight(project_id, version_name, release_date, commit, items)
+            validate_release_preflight(project_id, version_name, release_date, commit, items)
             if notice_enabled:
                 notice_scope, notice_to_addrs, notice_cc_addrs = _validate_notice_preflight(
                     session, mail_scope, mail_to, mail_cc, mail_subject, mail_body
