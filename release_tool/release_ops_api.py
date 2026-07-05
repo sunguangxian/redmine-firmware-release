@@ -9,13 +9,11 @@ from fastapi.responses import JSONResponse
 
 from .access_control import require_project_access
 from .attachment_policy import sha256_hex
-from .api_app import (
-    _mail_scope_label,
-    _send_release_notice,
-    _validate_notice_preflight,
-)
 from .dependencies import _current_client, _current_session
 from .email_sender import EmailSendError
+from .mail_contact_helpers import mail_scope_label as _mail_scope_label
+from .mail_delivery_helpers import send_release_notice as _send_release_notice
+from .mail_delivery_helpers import validate_notice_preflight as _validate_notice_preflight
 from .redmine_api import RedmineClient, RedmineError
 from .release_helpers import validate_release_preflight
 from .release_planner import ReleasePlanner
