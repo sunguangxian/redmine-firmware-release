@@ -7,7 +7,8 @@ from typing import Any, Dict, List
 from fastapi import Depends, FastAPI, Query
 
 from .access_control import require_project_access
-from .api_app import RECENT_RELEASE_LIMIT, _current_client, _current_session, _json_error
+from .api_app import RECENT_RELEASE_LIMIT
+from .dependencies import _current_client, _current_session, _json_error
 from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
