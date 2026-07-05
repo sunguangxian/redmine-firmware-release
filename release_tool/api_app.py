@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -48,6 +48,7 @@ from .mail_contact_helpers import (
     normalize_mail_scope,
 )
 from .mail_history import record_mail_send
+from .mail_notice_helpers import validate_notice_fields
 from .redmine_api import RedmineClient, RedmineError
 from .release_helpers import RECENT_RELEASE_LIMIT, list_release_rows, validate_release_preflight
 from .release_page import parse_inline_ref
@@ -175,25 +176,12 @@ def _validate_notice_preflight(
     mail_subject: str,
     mail_body: str,
 ) -> Tuple[str, List[str], List[str]]:
-    try:
-        scope = _normalize_mail_scope(mail_scope)
-    except HTTPException as exc:
-        raise EmailSendError(str(exc.detail)) from exc
-
+    scope, to_addrs, cc_addrs = validate_notice_fields(mail_scope, mail_to, mail_cc, mail_subject, mail_body)
     settings, _allowed_to, _allowed_cc = _build_email_settings(session, scope)
     if not settings.smtp_host:
         raise EmailSendError("请先填写 SMTP 服务器")
     if not settings.smtp_from:
         raise EmailSendError("请先填写发件人邮箱")
-
-    to_addrs = split_emails(mail_to)
-    cc_addrs = split_emails(mail_cc)
-    if not to_addrs:
-        raise EmailSendError("请填写或选择至少一个收件人")
-    if not (mail_subject or "").strip():
-        raise EmailSendError("请先生成或填写邮件主题")
-    if not (mail_body or "").strip():
-        raise EmailSendError("请先生成或填写邮件正文")
     return scope, to_addrs, cc_addrs
 
 
