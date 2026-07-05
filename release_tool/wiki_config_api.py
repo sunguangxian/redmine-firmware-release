@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
-from .api_app import _current_client, _current_session, _json_error, _require_admin
 from .audit_log import record_audit
+from .dependencies import _current_client, _current_session, _json_error, _require_admin
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient
 from .wiki_config import CONFIG_PAGE_TITLE
