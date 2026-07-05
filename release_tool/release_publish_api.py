@@ -47,7 +47,30 @@ def _mail_status_label(status: str) -> str:
         return "成功"
     if status == "failed":
         return "失败，可重试"
+    if status == "running":
+        return "发送中"
     return "未启用"
+
+
+def _publish_stage_field(stage: str) -> str:
+    mapping = {
+        "release": "release_status",
+        "file": "file_status",
+        "wiki": "wiki_status",
+        "index": "index_status",
+        "mail": "mail_status",
+    }
+    return mapping.get(stage, "")
+
+
+def _make_publish_progress(history_id: int, logs: List[str]):
+    def progress(stage: str, status: str) -> None:
+        field = _publish_stage_field(stage)
+        if not field:
+            return
+        update_publish_history(history_id, **{field: status}, logs=logs)
+
+    return progress
 
 
 async def _read_upload_files(files: Optional[List[UploadFile]]) -> List[Tuple[str, str, bytes]]:
@@ -127,6 +150,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
             has_files=bool(file_rows),
         )
         history_id = create_publish_history(project_id=project_id, version_name=version_name, action=action, logs=logs, form_payload=payload)
+        progress = _make_publish_progress(history_id, logs)
         notice_scope = ""
         notice_to_addrs: List[str] = []
         notice_cc_addrs: List[str] = []
@@ -146,7 +170,16 @@ def register_release_publish_routes(app: FastAPI) -> None:
                 logs.append("邮件通知未启用，跳过邮件预检查")
         except (ValueError, EmailSendError) as exc:
             logs.append(f"预检查失败：{exc}")
-            update_publish_history(history_id, release_status="failed", file_status="failed", wiki_status="failed", index_status="failed", mail_status="skipped", error_message=str(exc), logs=logs)
+            update_publish_history(
+                history_id,
+                release_status="failed",
+                file_status="skipped",
+                wiki_status="skipped",
+                index_status="skipped",
+                mail_status="failed" if notice_enabled else "skipped",
+                error_message=str(exc),
+                logs=logs,
+            )
             return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
 
         logs.append(f"附件读取完成：{len(file_rows)} 个有效附件")
@@ -164,24 +197,36 @@ def register_release_publish_routes(app: FastAPI) -> None:
         )
 
         try:
-            title = ReleasePublisher(client).publish(form, logs)
-            update_publish_history(history_id, wiki_title=title, release_status="success", file_status="success", wiki_status="success", index_status="success", logs=logs)
-        except RedmineError as exc:
+            title = ReleasePublisher(client).publish(form, logs, progress=progress)
+            update_publish_history(
+                history_id,
+                wiki_title=title,
+                release_status="success",
+                file_status="success" if file_rows else "skipped",
+                wiki_status="success",
+                index_status="success",
+                logs=logs,
+            )
+        except (RedmineError, ValueError) as exc:
             logs.append(f"{action}失败：{exc}")
-            update_publish_history(history_id, wiki_title=title, release_status="failed", file_status="unknown", wiki_status="unknown", index_status="unknown", mail_status="skipped", error_message=str(exc), logs=logs)
+            update_publish_history(history_id, wiki_title=title, mail_status="skipped", error_message=str(exc), logs=logs)
             return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
 
         if notice_enabled:
             try:
+                mail_status = "running"
+                update_publish_history(history_id, mail_status=mail_status, logs=logs)
                 logs.append(f"邮件通知已启用：{_mail_scope_label(notice_scope)}，收件人 {len(notice_to_addrs)} 个，抄送 {len(notice_cc_addrs)} 个")
                 notice_message = _send_release_notice(session=session, client=client, project_id=project_id, wiki_title=title, version_name=version_name.strip(), file_rows=file_rows, mail_scope=notice_scope, mail_to=notice_to_addrs, mail_cc=notice_cc_addrs, mail_subject=mail_subject, mail_body=mail_body)
                 mail_status = "success"
                 notice_message = f"邮件发送：成功，{notice_message}"
                 logs.append(notice_message)
+                update_publish_history(history_id, mail_status=mail_status, logs=logs)
             except EmailSendError as exc:
                 mail_status = "failed"
                 notice_message = f"邮件发送失败：{exc}"
                 logs.append(notice_message)
+                update_publish_history(history_id, mail_status=mail_status, error_message=str(exc), logs=logs)
         else:
             logs.append("邮件通知未启用，跳过发送")
 
@@ -189,7 +234,23 @@ def register_release_publish_routes(app: FastAPI) -> None:
         logs.append(f"刷新版本列表完成：返回 {len(releases)} 条")
         logs.append(f"{action}完成：{title}")
         update_publish_history(history_id, wiki_title=title, form_payload={**payload, "edit_title": title}, mail_status=mail_status, logs=logs)
-        return {"ok": True, "title": title, "notice_message": notice_message, "releases": releases, "logs": logs, "publish_history_id": history_id, "release_status": "success", "release_status_label": "Redmine 发布成功", "file_status": "success", "wiki_status": "success", "index_status": "success", "mail_status": mail_status, "mail_status_label": f"邮件发送{_mail_status_label(mail_status)}", "result_summary": f"Redmine 发布：成功\n邮件发送：{_mail_status_label(mail_status)}"}
+        file_status = "success" if file_rows else "skipped"
+        return {
+            "ok": True,
+            "title": title,
+            "notice_message": notice_message,
+            "releases": releases,
+            "logs": logs,
+            "publish_history_id": history_id,
+            "release_status": "success",
+            "release_status_label": "Redmine 版本成功",
+            "file_status": file_status,
+            "wiki_status": "success",
+            "index_status": "success",
+            "mail_status": mail_status,
+            "mail_status_label": f"邮件发送{_mail_status_label(mail_status)}",
+            "result_summary": f"Redmine 发布：成功\n附件处理：{'成功' if file_rows else '未选择'}\n邮件发送：{_mail_status_label(mail_status)}",
+        }
 
     @app.get("/api/releases/publish-history")
     def api_publish_history(
@@ -223,8 +284,10 @@ def register_release_publish_routes(app: FastAPI) -> None:
         require_project_access(session, project_id)
         logs = list(item.get("logs") or [])
         action = (payload.action or "rebuild_index").strip()
+        progress = _make_publish_progress(history_id, logs)
         try:
             if action == "rebuild_index":
+                progress("index", "running")
                 count = IndexSync(client, project_id).refresh_all()
                 logs.append(f"恢复操作：重建版本索引完成，共处理 {count} 个 Release 页面")
                 update_publish_history(history_id, index_status="success", logs=logs, error_message="")
@@ -246,12 +309,14 @@ def register_release_publish_routes(app: FastAPI) -> None:
                     wiki_title=item.get("wiki_title") or form_payload.get("edit_title") or None,
                     replace_attachments=False,
                 )
-                title = ReleasePublisher(client).publish(form, logs)
+                title = ReleasePublisher(client).publish(form, logs, progress=progress)
                 logs.append(f"恢复操作：继续发布完成：{title}")
-                update_publish_history(history_id, wiki_title=title, release_status="success", file_status="success", wiki_status="success", index_status="success", logs=logs, error_message="")
+                update_publish_history(history_id, wiki_title=title, release_status="success", file_status="skipped", wiki_status="success", index_status="success", logs=logs, error_message="")
                 return {"ok": True, "message": f"继续发布完成：{title}", "logs": logs}
             raise RedmineError(f"不支持的恢复操作：{action}")
-        except RedmineError as exc:
+        except (RedmineError, ValueError) as exc:
+            if action == "rebuild_index":
+                update_publish_history(history_id, index_status="failed")
             logs.append(f"恢复操作失败：{exc}")
             update_publish_history(history_id, error_message=str(exc), logs=logs)
             return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
