@@ -13,14 +13,16 @@
       </div>
 
       <el-select v-model="selectedWikiTitle" placeholder="选择要编辑的版本" filterable style="width: 100%; margin-bottom: 12px" @change="loadDetail">
-        <el-option v-for="item in releases" :key="item.title" :label="`${item.version} - ${item.title}`" :value="item.title" />
+        <el-option v-for="item in releases" :key="item.title" :label="`${item.version} - ${item.display_title || item.title}`" :value="item.title" />
       </el-select>
 
       <el-table :data="releases" border height="220">
         <el-table-column prop="version" label="版本" width="160" />
         <el-table-column prop="date" label="日期" width="130" />
         <el-table-column prop="product_line" label="分类" width="160" />
-        <el-table-column prop="title" label="Wiki 页" min-width="240" />
+        <el-table-column label="Wiki 页" min-width="240">
+          <template #default="{ row }">{{ row.display_title || row.title }}</template>
+        </el-table-column>
         <el-table-column prop="summary" label="摘要" min-width="240" />
       </el-table>
     </el-card>

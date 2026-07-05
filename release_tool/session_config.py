@@ -22,7 +22,14 @@ def _bool_env(name: str, default: bool = False) -> bool:
 SESSION_TTL_SECONDS = _int_env("RELEASE_TOOL_SESSION_TTL_SECONDS", 28800)  # 默认 8 小时
 SESSION_IDLE_SECONDS = _int_env("RELEASE_TOOL_SESSION_IDLE_SECONDS", 7200)  # 默认空闲 2 小时
 SESSION_COOKIE_SECURE = _bool_env("RELEASE_TOOL_SESSION_COOKIE_SECURE", False)
-SESSION_COOKIE_SAMESITE = os.environ.get("RELEASE_TOOL_SESSION_COOKIE_SAMESITE", "lax").strip().lower() or "lax"
+
+
+def _samesite_env(name: str, default: str = "lax") -> str:
+    value = (os.environ.get(name, default) or default).strip().lower()
+    return value if value in {"lax", "strict", "none"} else default
+
+
+SESSION_COOKIE_SAMESITE = _samesite_env("RELEASE_TOOL_SESSION_COOKIE_SAMESITE")
 
 
 def session_cookie_max_age() -> int:

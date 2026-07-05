@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import os
+import time
 from typing import Any
 from urllib.parse import quote
 
@@ -14,6 +16,7 @@ class RedmineError(Exception):
 
 
 VERSION_DESCRIPTION_LIMIT = 255
+RETRY_STATUS_CODES = {502, 503, 504}
 
 
 def _limit_version_description(value: str) -> str:
@@ -46,14 +49,48 @@ class RedmineClient:
         else:
             self.session.auth = (username, password)
 
+    def _retry_count(self) -> int:
+        try:
+            return max(0, int(os.environ.get("RELEASE_TOOL_REDMINE_RETRIES", "2")))
+        except ValueError:
+            return 2
+
+    def _retry_methods(self) -> set[str]:
+        methods = {"GET", "PUT"}
+        configured = os.environ.get("RELEASE_TOOL_REDMINE_RETRY_METHODS", "")
+        if configured:
+            methods = {item.strip().upper() for item in configured.split(",") if item.strip()}
+        return methods
+
+    def _should_retry(self, method: str, path: str) -> bool:
+        method = method.upper()
+        if method == "POST" and path.endswith("/files.json"):
+            return False
+        return method in self._retry_methods()
+
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
-        try:
-            resp = self.session.request(method, self._url(path), timeout=60, **kwargs)
-        except requests.RequestException as exc:
-            raise RedmineError(f"Redmine {method} {path} 请求失败：{exc}") from exc
+        method = method.upper()
+        max_attempts = 1 + self._retry_count() if self._should_retry(method, path) else 1
+        last_error: requests.RequestException | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.session.request(method, self._url(path), timeout=60, **kwargs)
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < max_attempts:
+                    time.sleep(min(0.2 * attempt, 1.0))
+                    continue
+                raise RedmineError(f"Redmine {method} {path} 请求失败：{exc}") from exc
+
+            if resp.status_code in RETRY_STATUS_CODES and attempt < max_attempts:
+                time.sleep(min(0.2 * attempt, 1.0))
+                continue
+            break
+        else:
+            raise RedmineError(f"Redmine {method} {path} 请求失败：{last_error}")
 
         if resp.status_code == 401:
             raise RedmineError("登录失败：用户名密码或 API Key 错误，或无 API 访问权限")

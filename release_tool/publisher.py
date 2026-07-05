@@ -388,6 +388,9 @@ class ReleasePublisher:
                 rows.append(
                     {
                         "title": item["page"],
+                        "display_title": f"{item.get('container_page') or item['page']} / {item['ver']}",
+                        "container_page": item.get("container_page", ""),
+                        "block_id": item.get("block_id", ""),
                         "version": item["ver"],
                         "date": item["date"],
                         "product_line": item.get("product_line", ""),
@@ -409,6 +412,9 @@ class ReleasePublisher:
             releases.append(
                 {
                     "title": title,
+                    "display_title": title,
+                    "container_page": "",
+                    "block_id": "",
                     "version": parsed["version_name"],
                     "date": parsed["release_date"],
                     "product_line": parsed["product_line"],

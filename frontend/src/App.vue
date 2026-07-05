@@ -8,6 +8,7 @@
           <div class="muted">当前用户：{{ session.user_login }} / {{ session.is_admin ? '管理员' : '普通用户' }}</div>
         </div>
         <div style="flex: 1"></div>
+        <el-button @click="handleClearCredentials">清除本地凭据</el-button>
         <el-button @click="handleLogout">退出登录</el-button>
       </div>
     </el-card>
@@ -45,7 +46,7 @@ import PublishHistoryView from './views/PublishHistoryView.vue'
 import ReleaseEditView from './views/ReleaseEditView.vue'
 import ReleasePublishView from './views/ReleasePublishView.vue'
 import WikiConfigView from './views/WikiConfigView.vue'
-import { errorMessage, getMe, getMeta, logout } from './api/http'
+import { clearLocalCredentials, errorMessage, getMe, getMeta, logout } from './api/http'
 import type { MetaInfo, SessionInfo } from './types'
 
 const session = ref<SessionInfo | null>(null)
@@ -60,6 +61,12 @@ function handleLoggedIn(info: SessionInfo) {
 async function handleLogout() {
   await logout()
   session.value = null
+}
+
+async function handleClearCredentials() {
+  await clearLocalCredentials()
+  session.value = null
+  ElMessage.success('已清除本地保存的登录和邮件密码')
 }
 
 onMounted(async () => {

@@ -17,6 +17,7 @@ export async function getMeta(): Promise<MetaInfo> { const { data } = await http
 export async function login(payload: { auth_mode: string; username: string; password: string; api_key: string; remember: boolean }): Promise<SessionInfo> { const { data } = await http.post('/api/auth/login', payload); return data }
 export async function getMe(): Promise<SessionInfo> { const { data } = await http.get('/api/auth/me'); return data }
 export async function logout(): Promise<void> { await http.post('/api/auth/logout') }
+export async function clearLocalCredentials(): Promise<void> { await http.post('/api/auth/clear-local-credentials') }
 export async function listReleases(projectId: string, productLine = ''): Promise<ReleaseSummary[]> { const { data } = await http.get('/api/releases', { params: { project_id: projectId, product_line: productLine } }); return data }
 export async function getProjectReleaseCategories(projectId: string): Promise<ProjectReleaseCategories> { const { data } = await http.get(`/api/projects/${encodeURIComponent(projectId)}/release-categories`); return data }
 export async function getReleaseDetail(projectId: string, wikiTitle: string): Promise<ReleaseDetail> { const { data } = await http.get('/api/releases/detail', { params: { project_id: projectId, wiki_title: wikiTitle } }); return data }

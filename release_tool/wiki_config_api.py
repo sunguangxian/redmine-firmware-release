@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
 from .api_app import _current_client, _current_session, _json_error, _require_admin
+from .audit_log import record_audit
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient
 from .wiki_config import CONFIG_PAGE_TITLE
@@ -131,4 +132,11 @@ def register_wiki_config_routes(app: FastAPI) -> None:
         if not ok:
             raise _json_error(msg)
         client.put_wiki_page(project_id, CONFIG_PAGE_TITLE, payload.text, "release tool config update")
+        record_audit(
+            actor=session.get("user_login", ""),
+            action="wiki_config_updated",
+            target_type="wiki_config",
+            target_id=project_id,
+            details={"message": msg, "text_length": len(payload.text or "")},
+        )
         return {"message": f"已保存到 {CONFIG_PAGE_TITLE}。{msg}"}

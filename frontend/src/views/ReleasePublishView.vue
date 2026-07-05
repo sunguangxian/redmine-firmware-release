@@ -16,7 +16,9 @@
         <el-table-column prop="version" label="版本" width="160" />
         <el-table-column prop="date" label="日期" width="130" />
         <el-table-column prop="product_line" label="分类" width="160" />
-        <el-table-column prop="title" label="Wiki 页" min-width="240" />
+        <el-table-column label="Wiki 页" min-width="240">
+          <template #default="{ row }">{{ row.display_title || row.title }}</template>
+        </el-table-column>
         <el-table-column prop="summary" label="摘要" min-width="240" />
       </el-table>
     </el-card>

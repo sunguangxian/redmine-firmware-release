@@ -20,7 +20,7 @@ from .api_app import (
     _user_key,
     _visible_projects_for_user,
 )
-from .config_store import default_base_url, store_login
+from .config_store import clear_local_credentials, default_base_url, store_login
 from .redmine_api import RedmineClient
 from .session_config import SESSION_COOKIE_SAMESITE, SESSION_COOKIE_SECURE, session_cookie_max_age
 
@@ -34,6 +34,7 @@ def _remove_existing_auth_routes(app: FastAPI) -> None:
         ("/api/auth/login", "POST"),
         ("/api/auth/me", "GET"),
         ("/api/auth/logout", "POST"),
+        ("/api/auth/clear-local-credentials", "POST"),
     ]
 
     def should_remove(route: Any) -> bool:
@@ -107,6 +108,14 @@ def register_auth_routes(app: FastAPI) -> None:
 
     @app.post("/api/auth/logout")
     def api_logout(request: Request, response: Response) -> Dict[str, bool]:
+        sid = request.cookies.get(SESSION_COOKIE, "")
+        SESSION_STORE.delete(sid)
+        response.delete_cookie(SESSION_COOKIE)
+        return {"ok": True}
+
+    @app.post("/api/auth/clear-local-credentials")
+    def api_clear_local_credentials(request: Request, response: Response) -> Dict[str, bool]:
+        clear_local_credentials()
         sid = request.cookies.get(SESSION_COOKIE, "")
         SESSION_STORE.delete(sid)
         response.delete_cookie(SESSION_COOKIE)

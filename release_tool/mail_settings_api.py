@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import Depends, FastAPI
 
 from .api_app import AdminMailSettingsRequest, MAIL_SCOPE_EXTERNAL, MAIL_SCOPE_INTERNAL, _current_session, _require_admin
+from .audit_log import record_audit
 from .config_store import store_email_server_settings, store_internal_contact_settings
 
 
@@ -51,4 +52,15 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         contacts_to = payload.internal_contacts.contacts_to or payload.internal_contacts.contacts
         contacts_cc = payload.internal_contacts.contacts_cc
         store_internal_contact_settings(contacts_to=contacts_to, contacts_cc=contacts_cc)
+        record_audit(
+            actor=session.get("user_login", ""),
+            action="mail_admin_settings_updated",
+            target_type="mail_settings",
+            details={
+                "internal_server_configured": bool(payload.internal_server.smtp_host),
+                "external_server_configured": bool(payload.external_server.smtp_host),
+                "internal_contacts_to_count": len(contacts_to),
+                "internal_contacts_cc_count": len(contacts_cc),
+            },
+        )
         return {"ok": True}

@@ -13,6 +13,9 @@ export interface SessionInfo {
 
 export interface ReleaseSummary {
   title: string
+  display_title?: string
+  container_page?: string
+  block_id?: string
   version: string
   date: string
   product_line: string

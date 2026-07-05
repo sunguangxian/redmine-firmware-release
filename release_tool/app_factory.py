@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from .api_app import app as app
+from .audit_api import register_audit_routes
 from .auth_api import register_auth_routes
 from .health_api import register_health_routes
 from .legacy_migration_api import register_legacy_migration_routes
@@ -38,6 +39,7 @@ def create_app():
     app.state.release_tool_initialized = True
 
     register_auth_routes(app)
+    register_audit_routes(app)
     register_session_guard(app)
     register_mail_test_routes(app)
     register_admin_mail_test_routes(app)

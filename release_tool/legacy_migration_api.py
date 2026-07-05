@@ -24,6 +24,7 @@ from .api_app import (
     _require_admin,
     _set_legacy_job_state,
 )
+from .audit_log import record_audit
 from .legacy_changelog_migrator import LegacyChangelogMigrator
 from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job
 from .redmine_api import RedmineClient
@@ -156,6 +157,13 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
         _require_admin(session)
+        record_audit(
+            actor=session.get("user_login", ""),
+            action="legacy_migration_execute",
+            target_type="project",
+            target_id=payload.project_id,
+            details={"entry_pages": payload.entry_pages, "release_detail_mode": payload.release_detail_mode},
+        )
         return _make_migrator(client, payload).execute()
 
     @app.post("/api/legacy-migration/execute-job")
@@ -166,6 +174,17 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
         _require_admin(session)
         job_id = uuid.uuid4().hex
         _create_legacy_job(job_id, payload)
+        record_audit(
+            actor=session.get("user_login", ""),
+            action="legacy_migration_job_started",
+            target_type="project",
+            target_id=payload.project_id,
+            details={
+                "job_id": job_id,
+                "entry_pages": payload.entry_pages,
+                "release_detail_mode": payload.release_detail_mode,
+            },
+        )
         thread = threading.Thread(
             target=_run_legacy_migration_job,
             args=(job_id, payload, dict(session)),
@@ -177,4 +196,5 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
     @app.get("/api/legacy-migration/jobs/{job_id}")
     def api_get_legacy_migration_job(job_id: str, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
         _require_admin(session)
+        cleanup_legacy_jobs()
         return _legacy_job_snapshot(job_id)

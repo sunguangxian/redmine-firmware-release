@@ -138,6 +138,19 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_legacy_migration_job_logs_lookup
             ON legacy_migration_job_logs(job_id, seq);
+
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL DEFAULT '',
+            target_type TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '',
+            details TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_recent
+            ON audit_logs(created_at DESC, id DESC);
         """
     )
 
@@ -264,8 +277,8 @@ def get_saved_login() -> dict[str, Any]:
             "base_url": _get_setting(conn, "base_url", default_base_url()) or default_base_url(),
             "auth_mode": _get_setting(conn, "auth_mode", "password") or "password",
             "username": _get_setting(conn, "username") if allow_secrets else "",
-            "password": _get_setting(conn, "password") if allow_secrets else "",
-            "api_key": _get_setting(conn, "api_key") if allow_secrets else "",
+            "password": unprotect_secret(_get_setting(conn, "password")) if allow_secrets else "",
+            "api_key": unprotect_secret(_get_setting(conn, "api_key")) if allow_secrets else "",
             "remember": (_get_setting(conn, "remember") == "1") if allow_secrets else False,
         }
 
@@ -291,13 +304,33 @@ def store_login(
         _set_setting(conn, "remember", "1" if remember else "0")
         if remember:
             if auth_mode == "api_key":
-                _set_setting(conn, "api_key", api_key or "")
+                _set_setting(conn, "api_key", protect_secret(api_key or ""))
                 _delete_settings(conn, ("password",))
             else:
-                _set_setting(conn, "password", password or "")
+                _set_setting(conn, "password", protect_secret(password or ""))
                 _delete_settings(conn, ("api_key",))
         else:
             _delete_settings(conn, ("password", "api_key"))
+
+
+def clear_local_credentials() -> None:
+    with db() as conn:
+        _set_setting(conn, "remember", "0")
+        _delete_settings(conn, ("username", "password", "api_key"))
+        conn.execute("UPDATE user_internal_email SET smtp_password = '', updated_at = CURRENT_TIMESTAMP")
+        conn.execute("UPDATE user_external_email SET smtp_password = '', updated_at = CURRENT_TIMESTAMP")
+
+    settings_file = config_dir() / "settings.json"
+    if settings_file.exists():
+        try:
+            data = json.loads(settings_file.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            data["remember"] = False
+            data.pop("password", None)
+            data.pop("api_key", None)
+            settings_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def get_email_server_settings(scope: str) -> dict[str, Any]:

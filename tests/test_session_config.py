@@ -19,6 +19,14 @@ class SessionConfigTest(unittest.TestCase):
         with patch.dict("os.environ", {"X_TEST_INT": "60"}, clear=False):
             self.assertEqual(_int_env("X_TEST_INT", 123), 60)
 
+    def test_samesite_env_allows_only_supported_values(self):
+        from release_tool.session_config import _samesite_env
+
+        with patch.dict("os.environ", {"X_TEST_SAMESITE": "Strict"}, clear=False):
+            self.assertEqual(_samesite_env("X_TEST_SAMESITE"), "strict")
+        with patch.dict("os.environ", {"X_TEST_SAMESITE": "invalid"}, clear=False):
+            self.assertEqual(_samesite_env("X_TEST_SAMESITE"), "lax")
+
 
 if __name__ == "__main__":
     unittest.main()
