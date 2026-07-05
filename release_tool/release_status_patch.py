@@ -25,6 +25,12 @@ def _mail_status_label(status: str) -> str:
     return "未启用"
 
 
+def _normalized_notice_message(notice_message: str, status: str) -> str:
+    if status == "success" and notice_message and not notice_message.startswith("邮件发送："):
+        return f"邮件发送：成功，{notice_message}"
+    return notice_message
+
+
 def register_release_status_patch(app: FastAPI) -> None:
     if getattr(app.state, "release_status_patch_registered", False):
         return
@@ -45,6 +51,7 @@ def register_release_status_patch(app: FastAPI) -> None:
             return JSONResponse(content={"ok": False, "detail": "发布结果解析失败"}, status_code=500)
 
         mail_status = _mail_status_from_notice(str(data.get("notice_message") or ""))
+        data["notice_message"] = _normalized_notice_message(str(data.get("notice_message") or ""), mail_status)
         data["release_status"] = "success"
         data["release_status_label"] = "Redmine 发布成功"
         data["mail_status"] = mail_status
