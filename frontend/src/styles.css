@@ -46,16 +46,40 @@ body {
 }
 
 .release-log {
-  margin-top: 12px;
-  padding: 12px;
+  position: fixed;
+  top: 8vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3000;
+  width: min(920px, calc(100vw - 48px));
+  max-height: 72vh;
+  overflow: auto;
+  margin: 0;
+  padding: 44px 16px 16px;
   border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #f9fafb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.24);
   color: #374151;
   font-family: Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   line-height: 1.7;
   white-space: pre-wrap;
+}
+
+.release-log::before {
+  content: "执行日志";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #111827;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .release-table {
