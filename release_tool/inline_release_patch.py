@@ -16,6 +16,7 @@ from .release_page import (
     ReleaseForm,
     build_inline_release_block,
     build_release_markdown,
+    delete_inline_release_block,
     extract_inline_release_block,
     inline_ref,
     merge_release_files,
@@ -63,6 +64,7 @@ def apply_inline_release_patches() -> None:
     _ORIGINALS["index_build_items"] = IndexSync._build_items
     _ORIGINALS["index_sync_after_publish"] = IndexSync.sync_after_publish
     _ORIGINALS["index_refresh_all"] = IndexSync.refresh_all
+    _ORIGINALS["index_format_release_lines"] = IndexSync._format_release_lines
     _ORIGINALS["publisher_publish_locked"] = ReleasePublisher._publish_locked
     _ORIGINALS["publisher_list_releases"] = ReleasePublisher.list_releases
     _ORIGINALS["legacy_execute"] = LegacyChangelogMigrator.execute
@@ -71,6 +73,7 @@ def apply_inline_release_patches() -> None:
     IndexSync._build_items = _build_items_inline_aware  # type: ignore[method-assign]
     IndexSync.sync_after_publish = _sync_after_publish_inline_aware  # type: ignore[method-assign]
     IndexSync.refresh_all = _refresh_all_inline_aware  # type: ignore[method-assign]
+    IndexSync._format_release_lines = _format_release_lines_inline_aware  # type: ignore[method-assign]
     IndexSync.inline_container_for_release = _inline_container_for_release  # type: ignore[attr-defined]
     ReleasePublisher._publish_locked = _publish_locked_inline_aware  # type: ignore[method-assign]
     ReleasePublisher.list_releases = _list_releases_inline_aware  # type: ignore[method-assign]
@@ -119,11 +122,19 @@ def _build_items_inline_aware(self: IndexSync, profile):
                     "date": item["date"],
                     "page": item["title"],
                     "container_page": container,
+                    "block_id": item.get("block_id", ""),
                     "summary": item["summary"],
                     "product_line": item.get("product_line", ""),
                 }
             )
     return result
+
+
+def _format_release_lines_inline_aware(self: IndexSync, items: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        f"- [[{item.get('container_page') or item['page']}|{item['ver']} ({item['date']})]] - {item['summary']}"
+        for item in items
+    )
 
 
 def _sync_after_publish_inline_aware(self: IndexSync, page_title: str, page_text: str) -> None:
@@ -183,12 +194,13 @@ def _publish_locked_inline_aware(
         self._progress(progress, "release", "failed")
         raise
 
+    old_block_id = form.version_name.strip()
     inline_target = parse_inline_ref(form.wiki_title)
     if inline_target:
-        container_page, inline_version = inline_target
+        container_page, old_block_id = inline_target
         form.wiki_title = None
-        if inline_version and inline_version != form.version_name:
-            self._log(logs, f"内联编辑目标版本：{inline_version} -> {form.version_name}")
+        if old_block_id and old_block_id != form.version_name:
+            self._log(logs, f"内联编辑目标块：{old_block_id} -> {form.version_name}")
     else:
         container_page = index_sync.inline_container_for_release(
             profile,
@@ -196,11 +208,12 @@ def _publish_locked_inline_aware(
             f"**产品线:** {form.product_line}\n**Commit:** {form.commit}\n",
         )
 
+    new_block_id = form.version_name.strip()
     try:
         self._progress(progress, "wiki", "running")
         page = self.client.get_wiki_page(form.project_id, container_page)
         current_text = (page or {}).get("text", "")
-        old_block = extract_inline_release_block(current_text, form.version_name)
+        old_block = extract_inline_release_block(current_text, old_block_id)
         old_files = parse_release_files(old_block) if old_block else []
         self._log(logs, f"内联版本页面：{container_page}，已有附件 {len(old_files)} 个")
     except Exception:
@@ -222,8 +235,12 @@ def _publish_locked_inline_aware(
         raise
 
     try:
-        block = build_inline_release_block(form, int(version["id"]), linked_files)
-        new_text = replace_inline_release_block(current_text, form.version_name, block)
+        base_text = current_text
+        if old_block_id and old_block_id != new_block_id:
+            base_text = delete_inline_release_block(base_text, old_block_id)
+            self._log(logs, f"已删除旧内联版本块：{old_block_id}")
+        block = build_inline_release_block(form, int(version["id"]), linked_files, block_id=new_block_id)
+        new_text = replace_inline_release_block(base_text, new_block_id, block)
         parent_title = _inline_parent_title(profile, container_page)
         self.client.put_wiki_page(
             form.project_id,
@@ -260,7 +277,7 @@ def _publish_locked_inline_aware(
         self._progress(progress, "index", "failed")
         raise
 
-    return inline_ref(container_page, form.version_name)
+    return inline_ref(container_page, new_block_id)
 
 
 def _inline_parent_title(profile: Any, container_page: str) -> str | None:
@@ -366,8 +383,16 @@ def _execute_legacy_inline_aware(self: LegacyChangelogMigrator) -> Dict[str, Any
             container = _legacy_inline_container(release, single_list=single_list)
             page = self.client.get_wiki_page(self.project_id, container)
             current = (page or {}).get("text", "")
-            block = build_inline_release_block(form, int(version["id"]), linked_files, source_page=release.source_page)
-            new_text = replace_inline_release_block(current, release.version_name, block)
+            block_id = release.wiki_title
+            block = build_inline_release_block(
+                form,
+                int(version["id"]),
+                linked_files,
+                source_page=release.source_page,
+                block_id=block_id,
+                display_version=release.version,
+            )
+            new_text = replace_inline_release_block(current, block_id, block)
             self.client.put_wiki_page(self.project_id, container, new_text, "legacy changelog inline migration")
             self.client.update_version(int(version["id"]), wiki_page_title=container, due_date=release.date, description=self._version_description(release))
         else:
