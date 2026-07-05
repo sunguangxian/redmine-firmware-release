@@ -10,6 +10,8 @@ from .index_sync_patch import apply_index_sync_patches
 from .mail_admin_test_api import register_admin_mail_test_routes
 from .mail_history_patch import apply_mail_history_patch
 from .mail_log_api import register_mail_log_routes
+from .mail_policy import apply_mail_policy_patches
+from .mail_settings_api import register_mail_settings_routes
 from .mail_test_api import register_mail_test_routes
 from .release_ops_api import register_release_ops_routes
 from .release_publish_api import register_release_publish_routes
@@ -37,11 +39,13 @@ def create_app():
     app.state.release_tool_initialized = True
 
     apply_secure_config_patches()
+    apply_mail_policy_patches()
     apply_index_sync_patches()
     apply_mail_history_patch()
     register_session_guard(app)
     register_mail_test_routes(app)
     register_admin_mail_test_routes(app)
+    register_mail_settings_routes(app)
     register_mail_log_routes(app)
     register_health_routes(app)
     register_release_ops_routes(app)
