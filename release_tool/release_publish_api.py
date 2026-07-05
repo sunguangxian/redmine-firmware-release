@@ -256,6 +256,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
     def api_publish_history(
         project_id: str = "",
         wiki_title: str = "",
+        version_name: str = "",
         limit: int = 50,
         session: Dict[str, Any] = Depends(_current_session),
     ) -> Dict[str, Any]:
@@ -265,6 +266,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
                 session,
                 project_id=project_id,
                 wiki_title=wiki_title,
+                version_name=version_name,
                 limit=limit,
                 loader=list_publish_history,
             ),
@@ -289,9 +291,9 @@ def register_release_publish_routes(app: FastAPI) -> None:
             if action == "rebuild_index":
                 progress("index", "running")
                 count = IndexSync(client, project_id).refresh_all()
-                logs.append(f"恢复操作：重建版本索引完成，共处理 {count} 个 Release 页面")
+                logs.append(f"恢复操作：重建版本索引完成，共处理 {count} 条 Release 记录")
                 update_publish_history(history_id, index_status="success", logs=logs, error_message="")
-                return {"ok": True, "message": f"重建索引完成，共处理 {count} 个 Release 页面", "logs": logs}
+                return {"ok": True, "message": f"重建索引完成，共处理 {count} 条 Release 记录", "logs": logs}
             if action == "continue":
                 form_payload = item.get("form_payload") or {}
                 if form_payload.get("has_files"):
