@@ -7,7 +7,7 @@ from typing import Any, Dict
 from fastapi import Depends, FastAPI, Query
 
 from .access_control import list_visible_history
-from .api_app import _current_session
+from .dependencies import _current_session
 from .mail_history import list_mail_history
 
 
