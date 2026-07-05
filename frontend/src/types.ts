@@ -126,6 +126,10 @@ export interface WikiRefreshResult {
 export interface LegacyMigrationPreview {
   project_id: string
   entry_pages: string[]
+  release_detail_mode?: 'auto' | 'inline' | 'page'
+  release_detail_mode_label?: string
+  requested_release_detail_mode?: 'auto' | 'inline' | 'page'
+  target_page_label?: string
   source_page_count: number
   model_count: number
   release_count: number
@@ -161,6 +165,8 @@ export interface LegacyMigrationResult {
   uploaded_files: number
   updated_release_pages: number
   refreshed_release_count: number
+  release_detail_mode?: 'inline' | 'page'
+  release_detail_mode_label?: string
   message: string
 }
 
