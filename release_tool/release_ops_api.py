@@ -17,10 +17,10 @@ from .api_app import (
     _validate_release_preflight,
 )
 from .email_sender import EmailSendError
-from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
 from .release_page import ReleaseForm, parse_release_files, proj_tag_from_project
+from .release_structure_guard import ensure_release_structure_ready
 
 
 def _split_changelog(changelog: str) -> List[str]:
@@ -112,6 +112,10 @@ def register_release_ops_routes(app: FastAPI) -> None:
         try:
             _validate_release_preflight(project_id, version_name, release_date, commit, items)
             logs.append("基础字段预检查通过")
+
+            # 先检查 Wiki 结构；旧结构或无 Release_Tool_Config 时，禁止继续预览/发布/编辑。
+            index_sync, profile = ensure_release_structure_ready(client, project_id, logs)
+
             if notice_enabled:
                 notice_scope, notice_to_addrs, notice_cc_addrs = _validate_notice_preflight(
                     session, mail_scope, mail_to, mail_cc, mail_subject, mail_body
@@ -137,8 +141,6 @@ def register_release_ops_routes(app: FastAPI) -> None:
             )
 
             publisher = ReleasePublisher(client)
-            index_sync = IndexSync(client, project_id)
-            profile = index_sync.discover_profile()
             publisher._validate_category(form, index_sync, profile, logs)
             generated_title = publisher._configured_release_title(form, index_sync, profile)
             wiki_title = edit_title or generated_title or form.page_title
