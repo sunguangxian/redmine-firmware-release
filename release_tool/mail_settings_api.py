@@ -6,19 +6,11 @@ from typing import Any, Dict
 
 from fastapi import Depends, FastAPI, Query
 
-from .api_app import (
-    AdminMailSettingsRequest,
-    MAIL_SCOPE_EXTERNAL,
-    MAIL_SCOPE_INTERNAL,
-    UserExternalMailRequest,
-    UserInternalMailRequest,
-    _contacts_for_scope,
-    _current_session,
-    _normalize_mail_scope,
-    _require_admin,
-)
+from .api_app import _contacts_for_scope, _normalize_mail_scope
 from .audit_log import record_audit
 from .config_store import (
+    MAIL_SCOPE_EXTERNAL,
+    MAIL_SCOPE_INTERNAL,
     get_email_server_settings,
     get_internal_contact_settings,
     get_user_external_email_settings,
@@ -28,6 +20,8 @@ from .config_store import (
     store_user_external_email_settings,
     store_user_internal_email_settings,
 )
+from .dependencies import _current_session, _require_admin
+from .schemas import AdminMailSettingsRequest, UserExternalMailRequest, UserInternalMailRequest
 
 
 def _route_has_method(route: Any, method: str) -> bool:
