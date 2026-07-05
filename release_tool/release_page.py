@@ -63,6 +63,7 @@ def build_release_markdown(
     form: ReleaseForm,
     version_id: int | None,
     linked_files: list[dict[str, str | None]],
+    main_page: str = "Release_Notes",
 ) -> str:
     meta = form.product_meta
     title_suffix = (
@@ -72,6 +73,7 @@ def build_release_markdown(
     ver_link = f"/versions/{version_id}" if version_id else f"/projects/{form.project_id}/roadmap"
     files_link = f"/projects/{form.project_id}/files"
     product_line_block = f"**产品线:** {form.product_line}\n\n" if form.product_line.strip() else ""
+    return_page = (main_page or "Release_Notes").strip() or "Release_Notes"
 
     rows = []
     for item in linked_files:
@@ -98,7 +100,7 @@ def build_release_markdown(
         f"| 文件名 | 说明 |\n"
         f"|--------|------|\n"
         f"{chr(10).join(rows)}\n\n"
-        f"[[Release_Notes|← 返回 Release Notes]]"
+        f"[[{return_page}|← 返回 Release Notes]]"
     )
 
 
