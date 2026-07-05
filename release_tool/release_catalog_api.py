@@ -6,9 +6,11 @@ from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI, Query
 
-from .api_app import RECENT_RELEASE_LIMIT, _current_client, _json_error
+from .access_control import require_project_access
+from .api_app import RECENT_RELEASE_LIMIT, _current_client, _current_session, _json_error
+from .index_sync import IndexSync
 from .publisher import ReleasePublisher
-from .redmine_api import RedmineClient
+from .redmine_api import RedmineClient, RedmineError
 from .release_page import (
     extract_inline_release_block,
     format_release_files,
@@ -25,6 +27,7 @@ def _remove_existing_release_catalog_routes(app: FastAPI) -> None:
     specs = [
         ("/api/releases", "GET"),
         ("/api/releases/detail", "GET"),
+        ("/api/projects/{project_id}/release-categories", "GET"),
     ]
 
     def should_remove(route: Any) -> bool:
@@ -40,12 +43,33 @@ def register_release_catalog_routes(app: FastAPI) -> None:
     app.state.release_catalog_routes_registered = True
     _remove_existing_release_catalog_routes(app)
 
+    @app.get("/api/projects/{project_id}/release-categories")
+    def api_project_release_categories(
+        project_id: str,
+        session: Dict[str, Any] = Depends(_current_session),
+        client: RedmineClient = Depends(_current_client),
+    ) -> Dict[str, Any]:
+        require_project_access(session, project_id)
+        try:
+            profile = IndexSync(client, project_id).discover_profile()
+        except RedmineError:
+            return {"mode": "", "categories": []}
+        return {
+            "mode": profile.mode,
+            "categories": [
+                {"key": category.key, "title": category.title}
+                for category in profile.categories
+            ],
+        }
+
     @app.get("/api/releases")
     def api_releases(
         project_id: str = Query(...),
         product_line: str = Query(""),
+        session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> List[Dict[str, Any]]:
+        require_project_access(session, project_id)
         releases = ReleasePublisher(client).list_releases(project_id)
         if product_line:
             releases = [item for item in releases if item.get("product_line") == product_line]
@@ -55,8 +79,10 @@ def register_release_catalog_routes(app: FastAPI) -> None:
     def api_release_detail(
         project_id: str = Query(...),
         wiki_title: str = Query(...),
+        session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
+        require_project_access(session, project_id)
         inline = parse_inline_ref(wiki_title)
         if inline:
             container_page, version_name = inline
