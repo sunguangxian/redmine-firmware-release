@@ -24,6 +24,7 @@ python -m unittest discover -s tests
 6. 发布失败时，发布历史中的 `release_status`、`file_status`、`wiki_status`、`index_status`、`mail_status` 应能指出失败阶段。
 7. 未选择附件发布或编辑时，`file_status` 应为 `skipped`，不应被错误标记为 `success`。
 8. Redmine 项目文件超过一页时，同名附件检查应覆盖全部文件，而不是只检查第一页。
+9. 发布历史接口应返回中文状态标签，例如 `release_status_label`、`status_summary`、`recover_actions`。
 
 ## 发布状态字段含义
 
@@ -32,3 +33,12 @@ python -m unittest discover -s tests
 - `success`：该阶段已完成。
 - `failed`：该阶段失败。
 - `skipped`：该阶段本次无需执行，例如未启用邮件或未选择附件。
+
+## 发布历史展示字段
+
+发布历史接口除了原始状态字段，还会返回以下便于前端展示的字段：
+
+- `release_status_label`、`file_status_label`、`wiki_status_label`、`index_status_label`、`mail_status_label`：中文状态。
+- `status_summary`：把各阶段状态合并成一行摘要。
+- `recover_actions`：可执行的恢复动作列表，目前包括 `rebuild_index` 和 `continue`。
+- `can_rebuild_index` / `can_continue`：方便旧前端或简单按钮判断。
