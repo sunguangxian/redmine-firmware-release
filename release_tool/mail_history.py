@@ -92,7 +92,12 @@ def record_mail_send(
         return int(cur.lastrowid or 0)
 
 
-def list_mail_history(project_id: str = "", wiki_title: str = "", limit: int = 50) -> list[dict[str, Any]]:
+def list_mail_history(
+    project_id: str = "",
+    wiki_title: str = "",
+    version_name: str = "",
+    limit: int = 50,
+) -> list[dict[str, Any]]:
     limit = max(1, min(int(limit or 50), 200))
     clauses = []
     params: list[Any] = []
@@ -104,6 +109,9 @@ def list_mail_history(project_id: str = "", wiki_title: str = "", limit: int = 5
         placeholders = ",".join("?" for _ in title_candidates)
         clauses.append(f"wiki_title IN ({placeholders})")
         params.extend(title_candidates)
+    if version_name:
+        clauses.append("version_name = ?")
+        params.append(version_name)
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     with db() as conn:
         _ensure_table(conn)
