@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from collections import defaultdict
+from typing import Callable
 from urllib.parse import quote, urlparse
 
 from .attachment_policy import sha256_hex, validate_attachment_batch
@@ -20,70 +21,127 @@ from .release_structure_guard import ensure_release_structure_ready
 
 _RELEASE_LOCKS: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 _SHA_RE = re.compile(r"SHA256:\s*([0-9a-fA-F]{64})")
+StageProgress = Callable[[str, str], None]
 
 
 class ReleasePublisher:
     def __init__(self, client: RedmineClient):
         self.client = client
 
-    def publish(self, form: ReleaseForm, logs: list[str] | None = None) -> str:
+    def publish(
+        self,
+        form: ReleaseForm,
+        logs: list[str] | None = None,
+        progress: StageProgress | None = None,
+    ) -> str:
         self._log(logs, f"开始处理版本：{form.version_name}")
-        self._preflight_release(form, logs)
+        if form.files:
+            self._progress(progress, "file", "running")
+            try:
+                self._preflight_release(form, logs)
+            except Exception:
+                self._progress(progress, "file", "failed")
+                raise
+        else:
+            self._preflight_release(form, logs)
+            self._progress(progress, "file", "skipped")
         if form.wiki_title and not form.files and form.replace_attachments:
             form.replace_attachments = False
             self._log(logs, "编辑版本未选择新附件，自动保留已有附件列表")
         lock_key = f"{form.project_id}:{form.version_name}".lower()
         self._log(logs, "发布控制：同一项目同一版本串行执行，避免并发覆盖")
         with _RELEASE_LOCKS[lock_key]:
-            return self._publish_locked(form, logs)
+            return self._publish_locked(form, logs, progress)
 
-    def _publish_locked(self, form: ReleaseForm, logs: list[str] | None = None) -> str:
-        self._log(logs, "检查项目 Wiki 发布结构")
-        index_sync, profile = ensure_release_structure_ready(self.client, form.project_id, logs)
-        self._log(logs, f"项目发布结构：{profile.mode}")
-        self._validate_category(form, index_sync, profile, logs)
-        generated_title = self._configured_release_title(form, index_sync, profile)
-        if generated_title and not form.wiki_title:
-            form.wiki_title = generated_title
-            self._log(logs, f"按项目配置生成 Release 页面：{generated_title}")
-        version_name = self._configured_version_name(form, index_sync, profile)
+    def _publish_locked(
+        self,
+        form: ReleaseForm,
+        logs: list[str] | None = None,
+        progress: StageProgress | None = None,
+    ) -> str:
+        try:
+            self._progress(progress, "release", "running")
+            self._log(logs, "检查项目 Wiki 发布结构")
+            index_sync, profile = ensure_release_structure_ready(self.client, form.project_id, logs)
+            self._log(logs, f"项目发布结构：{profile.mode}")
+            self._validate_category(form, index_sync, profile, logs)
+            generated_title = self._configured_release_title(form, index_sync, profile)
+            if generated_title and not form.wiki_title:
+                form.wiki_title = generated_title
+                self._log(logs, f"按项目配置生成 Release 页面：{generated_title}")
+            version_name = self._configured_version_name(form, index_sync, profile)
+            version = self._get_or_create_version(form, logs, version_name=version_name)
+        except Exception:
+            self._progress(progress, "release", "failed")
+            raise
 
-        version = self._get_or_create_version(form, logs, version_name=version_name)
         title = form.page_title
-        existing = self.client.get_wiki_page(form.project_id, title)
-        existing_text = (existing or {}).get("text", "")
-        self._log(logs, f"Wiki 页面：{'编辑已有页面' if existing else '创建新页面'} {title}")
+        try:
+            self._progress(progress, "wiki", "running")
+            existing = self.client.get_wiki_page(form.project_id, title)
+            existing_text = (existing or {}).get("text", "")
+            self._log(logs, f"Wiki 页面：{'编辑已有页面' if existing else '创建新页面'} {title}")
+            old_files = parse_release_files(existing_text) if existing_text else []
+        except Exception:
+            self._progress(progress, "wiki", "failed")
+            raise
 
-        old_files = parse_release_files(existing_text) if existing_text else []
-        self._log(
-            logs,
-            f"附件策略：{'替换旧附件列表' if form.replace_attachments else '保留旧附件并追加'}；"
-            f"已有 {len(old_files)} 个，本次选择 {len(form.files)} 个",
-        )
-        new_files = self._upload_files(form, version["id"], logs)
-        linked_files = merge_release_files(
-            old_files,
-            new_files,
-            replace=form.replace_attachments,
-        )
-        self._log(logs, f"附件列表合并完成：最终 {len(linked_files)} 个")
+        try:
+            if form.files:
+                self._progress(progress, "file", "running")
+            else:
+                self._progress(progress, "file", "skipped")
+            self._log(
+                logs,
+                f"附件策略：{'替换旧附件列表' if form.replace_attachments else '保留旧附件并追加'}；"
+                f"已有 {len(old_files)} 个，本次选择 {len(form.files)} 个",
+            )
+            new_files = self._upload_files(form, version["id"], logs)
+            linked_files = merge_release_files(
+                old_files,
+                new_files,
+                replace=form.replace_attachments,
+            )
+            self._log(logs, f"附件列表合并完成：最终 {len(linked_files)} 个")
+            if form.files:
+                self._progress(progress, "file", "success")
+        except Exception:
+            self._progress(progress, "file", "failed")
+            raise
 
-        markdown = build_release_markdown(form, version["id"], linked_files, main_page=profile.main_page)
+        try:
+            self._progress(progress, "wiki", "running")
+            markdown = build_release_markdown(form, version["id"], linked_files, main_page=profile.main_page)
+            comment = "release tool update" if existing else "release tool create"
+            self.client.put_wiki_page(form.project_id, title, markdown, comment)
+            self._log(logs, "Wiki 页面写入完成")
+            self._progress(progress, "wiki", "success")
+        except Exception:
+            self._progress(progress, "wiki", "failed")
+            raise
 
-        comment = "release tool update" if existing else "release tool create"
-        self.client.put_wiki_page(form.project_id, title, markdown, comment)
-        self._log(logs, "Wiki 页面写入完成")
+        try:
+            self._progress(progress, "release", "running")
+            self.client.update_version(
+                version["id"],
+                wiki_page_title=title,
+                due_date=form.release_date,
+                description=self._version_description(form),
+            )
+            self._log(logs, "Redmine 版本信息更新完成")
+            self._progress(progress, "release", "success")
+        except Exception:
+            self._progress(progress, "release", "failed")
+            raise
 
-        self.client.update_version(
-            version["id"],
-            wiki_page_title=title,
-            due_date=form.release_date,
-            description=self._version_description(form),
-        )
-        self._log(logs, "Redmine 版本信息更新完成")
-
-        index_sync.sync_after_publish(title, markdown)
-        self._log(logs, "版本索引同步完成")
+        try:
+            self._progress(progress, "index", "running")
+            index_sync.sync_after_publish(title, markdown)
+            self._log(logs, "版本索引同步完成")
+            self._progress(progress, "index", "success")
+        except Exception:
+            self._progress(progress, "index", "failed")
+            raise
         return title
 
     def _preflight_release(self, form: ReleaseForm, logs: list[str] | None = None) -> None:
@@ -280,3 +338,7 @@ class ReleasePublisher:
     def _log(self, logs: list[str] | None, message: str) -> None:
         if logs is not None:
             logs.append(message)
+
+    def _progress(self, progress: StageProgress | None, stage: str, status: str) -> None:
+        if progress is not None:
+            progress(stage, status)
