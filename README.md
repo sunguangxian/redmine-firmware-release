@@ -138,6 +138,12 @@ h2. version:V1.0.0.1 (2021-01-01)
 ## version:V1.0.0.1 (2021-01-01)
 ```
 
+旧项目升级页面支持三种版本模式：
+
+- `auto`：自动模式。有 `Release_Tool_Config` 时沿用其中的 `release_detail_mode`；没有配置时默认 `inline`。
+- `inline`：强制迁移为内联模式，多个版本合并写入 `Release_Notes` 或分类页。
+- `page`：强制迁移为一版本一页，适合已经按 page 模式管理的项目继续保持原结构。
+
 升级后的默认目标结构为内联模式：
 
 ```text
@@ -150,10 +156,18 @@ Release_Notes
    └─ V1.0.0.2
 ```
 
+显式选择 `page` 时，目标结构仍可保持：
+
+```text
+Release_Notes
+├─ Release_Notes_DM181
+│  └─ Release_Notes_DM181_List
+└─ Release_DM181_FW_V1_0_0_1
+```
+
 规则：
 
-- 旧项目升级默认写入 `release_detail_mode: inline`。
-- 如果项目已经存在 `Release_Tool_Config` 且显式配置 `release_detail_mode: page`，旧项目升级会继续使用“一版本一页”模式。
+- 迁移模式以本次迁移页面选择为准；选择 `auto` 时才读取项目已有配置。
 - Redmine 项目 identifier 只作为平台/容器，不再写入 Release 页面名。
 - 型号作为分类，例如 `DM181`、`D705SM`。
 - Redmine Version 名称使用平台统一版本号，例如 `V1.0.0.1`。
@@ -166,8 +180,9 @@ Release_Notes
 
 1. 在“旧项目升级”页选择项目。
 2. 设置入口页，默认 `Changelog`。
-3. 点击“预览升级”，查看识别到的型号、历史版本、附件匹配、将创建的 Version、将上传的项目文件和问题列表。
-4. 确认无阻塞问题后点击“确认执行升级”。
+3. 选择版本模式：自动、内联或一版本一页。
+4. 点击“预览升级”，确认预览中显示的最终版本模式和写入目标。
+5. 确认无阻塞问题后点击“确认执行升级”。
 
 权限要求：
 
