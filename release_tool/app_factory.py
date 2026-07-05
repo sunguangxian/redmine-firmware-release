@@ -14,6 +14,7 @@ from .mail_test_api import register_mail_test_routes
 from .release_ops_api import register_release_ops_routes
 from .release_publish_api import register_release_publish_routes
 from .secure_config import apply_secure_config_patches
+from .security_patch import apply_security_route_overrides
 from .session_guard import register_session_guard
 
 
@@ -45,6 +46,7 @@ def create_app():
     register_health_routes(app)
     register_release_ops_routes(app)
     register_release_publish_routes(app)
+    apply_security_route_overrides(app)
     move_frontend_routes_to_end()
     return app
 
