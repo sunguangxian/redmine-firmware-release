@@ -13,16 +13,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .access_control import list_visible_history, require_project_access
-from .api_app import (
-    _mail_scope_label,
-    _send_release_notice,
-    _validate_notice_preflight,
-)
 from .attachment_policy import sha256_hex
 from .config_store import MAIL_SCOPE_INTERNAL
 from .dependencies import _current_client, _current_session
 from .email_sender import EmailSendError
 from .index_sync import IndexSync
+from .mail_contact_helpers import mail_scope_label as _mail_scope_label
+from .mail_delivery_helpers import send_release_notice as _send_release_notice
+from .mail_delivery_helpers import validate_notice_preflight as _validate_notice_preflight
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
 from .release_helpers import list_release_rows, validate_release_preflight
