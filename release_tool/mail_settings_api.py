@@ -138,6 +138,19 @@ def register_mail_settings_routes(app: FastAPI) -> None:
             contacts_cc=payload.contacts_cc,
             contact_templates=[item.dict() for item in payload.contact_templates],
         )
+        record_audit(
+            actor=session.get("user_login", ""),
+            action="mail_user_internal_settings_updated",
+            target_type="mail_settings",
+            details={
+                "smtp_user_configured": bool(payload.smtp_user),
+                "smtp_from_configured": bool(payload.smtp_from),
+                "smtp_password_set": bool(smtp_password),
+                "contacts_to_count": len(payload.contacts_to),
+                "contacts_cc_count": len(payload.contacts_cc),
+                "contact_template_count": len(payload.contact_templates),
+            },
+        )
         return {"ok": True}
 
     @app.put("/api/mail/user-external-settings")
@@ -156,6 +169,19 @@ def register_mail_settings_routes(app: FastAPI) -> None:
             contacts_to=payload.contacts_to,
             contacts_cc=payload.contacts_cc,
             contact_templates=[item.dict() for item in payload.contact_templates],
+        )
+        record_audit(
+            actor=session.get("user_login", ""),
+            action="mail_user_external_settings_updated",
+            target_type="mail_settings",
+            details={
+                "smtp_user_configured": bool(payload.smtp_user),
+                "smtp_from_configured": bool(payload.smtp_from),
+                "smtp_password_set": bool(smtp_password),
+                "contacts_to_count": len(payload.contacts_to),
+                "contacts_cc_count": len(payload.contacts_cc),
+                "contact_template_count": len(payload.contact_templates),
+            },
         )
         return {"ok": True}
 
