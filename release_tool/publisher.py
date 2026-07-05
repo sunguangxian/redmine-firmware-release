@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from collections import defaultdict
 from urllib.parse import quote, urlparse
@@ -18,6 +19,7 @@ from .release_page import (
 from .release_structure_guard import ensure_release_structure_ready
 
 _RELEASE_LOCKS: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+_SHA_RE = re.compile(r"SHA256:\s*([0-9a-fA-F]{64})")
 
 
 class ReleasePublisher:
@@ -208,7 +210,8 @@ class ReleasePublisher:
                 continue
             existing = existing_by_name.get(filename)
             if existing:
-                self._log(logs, f"附件已存在，复用项目文件：{filename}")
+                self._ensure_same_existing_file(existing, filename, description, content, logs)
+                self._log(logs, f"附件已存在且 SHA256 一致，复用项目文件：{filename}")
                 linked.append(
                     {
                         "filename": filename,
@@ -228,6 +231,32 @@ class ReleasePublisher:
             linked.append({"filename": filename, "description": description, "url": url})
             self._log(logs, f"附件上传完成：{filename}")
         return linked
+
+    def _ensure_same_existing_file(
+        self,
+        existing: dict,
+        filename: str,
+        description: str,
+        content: bytes,
+        logs: list[str] | None = None,
+    ) -> None:
+        new_sha = self._sha_from_description(description) or sha256_hex(content)
+        old_sha = self._sha_from_description(existing.get("description") or "")
+        if not old_sha:
+            content_url = existing.get("content_url") or self._project_file_url(existing, filename)
+            if not content_url:
+                raise RedmineError(f"项目文件已存在但无法确认内容：{filename}。请改名后重新上传。")
+            self._log(logs, f"同名附件缺少 SHA256 说明，下载旧文件校验：{filename}")
+            old_sha = sha256_hex(self.client.download_content_url(content_url))
+        if old_sha.lower() != new_sha.lower():
+            raise RedmineError(
+                f"同名附件内容不一致：{filename}。"
+                "为避免复用旧文件导致版本异常，请修改文件名或先处理 Redmine 项目文件中的同名文件。"
+            )
+
+    def _sha_from_description(self, description: str) -> str:
+        match = _SHA_RE.search(description or "")
+        return match.group(1).lower() if match else ""
 
     def _project_files_by_name(self, project_id: str, version_id: int) -> dict[str, dict]:
         result: dict[str, dict] = {}
