@@ -21,6 +21,7 @@ from .legacy_changelog_migrator import LegacyChangelogMigrator
 from .legacy_job_helpers import append_legacy_log, get_legacy_job_snapshot, set_legacy_job_state
 from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job
 from .redmine_api import RedmineClient
+from .release_helpers import invalidate_release_rows
 from .release_page import extract_inline_release_block
 
 
@@ -123,6 +124,7 @@ def _run_legacy_migration_job(job_id: str, payload: LegacyMigrationRequestV2, se
             log_callback=lambda message: append_legacy_log(job_id, message),
         )
         result = migrator.execute()
+        invalidate_release_rows(payload.project_id)
         append_legacy_log(job_id, result.get("message", "旧项目升级完成"))
         set_legacy_job_state(job_id, status="succeeded", result=result)
     except Exception as exc:
@@ -157,7 +159,9 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
             target_id=payload.project_id,
             details={"entry_pages": payload.entry_pages, "release_detail_mode": payload.release_detail_mode},
         )
-        return _make_migrator(client, payload).execute()
+        result = _make_migrator(client, payload).execute()
+        invalidate_release_rows(payload.project_id)
+        return result
 
     @app.post("/api/legacy-migration/execute-job")
     def api_start_legacy_migration_job(
