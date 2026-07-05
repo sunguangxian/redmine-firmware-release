@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Depends, FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
+from .access_control import require_project_access
 from .attachment_policy import sha256_hex
 from .api_app import (
     _current_client,
@@ -17,11 +18,9 @@ from .api_app import (
     _validate_release_preflight,
 )
 from .email_sender import EmailSendError
-from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
 from .release_planner import ReleasePlanner
-from .release_page import ReleaseForm, parse_release_files, proj_tag_from_project
-from .release_structure_guard import ensure_release_structure_ready
+from .release_page import ReleaseForm, proj_tag_from_project
 
 
 def _split_changelog(changelog: str) -> List[str]:
@@ -108,6 +107,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
+        require_project_access(session, project_id)
         logs: List[str] = []
         items = _split_changelog(changelog)
         try:
@@ -170,6 +170,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
+        require_project_access(session, project_id)
         logs: List[str] = []
         items = _split_changelog(changelog)
         try:
@@ -224,6 +225,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
+        require_project_access(session, project_id)
         logs: List[str] = []
         try:
             scope, to_addrs, cc_addrs = _validate_notice_preflight(
