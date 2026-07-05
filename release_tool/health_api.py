@@ -9,7 +9,6 @@ from typing import Any, Dict
 from fastapi import Depends, FastAPI
 
 from .access_control import require_project_access
-from .api_app import _current_client, _current_session, _json_error
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
     MAIL_SCOPE_INTERNAL,
@@ -18,6 +17,7 @@ from .config_store import (
     get_email_server_settings,
     get_internal_contact_settings,
 )
+from .dependencies import _current_client, _current_session, _json_error
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
 
