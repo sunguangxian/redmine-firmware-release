@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from .access_control import list_visible_history, require_project_access
 from .api_app import (
     MAIL_SCOPE_INTERNAL,
     _current_client,
@@ -109,6 +110,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
+        require_project_access(session, project_id)
         logs: List[str] = []
         action = "编辑版本" if edit_title else "发布新版本"
         items = [line.strip() for line in changelog.splitlines() if line.strip()]
@@ -190,15 +192,35 @@ def register_release_publish_routes(app: FastAPI) -> None:
         return {"ok": True, "title": title, "notice_message": notice_message, "releases": releases, "logs": logs, "publish_history_id": history_id, "release_status": "success", "release_status_label": "Redmine 发布成功", "file_status": "success", "wiki_status": "success", "index_status": "success", "mail_status": mail_status, "mail_status_label": f"邮件发送{_mail_status_label(mail_status)}", "result_summary": f"Redmine 发布：成功\n邮件发送：{_mail_status_label(mail_status)}"}
 
     @app.get("/api/releases/publish-history")
-    def api_publish_history(project_id: str = "", wiki_title: str = "", limit: int = 50, _session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
-        return {"ok": True, "items": list_publish_history(project_id=project_id, wiki_title=wiki_title, limit=limit)}
+    def api_publish_history(
+        project_id: str = "",
+        wiki_title: str = "",
+        limit: int = 50,
+        session: Dict[str, Any] = Depends(_current_session),
+    ) -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "items": list_visible_history(
+                session,
+                project_id=project_id,
+                wiki_title=wiki_title,
+                limit=limit,
+                loader=list_publish_history,
+            ),
+        }
 
     @app.post("/api/releases/publish-history/{history_id}/recover")
-    def api_recover_publish_history(history_id: int, payload: RecoverRequest, _session: Dict[str, Any] = Depends(_current_session), client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
+    def api_recover_publish_history(
+        history_id: int,
+        payload: RecoverRequest,
+        session: Dict[str, Any] = Depends(_current_session),
+        client: RedmineClient = Depends(_current_client),
+    ) -> Dict[str, Any]:
         item = get_publish_history(history_id)
         if not item:
             return JSONResponse(status_code=404, content={"detail": "发布历史不存在"})
         project_id = item.get("project_id") or ""
+        require_project_access(session, project_id)
         logs = list(item.get("logs") or [])
         action = (payload.action or "rebuild_index").strip()
         try:
