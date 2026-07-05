@@ -7,13 +7,8 @@ from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI
 
-from .api_app import (
-    MAIL_SCOPE_EXTERNAL,
-    MAIL_SCOPE_INTERNAL,
-    _current_client,
-    _current_session,
-    _visible_projects_for_user,
-)
+from .config_store import MAIL_SCOPE_EXTERNAL, MAIL_SCOPE_INTERNAL
+from .dependencies import _current_client, _current_session, _visible_projects_for_user
 from .redmine_api import RedmineClient
 from .release_page import PRODUCT_LINES
 
