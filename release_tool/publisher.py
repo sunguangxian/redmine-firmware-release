@@ -27,6 +27,9 @@ class ReleasePublisher:
     def publish(self, form: ReleaseForm, logs: list[str] | None = None) -> str:
         self._log(logs, f"开始处理版本：{form.version_name}")
         self._preflight_release(form, logs)
+        if form.wiki_title and not form.files and form.replace_attachments:
+            form.replace_attachments = False
+            self._log(logs, "编辑版本未选择新附件，自动保留已有附件列表")
         lock_key = f"{form.project_id}:{form.version_name}".lower()
         self._log(logs, "发布控制：同一项目同一版本串行执行，避免并发覆盖")
         with _RELEASE_LOCKS[lock_key]:
@@ -83,7 +86,10 @@ class ReleasePublisher:
         return title
 
     def _preflight_release(self, form: ReleaseForm, logs: list[str] | None = None) -> None:
-        self._log(logs, "发布预检查：校验附件类型、大小和 SHA256")
+        if not form.files:
+            self._log(logs, "发布预检查：未选择新附件，跳过附件内容校验")
+            return
+        self._log(logs, "发布预检查：校验附件大小并生成 SHA256")
         validate_attachment_batch(form.files)
         files: list[tuple[str, str, bytes]] = []
         for filename, description, content in form.files:
