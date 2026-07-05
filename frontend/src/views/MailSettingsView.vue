@@ -2,7 +2,7 @@
   <div>
     <el-alert class="card" type="info" :closable="false" show-icon>
       <template #title>
-        邮件服务器和内网联系人只允许 Redmine 管理员修改；每个用户维护自己的内网 SMTP 账号，外网账号和外网联系人。保存个人账号前会先测试 SMTP 连接和登录。
+        邮件服务器和内网联系人只允许 Redmine 管理员修改；管理员保存 SMTP 服务器前会先测试服务器连通性；每个用户维护自己的内网 SMTP 账号、外网账号和联系人，保存个人账号前会先测试 SMTP 登录。
       </template>
     </el-alert>
 
@@ -30,6 +30,8 @@
         <el-input v-model="internalContactText" class="full-row" type="textarea" :rows="5" placeholder="内网联系人，每行或逗号分隔一个邮箱" />
       </div>
       <div class="toolbar" style="margin-top: 16px">
+        <el-button :loading="testingAdminInternal" @click="testAdminInternal">测试内网服务器</el-button>
+        <el-button :loading="testingAdminExternal" @click="testAdminExternal">测试外网服务器</el-button>
         <el-button type="primary" :loading="savingAdmin" @click="saveAdmin">保存管理员邮件配置</el-button>
       </div>
     </el-card>
@@ -142,7 +144,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testMailConnection } from '../api/http'
+import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testAdminMailServer, testMailConnection } from '../api/http'
 import type { ContactTemplateConfig, MailSettings, SessionInfo } from '../types'
 
 function splitText(text: string): string[] {
@@ -156,6 +158,8 @@ const loading = ref(false)
 const savingAdmin = ref(false)
 const savingInternal = ref(false)
 const savingUser = ref(false)
+const testingAdminInternal = ref(false)
+const testingAdminExternal = ref(false)
 const testingInternal = ref(false)
 const testingUser = ref(false)
 const internalContactText = ref('')
@@ -255,7 +259,7 @@ function fillContactName(contact: EditableContact, options: ContactOption[]) {
 }
 
 const internalContactOptions = computed(() =>
-  collectOptions(userInternalTemplates.value, splitText(internalContactText.value))
+  collectOptions(userInternalTemplates.value, settings.value?.admin.internal_contacts.contacts || [])
 )
 const externalContactOptions = computed(() => collectOptions(userExternalTemplates.value))
 
@@ -267,6 +271,41 @@ async function runMailConnectionTest(scope: MailScope, account: { smtp_user: str
     smtp_from: account.smtp_from
   })
   ElMessage.success(result.message || 'SMTP 连通性测试通过')
+}
+
+async function runAdminServerTest(scope: MailScope, server: { smtp_host: string; smtp_port: number; smtp_from: string; use_tls: boolean }, silent = false) {
+  const result = await testAdminMailServer({
+    scope,
+    smtp_host: server.smtp_host,
+    smtp_port: server.smtp_port,
+    smtp_from: server.smtp_from,
+    use_tls: server.use_tls
+  })
+  if (!silent) ElMessage.success(result.message || 'SMTP 服务器连通性测试通过')
+}
+
+async function testAdminInternal() {
+  if (!settings.value) return
+  testingAdminInternal.value = true
+  try {
+    await runAdminServerTest('internal', settings.value.admin.internal_server)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    testingAdminInternal.value = false
+  }
+}
+
+async function testAdminExternal() {
+  if (!settings.value) return
+  testingAdminExternal.value = true
+  try {
+    await runAdminServerTest('external', settings.value.admin.external_server)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    testingAdminExternal.value = false
+  }
 }
 
 async function testInternal() {
@@ -315,6 +354,12 @@ async function saveAdmin() {
   if (!settings.value || !props.session.is_admin) return
   savingAdmin.value = true
   try {
+    if (settings.value.admin.internal_server.smtp_host.trim()) {
+      await runAdminServerTest('internal', settings.value.admin.internal_server, true)
+    }
+    if (settings.value.admin.external_server.smtp_host.trim()) {
+      await runAdminServerTest('external', settings.value.admin.external_server, true)
+    }
     await saveAdminMailSettings({
       internal_server: settings.value.admin.internal_server,
       external_server: settings.value.admin.external_server,
