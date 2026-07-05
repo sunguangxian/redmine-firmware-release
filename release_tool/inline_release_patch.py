@@ -23,6 +23,7 @@ from .release_page import (
     parse_inline_ref,
     parse_inline_releases,
     parse_release_files,
+    parse_release_page,
     replace_inline_release_block,
 )
 from .release_structure_guard import ensure_release_structure_ready
@@ -173,6 +174,28 @@ def _inline_container_for_release(self: IndexSync, profile: Any, page_title: str
     raise RedmineError("无法按当前分类配置确定内联版本应写入哪个列表页。")
 
 
+def _inline_display_version(block_id: str, block: str) -> str:
+    if not block:
+        return ""
+    try:
+        parsed = parse_release_page(inline_ref("_", block_id), block)
+        return str(parsed.get("version_name") or "").strip()
+    except Exception:
+        return ""
+
+
+def _next_block_id(old_block_id: str, old_display_version: str, new_display_version: str, is_edit: bool) -> str:
+    new_display_version = (new_display_version or "").strip()
+    if not is_edit:
+        return new_display_version
+    old_block_id = (old_block_id or "").strip()
+    old_display_version = (old_display_version or "").strip()
+    # 旧迁移会用唯一 Release 标题作为 block_id；这种情况下编辑时保留 block_id，避免重复版本再次冲突。
+    if old_block_id and old_display_version and old_block_id != old_display_version:
+        return old_block_id
+    return new_display_version
+
+
 def _publish_locked_inline_aware(
     self: ReleasePublisher,
     form: ReleaseForm,
@@ -195,12 +218,12 @@ def _publish_locked_inline_aware(
         raise
 
     old_block_id = form.version_name.strip()
+    is_edit = False
     inline_target = parse_inline_ref(form.wiki_title)
     if inline_target:
         container_page, old_block_id = inline_target
         form.wiki_title = None
-        if old_block_id and old_block_id != form.version_name:
-            self._log(logs, f"内联编辑目标块：{old_block_id} -> {form.version_name}")
+        is_edit = True
     else:
         container_page = index_sync.inline_container_for_release(
             profile,
@@ -208,12 +231,17 @@ def _publish_locked_inline_aware(
             f"**产品线:** {form.product_line}\n**Commit:** {form.commit}\n",
         )
 
-    new_block_id = form.version_name.strip()
     try:
         self._progress(progress, "wiki", "running")
         page = self.client.get_wiki_page(form.project_id, container_page)
         current_text = (page or {}).get("text", "")
         old_block = extract_inline_release_block(current_text, old_block_id)
+        old_display_version = _inline_display_version(old_block_id, old_block)
+        new_block_id = _next_block_id(old_block_id, old_display_version, form.version_name, is_edit)
+        if is_edit and old_block_id != new_block_id:
+            self._log(logs, f"内联编辑目标块：{old_block_id} -> {new_block_id}")
+        elif is_edit and old_block_id != form.version_name.strip():
+            self._log(logs, f"内联编辑保留唯一块标识：{old_block_id}，显示版本：{form.version_name.strip()}")
         old_files = parse_release_files(old_block) if old_block else []
         self._log(logs, f"内联版本页面：{container_page}，已有附件 {len(old_files)} 个")
     except Exception:
