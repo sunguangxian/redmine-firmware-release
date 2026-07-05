@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import re
-import threading
-from collections import defaultdict
 from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 from .attachment_policy import sha256_hex, validate_attachment_batch
 from .redmine_api import RedmineClient, RedmineError
+from .release_lock import PublishLockTimeout, acquire_publish_lock
 from .release_page import (
     ReleaseForm,
     build_inline_release_block,
@@ -25,7 +24,6 @@ from .release_page import (
 )
 from .release_structure_guard import ensure_release_structure_ready
 
-_RELEASE_LOCKS: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 _SHA_RE = re.compile(r"SHA256:\s*([0-9a-fA-F]{64})")
 StageProgress = Callable[[str, str], None]
 
@@ -56,9 +54,14 @@ class ReleasePublisher:
             form.replace_attachments = False
             self._log(logs, "编辑版本未选择新附件，自动保留已有附件列表")
         lock_key = f"{form.project_id}:{form.version_name}".lower()
-        self._log(logs, "发布控制：同一项目同一版本串行执行，避免并发覆盖")
-        with _RELEASE_LOCKS[lock_key]:
-            return self._publish_locked(form, logs, progress, plan)
+        self._log(logs, "发布控制：申请跨进程发布锁，避免多用户并发覆盖")
+        try:
+            with acquire_publish_lock(lock_key):
+                self._log(logs, "发布控制：发布锁获取成功")
+                return self._publish_locked(form, logs, progress, plan)
+        except PublishLockTimeout as exc:
+            self._log(logs, f"发布控制：发布锁获取失败：{exc}")
+            raise RedmineError(str(exc)) from exc
 
     def _publish_locked(
         self,
@@ -128,6 +131,7 @@ class ReleasePublisher:
 
         try:
             self._progress(progress, "wiki", "running")
+            self._assert_wiki_unchanged(form.project_id, title, existing_text, logs)
             markdown = build_release_markdown(form, version["id"], linked_files, main_page=profile.main_page)
             comment = "release tool update" if existing else "release tool create"
             self.client.put_wiki_page(form.project_id, title, markdown, comment)
@@ -237,6 +241,7 @@ class ReleasePublisher:
             raise
 
         try:
+            self._assert_wiki_unchanged(form.project_id, container_page, current_text, logs)
             base_text = current_text
             if old_block_id and old_block_id != new_block_id:
                 base_text = delete_inline_release_block(base_text, old_block_id)
@@ -310,6 +315,14 @@ class ReleasePublisher:
             if category.list_page == container_page:
                 return category.hub if category.list_page != category.hub else profile.main_page
         return None
+
+    def _assert_wiki_unchanged(self, project_id: str, title: str, expected_text: str, logs: list[str] | None = None) -> None:
+        latest = self.client.get_wiki_page(project_id, title)
+        latest_text = (latest or {}).get("text", "")
+        if (expected_text or "") != latest_text:
+            self._log(logs, f"Wiki 冲突检测失败：{title}")
+            raise RedmineError(f"Wiki 页面已被其他用户修改：{title}。请刷新后重新发布，避免覆盖他人改动。")
+        self._log(logs, f"Wiki 冲突检测通过：{title}")
 
     def _preflight_release(self, form: ReleaseForm, logs: list[str] | None = None) -> None:
         if not form.files:
