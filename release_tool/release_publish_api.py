@@ -14,22 +14,21 @@ from pydantic import BaseModel
 
 from .access_control import list_visible_history, require_project_access
 from .api_app import (
-    MAIL_SCOPE_INTERNAL,
-    _current_client,
-    _current_session,
     _list_release_rows,
     _mail_scope_label,
     _send_release_notice,
     _validate_notice_preflight,
     _validate_release_preflight,
 )
-from .email_sender import EmailSendError
 from .attachment_policy import sha256_hex
+from .config_store import MAIL_SCOPE_INTERNAL
+from .dependencies import _current_client, _current_session
+from .email_sender import EmailSendError
 from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
-from .release_planner import ReleasePlanner
 from .release_page import ReleaseForm, proj_tag_from_project
+from .release_planner import ReleasePlanner
 from .release_publish_history import create_publish_history, get_publish_history, list_publish_history, update_publish_history
 
 
