@@ -6,8 +6,8 @@ from typing import Any, Dict
 
 from fastapi import Depends, FastAPI, Query
 
-from .api_app import _current_session, _require_admin
 from .audit_log import list_audit_logs
+from .dependencies import _current_session, _require_admin
 
 
 def register_audit_routes(app: FastAPI) -> None:
