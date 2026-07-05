@@ -70,7 +70,7 @@ def register_release_catalog_routes(app: FastAPI) -> None:
         client: RedmineClient = Depends(_current_client),
     ) -> List[Dict[str, Any]]:
         require_project_access(session, project_id)
-        return list_release_rows(client, project_id, product_line)
+        return list_release_rows(client, project_id, product_line, use_cache=True)
 
     @app.get("/api/releases/detail")
     def api_release_detail(
