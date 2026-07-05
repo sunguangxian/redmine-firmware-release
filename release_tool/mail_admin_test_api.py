@@ -9,8 +9,9 @@ from typing import Any, Dict
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
-from .api_app import _current_session, _json_error, _mail_scope_label, _normalize_mail_scope, _require_admin
+from .dependencies import _current_session, _json_error, _require_admin
 from .email_sender import EmailSendError
+from .mail_contact_helpers import mail_scope_label, normalize_mail_scope
 
 
 class AdminMailServerTestRequest(BaseModel):
@@ -53,9 +54,9 @@ def register_admin_mail_test_routes(app: FastAPI) -> None:
         session: Dict = Depends(_current_session),
     ) -> Dict[str, Any]:
         _require_admin(session)
-        scope = _normalize_mail_scope(payload.scope)
+        scope = normalize_mail_scope(payload.scope)
         try:
             _test_server_only(payload)
         except EmailSendError as exc:
             raise _json_error(str(exc)) from exc
-        return {"ok": True, "message": f"{_mail_scope_label(scope)} SMTP 服务器连通性测试通过"}
+        return {"ok": True, "message": f"{mail_scope_label(scope)} SMTP 服务器连通性测试通过"}
