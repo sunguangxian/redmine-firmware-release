@@ -8,6 +8,24 @@ from typing import Any
 from .config_store import db
 
 
+STATUS_LABELS = {
+    "pending": "未开始",
+    "running": "执行中",
+    "success": "成功",
+    "failed": "失败",
+    "skipped": "跳过",
+    "unknown": "未知",
+}
+
+STAGE_LABELS = {
+    "release_status": "Redmine 版本",
+    "file_status": "附件",
+    "wiki_status": "Wiki 页面",
+    "index_status": "版本索引",
+    "mail_status": "邮件",
+}
+
+
 def _ensure_table(conn) -> None:
     conn.execute(
         """
@@ -107,6 +125,30 @@ def update_publish_history(history_id: int, **fields: Any) -> None:
         )
 
 
+def _status_label(status: str) -> str:
+    return STATUS_LABELS.get((status or "").strip().lower(), status or "")
+
+
+def _stage_summary(item: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for field, label in STAGE_LABELS.items():
+        status = str(item.get(field) or "")
+        if not status:
+            continue
+        parts.append(f"{label}:{_status_label(status)}")
+    return "；".join(parts)
+
+
+def _recover_actions(item: dict[str, Any]) -> list[dict[str, str]]:
+    actions: list[dict[str, str]] = []
+    if item.get("index_status") == "failed" and item.get("wiki_title"):
+        actions.append({"action": "rebuild_index", "label": "重建索引"})
+    if item.get("release_status") == "success" and item.get("wiki_status") != "success":
+        if not (item.get("form_payload") or {}).get("has_files"):
+            actions.append({"action": "continue", "label": "继续发布"})
+    return actions
+
+
 def _decode_row(row) -> dict[str, Any]:
     item = dict(row)
     try:
@@ -117,6 +159,13 @@ def _decode_row(row) -> dict[str, Any]:
         item["form_payload"] = json.loads(item.get("form_payload") or "{}")
     except Exception:
         item["form_payload"] = {}
+
+    for field in STAGE_LABELS:
+        item[f"{field}_label"] = _status_label(str(item.get(field) or ""))
+    item["status_summary"] = _stage_summary(item)
+    item["recover_actions"] = _recover_actions(item)
+    item["can_rebuild_index"] = any(action["action"] == "rebuild_index" for action in item["recover_actions"])
+    item["can_continue"] = any(action["action"] == "continue" for action in item["recover_actions"])
     return item
 
 
