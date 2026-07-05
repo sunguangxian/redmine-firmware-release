@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from .config_store import db
+from .release_page import parse_inline_ref
 
 
 STATUS_LABELS = {
@@ -57,6 +58,17 @@ def _ensure_table(conn) -> None:
             ON release_publish_history(project_id, wiki_title, created_at)
         """
     )
+
+
+def _wiki_title_candidates(wiki_title: str) -> list[str]:
+    value = (wiki_title or "").strip()
+    if not value:
+        return []
+    result = [value]
+    inline = parse_inline_ref(value)
+    if inline and inline[0] not in result:
+        result.append(inline[0])
+    return result
 
 
 def create_publish_history(
@@ -183,9 +195,11 @@ def list_publish_history(project_id: str = "", wiki_title: str = "", limit: int 
     if project_id:
         clauses.append("project_id = ?")
         params.append(project_id)
-    if wiki_title:
-        clauses.append("wiki_title = ?")
-        params.append(wiki_title)
+    title_candidates = _wiki_title_candidates(wiki_title)
+    if title_candidates:
+        placeholders = ",".join("?" for _ in title_candidates)
+        clauses.append(f"wiki_title IN ({placeholders})")
+        params.extend(title_candidates)
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     with db() as conn:
         _ensure_table(conn)
