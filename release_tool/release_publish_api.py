@@ -23,7 +23,7 @@ from .mail_delivery_helpers import send_release_notice as _send_release_notice
 from .mail_delivery_helpers import validate_notice_preflight as _validate_notice_preflight
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
-from .release_helpers import list_release_rows, validate_release_preflight
+from .release_helpers import invalidate_release_rows, list_release_rows, validate_release_preflight
 from .release_page import ReleaseForm, proj_tag_from_project
 from .release_planner import ReleasePlanner
 from .release_publish_history import create_publish_history, get_publish_history, list_publish_history, update_publish_history
@@ -209,6 +209,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
                 logs=logs,
             )
             title = ReleasePublisher(client).publish(form, logs, progress=progress, plan=plan)
+            invalidate_release_rows(project_id)
             update_publish_history(
                 history_id,
                 wiki_title=title,
@@ -303,6 +304,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
             if action == "rebuild_index":
                 progress("index", "running")
                 count = IndexSync(client, project_id).refresh_all()
+                invalidate_release_rows(project_id)
                 logs.append(f"恢复操作：重建版本索引完成，共处理 {count} 条 Release 记录")
                 update_publish_history(history_id, index_status="success", logs=logs, error_message="")
                 return {"ok": True, "message": f"重建索引完成，共处理 {count} 条 Release 记录", "logs": logs}
@@ -324,6 +326,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
                     replace_attachments=False,
                 )
                 title = ReleasePublisher(client).publish(form, logs, progress=progress)
+                invalidate_release_rows(project_id)
                 logs.append(f"恢复操作：继续发布完成：{title}")
                 update_publish_history(history_id, wiki_title=title, release_status="success", file_status="skipped", wiki_status="success", index_status="success", logs=logs, error_message="")
                 return {"ok": True, "message": f"继续发布完成：{title}", "logs": logs}
