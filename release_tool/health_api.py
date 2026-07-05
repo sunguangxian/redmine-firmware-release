@@ -20,6 +20,7 @@ from .config_store import (
 from .dependencies import _current_client, _current_session, _json_error
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
+from .release_helpers import invalidate_release_rows
 
 
 def register_health_routes(app: FastAPI) -> None:
@@ -113,6 +114,7 @@ def register_health_routes(app: FastAPI) -> None:
             sync = IndexSync(client, project_id)
             preview = sync.preview_refresh_all()
             updated_count = sync.refresh_all()
+            invalidate_release_rows(project_id)
             return {
                 "ok": True,
                 "updated_release_count": updated_count,
