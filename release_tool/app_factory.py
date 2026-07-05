@@ -10,6 +10,7 @@ from .health_api import register_health_routes
 from .index_sync_patch import apply_index_sync_patches
 from .inline_notice_patch import apply_inline_notice_patches
 from .inline_release_patch import apply_inline_release_patches
+from .legacy_migration_api import register_legacy_migration_routes
 from .mail_admin_test_api import register_admin_mail_test_routes
 from .mail_history_patch import apply_mail_history_patch
 from .mail_log_api import register_mail_log_routes
@@ -55,6 +56,7 @@ def create_app():
     register_mail_settings_routes(app)
     register_mail_log_routes(app)
     register_health_routes(app)
+    register_legacy_migration_routes(app)
     register_release_catalog_routes(app)
     register_release_ops_routes(app)
     register_release_publish_routes(app)
