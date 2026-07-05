@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+from .secret_store import protect_secret, unprotect_secret
+
 DEFAULT_REDMINE_BASE_URL = "http://192.168.1.208:3000"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DATA_DIR = ".redmine-release-tool"
@@ -113,6 +115,29 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_contact_templates_lookup
             ON contact_templates(owner_type, user_key, scope, display_order, id);
+
+        CREATE TABLE IF NOT EXISTS legacy_migration_jobs (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL DEFAULT '',
+            entry_pages TEXT NOT NULL DEFAULT '[]',
+            release_detail_mode TEXT NOT NULL DEFAULT 'auto',
+            status TEXT NOT NULL DEFAULT 'running',
+            result TEXT NOT NULL DEFAULT '{}',
+            error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS legacy_migration_job_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_legacy_migration_job_logs_lookup
+            ON legacy_migration_job_logs(job_id, seq);
         """
     )
 
@@ -508,7 +533,7 @@ def get_user_internal_email_settings(user_key: str) -> dict[str, Any]:
         smtp_from = row["smtp_from"] or ""
     return {
         "smtp_user": smtp_user,
-        "smtp_password": smtp_password,
+        "smtp_password": unprotect_secret(smtp_password),
         "smtp_from": smtp_from,
         "contacts_to": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_TO),
         "contacts_cc": _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_INTERNAL, CONTACT_CC),
@@ -547,7 +572,7 @@ def store_user_internal_email_settings(
             (
                 user_key,
                 (smtp_user or "").strip(),
-                smtp_password or "",
+                protect_secret(smtp_password or ""),
                 (smtp_from or "").strip(),
             ),
         )
@@ -607,7 +632,7 @@ def get_user_external_email_settings(user_key: str) -> dict[str, Any]:
     contacts_cc = _get_contacts(USER_OWNER, user_key, MAIL_SCOPE_EXTERNAL, CONTACT_CC)
     return {
         "smtp_user": smtp_user,
-        "smtp_password": smtp_password,
+        "smtp_password": unprotect_secret(smtp_password),
         "smtp_from": smtp_from,
         "contacts_to": contacts_to,
         "contacts_cc": contacts_cc,
@@ -646,7 +671,7 @@ def store_user_external_email_settings(
             (
                 user_key,
                 (smtp_user or "").strip(),
-                smtp_password or "",
+                protect_secret(smtp_password or ""),
                 (smtp_from or "").strip(),
             ),
         )

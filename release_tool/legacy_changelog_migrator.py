@@ -10,8 +10,8 @@ from urllib.parse import urlparse
 
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
-from .release_page import ReleaseForm, build_release_markdown
-from .wiki_config import CONFIG_BEGIN, CONFIG_END, CONFIG_PAGE_TITLE
+from .release_page import ReleaseForm, build_inline_release_block, build_release_markdown, replace_inline_release_block
+from .wiki_config import CONFIG_BEGIN, CONFIG_END, CONFIG_PAGE_TITLE, parse_release_wiki_config
 
 DEFAULT_ENTRY_PAGES = ["Changelog"]
 VERSION_HEADING_RE = re.compile(
@@ -70,17 +70,33 @@ class LegacyChangelogMigrator:
         project_id: str,
         entry_pages: Optional[List[str]] = None,
         log_callback: Optional[Callable[[str], None]] = None,
+        release_detail_mode: str = "auto",
     ):
         self.client = client
         self.project_id = project_id
         self.entry_pages = [item.strip() for item in (entry_pages or DEFAULT_ENTRY_PAGES) if item.strip()]
         self._log_callback = log_callback
+        self.release_detail_mode = self._normalize_detail_mode(release_detail_mode)
         self._wiki_index: Optional[List[Dict[str, Any]]] = None
         self._pages: Dict[str, Optional[Dict[str, Any]]] = {}
 
     def _log(self, message: str) -> None:
         if self._log_callback:
             self._log_callback(message)
+
+    def _normalize_detail_mode(self, value: str | None) -> str:
+        mode = (value or "auto").strip().lower()
+        return mode if mode in {"auto", "inline", "page"} else "auto"
+
+    def _selected_detail_mode(self) -> str:
+        if self.release_detail_mode in {"inline", "page"}:
+            return self.release_detail_mode
+        page = self.client.get_wiki_page(self.project_id, CONFIG_PAGE_TITLE)
+        if page:
+            config = parse_release_wiki_config(page.get("text", ""))
+            if config and config.release_detail_mode in {"inline", "page"}:
+                return config.release_detail_mode
+        return "inline"
 
     def preview(self) -> Dict[str, Any]:
         releases, sources, warnings = self.scan()
@@ -186,13 +202,15 @@ class LegacyChangelogMigrator:
             }
 
         categories = self._release_categories(releases)
-        models = [item["key"] for item in categories]
         single_list = len(categories) == 1
         structure = "single_list" if single_list else "multi_list"
-        self._log(f"写入 Release_Tool_Config，结构：{structure}，分类：{', '.join(item['title'] for item in categories)}")
-        self._save_release_tool_config(categories, single_list=single_list)
+        detail_mode = self._selected_detail_mode()
+        preview["release_detail_mode"] = detail_mode
+        preview["release_detail_mode_label"] = "内联模式" if detail_mode == "inline" else "一版本一页"
+        self._log(f"写入 Release_Tool_Config，结构：{structure}，版本模式：{detail_mode}，分类：{', '.join(item['title'] for item in categories)}")
+        self._save_release_tool_config(categories, single_list=single_list, detail_mode=detail_mode)
         self._log("创建 Release_Notes 索引结构")
-        self._create_release_structure(categories, single_list=single_list)
+        self._create_release_structure(categories, single_list=single_list, detail_mode=detail_mode)
         self._update_wiki_home_if_needed(releases)
         self._log("读取 Redmine Version 列表")
         versions = {item.get("name", ""): item for item in self.client.list_versions(self.project_id)}
@@ -263,18 +281,36 @@ class LegacyChangelogMigrator:
                 wiki_title=release.wiki_title,
                 replace_attachments=True,
             )
-            text = build_release_markdown(form, int(version["id"]), linked_files)
-            text = text.rstrip() + f"\n\n## 迁移来源\n\n- [[{release.source_page}]]\n"
             try:
-                parent_title = "Release_Notes" if single_list else f"Release_Notes_{release.model}"
-                self._log(f"写入 Release Wiki：{release.wiki_title}")
-                self.client.put_wiki_page(
-                    self.project_id,
-                    release.wiki_title,
-                    text,
-                    "legacy changelog migration",
-                    parent_title=parent_title,
-                )
+                if detail_mode == "inline":
+                    container = self._legacy_inline_container(release, single_list=single_list)
+                    page = self.client.get_wiki_page(self.project_id, container)
+                    current = (page or {}).get("text", "")
+                    block = build_inline_release_block(
+                        form,
+                        int(version["id"]),
+                        linked_files,
+                        source_page=release.source_page,
+                        block_id=release.wiki_title,
+                        display_version=release.version,
+                    )
+                    new_text = replace_inline_release_block(current, release.wiki_title, block)
+                    self._log(f"写入内联 Release 块：{container} / {release.wiki_title}")
+                    self.client.put_wiki_page(self.project_id, container, new_text, "legacy changelog inline migration")
+                    self.client.update_version(int(version["id"]), wiki_page_title=container, due_date=release.date, description=self._version_description(release))
+                else:
+                    text = build_release_markdown(form, int(version["id"]), linked_files)
+                    text = text.rstrip() + f"\n\n## 迁移来源\n\n- [[{release.source_page}]]\n"
+                    parent_title = "Release_Notes" if single_list else f"Release_Notes_{release.model}"
+                    self._log(f"写入 Release Wiki：{release.wiki_title}")
+                    self.client.put_wiki_page(
+                        self.project_id,
+                        release.wiki_title,
+                        text,
+                        "legacy changelog migration",
+                        parent_title=parent_title,
+                    )
+                    self.client.update_version(int(version["id"]), wiki_page_title=release.wiki_title, due_date=release.date, description=self._version_description(release))
             except RedmineError as exc:
                 raise RedmineError(f"写入 Release Wiki 失败：{release.wiki_title}；{exc}") from exc
             updated_pages += 1
@@ -284,7 +320,8 @@ class LegacyChangelogMigrator:
             refreshed = IndexSync(self.client, self.project_id).refresh_all()
         except RedmineError as exc:
             raise RedmineError(f"Release 索引重建失败；{exc}") from exc
-        self._log(f"迁移完成：创建版本 {created_versions} 个，上传项目文件 {uploaded_files} 个，更新 Release Wiki {updated_pages} 页")
+        target_word = "处" if detail_mode == "inline" else "页"
+        self._log(f"迁移完成：创建版本 {created_versions} 个，上传项目文件 {uploaded_files} 个，更新 Release Wiki {updated_pages} {target_word}")
         return {
             "ok": True,
             "preview": preview,
@@ -292,9 +329,11 @@ class LegacyChangelogMigrator:
             "uploaded_files": uploaded_files,
             "updated_release_pages": updated_pages,
             "refreshed_release_count": refreshed,
+            "release_detail_mode": detail_mode,
+            "release_detail_mode_label": "内联模式" if detail_mode == "inline" else "一版本一页",
             "message": (
                 f"迁移完成：创建版本 {created_versions} 个，上传项目文件 {uploaded_files} 个，"
-                f"更新 Release Wiki {updated_pages} 页，重建索引 {refreshed} 个 Release。"
+                f"更新 Release Wiki {updated_pages} {target_word}，重建索引 {refreshed} 个 Release。"
             ),
         }
 
@@ -529,13 +568,13 @@ class LegacyChangelogMigrator:
             result.append({"key": key, "title": release.category_title or key})
         return result
 
-    def _save_release_tool_config(self, categories: List[Dict[str, str]], *, single_list: bool) -> None:
+    def _save_release_tool_config(self, categories: List[Dict[str, str]], *, single_list: bool, detail_mode: str = "page") -> None:
         if single_list:
-            self._save_single_list_config(categories[0])
+            self._save_single_list_config(categories[0], detail_mode=detail_mode)
         else:
-            self._save_multi_list_config(categories)
+            self._save_multi_list_config(categories, detail_mode=detail_mode)
 
-    def _save_single_list_config(self, category: Dict[str, str]) -> None:
+    def _save_single_list_config(self, category: Dict[str, str], detail_mode: str = "page") -> None:
         lines = [
             "# Release Tool Config",
             "",
@@ -545,11 +584,11 @@ class LegacyChangelogMigrator:
             "```yaml",
             "mode: single_list",
             "main_page: Release_Notes",
-            f"release_page_prefix: Release_{category['key']}_FW_",
-            "```",
-            CONFIG_END,
-            "",
+            f"release_detail_mode: {detail_mode}",
         ]
+        if detail_mode == "page":
+            lines.append(f"release_page_prefix: Release_{category['key']}_FW_")
+        lines.extend(["```", CONFIG_END, ""])
         self.client.put_wiki_page(
             self.project_id,
             CONFIG_PAGE_TITLE,
@@ -557,7 +596,7 @@ class LegacyChangelogMigrator:
             "legacy changelog migration config",
         )
 
-    def _save_multi_list_config(self, categories: List[Dict[str, str]]) -> None:
+    def _save_multi_list_config(self, categories: List[Dict[str, str]], detail_mode: str = "page") -> None:
         lines = [
             "# Release Tool Config",
             "",
@@ -567,18 +606,21 @@ class LegacyChangelogMigrator:
             "```yaml",
             "mode: multi_list",
             "main_page: Release_Notes",
-            "release_page_prefix: Release_{category}_FW_",
-            "categories:",
         ]
+        lines.append(f"release_detail_mode: {detail_mode}")
+        if detail_mode == "page":
+            lines.append("release_page_prefix: Release_{category}_FW_")
+        lines.append("categories:")
         for category in categories:
             key = category["key"]
             title = category["title"]
+            list_page = f"Release_Notes_{key}" if detail_mode == "inline" else f"Release_Notes_{key}_List"
             lines.extend(
                 [
                     f"  - key: {key}",
                     f"    title: {title}",
                     f"    hub_page: Release_Notes_{key}",
-                    f"    list_page: Release_Notes_{key}_List",
+                    f"    list_page: {list_page}",
                     "",
                 ]
             )
@@ -590,7 +632,7 @@ class LegacyChangelogMigrator:
             "legacy changelog migration config",
         )
 
-    def _create_release_structure(self, categories: List[Dict[str, str]], *, single_list: bool) -> None:
+    def _create_release_structure(self, categories: List[Dict[str, str]], *, single_list: bool, detail_mode: str = "page") -> None:
         if single_list:
             self.client.put_wiki_page(
                 self.project_id,
@@ -620,7 +662,16 @@ class LegacyChangelogMigrator:
             key = category["key"]
             title = category["title"]
             hub = f"Release_Notes_{key}"
-            list_page = f"Release_Notes_{key}_List"
+            list_page = f"Release_Notes_{key}" if detail_mode == "inline" else f"Release_Notes_{key}_List"
+            if detail_mode == "inline":
+                self.client.put_wiki_page(
+                    self.project_id,
+                    hub,
+                    f"# {title}\n\n[[Release_Notes|返回 Release Notes]]\n\n## 版本列表\n\n",
+                    "legacy changelog migration structure",
+                    parent_title="Release_Notes",
+                )
+                continue
             self.client.put_wiki_page(
                 self.project_id,
                 hub,
@@ -640,6 +691,9 @@ class LegacyChangelogMigrator:
                 "legacy changelog migration structure",
                 parent_title=hub,
             )
+
+    def _legacy_inline_container(self, release: LegacyRelease, *, single_list: bool) -> str:
+        return "Release_Notes" if single_list else f"Release_Notes_{release.model}"
 
     def _single_list_placeholder(self, model: str) -> str:
         return (

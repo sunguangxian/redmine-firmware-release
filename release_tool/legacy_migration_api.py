@@ -16,8 +16,6 @@ from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
 from .api_app import (
-    LEGACY_JOB_LOCK,
-    LEGACY_MIGRATION_JOBS,
     _append_legacy_job_log,
     _client_from_session,
     _current_client,
@@ -26,8 +24,8 @@ from .api_app import (
     _require_admin,
     _set_legacy_job_state,
 )
-from .inline_release_patch import normalize_migration_detail_mode, selected_migration_detail_mode
 from .legacy_changelog_migrator import LegacyChangelogMigrator
+from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job
 from .redmine_api import RedmineClient
 from .release_page import extract_inline_release_block
 
@@ -62,9 +60,24 @@ def _make_migrator(
     payload: LegacyMigrationRequestV2,
     log_callback=None,
 ) -> LegacyChangelogMigrator:
-    migrator = LegacyChangelogMigrator(client, payload.project_id, payload.entry_pages, log_callback=log_callback)
-    migrator.release_detail_mode = normalize_migration_detail_mode(payload.release_detail_mode)
-    return migrator
+    return LegacyChangelogMigrator(
+        client,
+        payload.project_id,
+        payload.entry_pages,
+        log_callback=log_callback,
+        release_detail_mode=payload.release_detail_mode,
+    )
+
+
+def _create_legacy_job(job_id: str, payload: LegacyMigrationRequestV2) -> None:
+    cleanup_legacy_jobs()
+    create_legacy_job(
+        job_id,
+        project_id=payload.project_id,
+        entry_pages=payload.entry_pages,
+        release_detail_mode=payload.release_detail_mode,
+    )
+    _append_legacy_job_log(job_id, f"准备执行旧项目升级，版本模式：{payload.release_detail_mode or 'auto'}")
 
 
 def _legacy_inline_container(release: Any, *, single_list: bool) -> str:
@@ -94,10 +107,10 @@ def _apply_inline_preview_counts(migrator: LegacyChangelogMigrator, preview: Dic
 
 def _preview_with_mode(migrator: LegacyChangelogMigrator) -> Dict[str, Any]:
     preview = migrator.preview()
-    detail_mode = selected_migration_detail_mode(migrator)
+    detail_mode = migrator._selected_detail_mode()
     preview["release_detail_mode"] = detail_mode
     preview["release_detail_mode_label"] = "内联模式" if detail_mode == "inline" else "一版本一页"
-    preview["requested_release_detail_mode"] = normalize_migration_detail_mode(getattr(migrator, "release_detail_mode", "auto"))
+    preview["requested_release_detail_mode"] = migrator.release_detail_mode
     if detail_mode == "inline":
         preview["target_page_label"] = "承载页面"
         _apply_inline_preview_counts(migrator, preview)
@@ -152,13 +165,7 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
     ) -> Dict[str, Any]:
         _require_admin(session)
         job_id = uuid.uuid4().hex
-        with LEGACY_JOB_LOCK:
-            LEGACY_MIGRATION_JOBS[job_id] = {
-                "status": "running",
-                "logs": [f"准备执行旧项目升级，版本模式：{normalize_migration_detail_mode(payload.release_detail_mode)}"],
-                "result": None,
-                "error": "",
-            }
+        _create_legacy_job(job_id, payload)
         thread = threading.Thread(
             target=_run_legacy_migration_job,
             args=(job_id, payload, dict(session)),

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from . import api_app
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
     MAIL_SCOPE_INTERNAL,
@@ -94,9 +93,3 @@ def build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSett
         user_cfg.get("contacts_to", []),
         user_cfg.get("contacts_cc", []),
     )
-
-
-def apply_mail_policy_patches() -> None:
-    """替换 api_app 中早期的邮件联系人策略。"""
-    api_app._contacts_for_scope = contacts_for_scope
-    api_app._build_email_settings = build_email_settings

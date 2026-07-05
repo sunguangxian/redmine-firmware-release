@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import smtplib
 import ssl
-from typing import Dict
+from typing import Any, Dict
 
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel
@@ -51,7 +51,7 @@ def register_admin_mail_test_routes(app: FastAPI) -> None:
     def api_test_admin_mail_server(
         payload: AdminMailServerTestRequest,
         session: Dict = Depends(_current_session),
-    ) -> Dict[str, str | bool]:
+    ) -> Dict[str, Any]:
         _require_admin(session)
         scope = _normalize_mail_scope(payload.scope)
         try:

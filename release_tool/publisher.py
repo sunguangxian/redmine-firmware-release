@@ -5,17 +5,23 @@ from __future__ import annotations
 import re
 import threading
 from collections import defaultdict
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 from .attachment_policy import sha256_hex, validate_attachment_batch
 from .redmine_api import RedmineClient, RedmineError
 from .release_page import (
     ReleaseForm,
+    build_inline_release_block,
     build_release_markdown,
+    delete_inline_release_block,
+    extract_inline_release_block,
+    inline_ref,
     merge_release_files,
+    parse_inline_ref,
     parse_release_files,
     parse_release_page,
+    replace_inline_release_block,
 )
 from .release_structure_guard import ensure_release_structure_ready
 
@@ -33,6 +39,7 @@ class ReleasePublisher:
         form: ReleaseForm,
         logs: list[str] | None = None,
         progress: StageProgress | None = None,
+        plan: dict[str, Any] | None = None,
     ) -> str:
         self._log(logs, f"开始处理版本：{form.version_name}")
         if form.files:
@@ -51,24 +58,33 @@ class ReleasePublisher:
         lock_key = f"{form.project_id}:{form.version_name}".lower()
         self._log(logs, "发布控制：同一项目同一版本串行执行，避免并发覆盖")
         with _RELEASE_LOCKS[lock_key]:
-            return self._publish_locked(form, logs, progress)
+            return self._publish_locked(form, logs, progress, plan)
 
     def _publish_locked(
         self,
         form: ReleaseForm,
         logs: list[str] | None = None,
         progress: StageProgress | None = None,
+        plan: dict[str, Any] | None = None,
     ) -> str:
         try:
             self._progress(progress, "release", "running")
             self._log(logs, "检查项目 Wiki 发布结构")
             index_sync, profile = ensure_release_structure_ready(self.client, form.project_id, logs)
+            if self._is_inline_profile(profile):
+                return self._publish_locked_inline(form, index_sync, profile, logs, progress, plan)
             self._log(logs, f"项目发布结构：{profile.mode}")
             self._validate_category(form, index_sync, profile, logs)
-            generated_title = self._configured_release_title(form, index_sync, profile)
-            if generated_title and not form.wiki_title:
-                form.wiki_title = generated_title
-                self._log(logs, f"按项目配置生成 Release 页面：{generated_title}")
+            if plan and plan.get("mode") == "page":
+                planned_title = str(plan.get("target_page") or "").strip()
+                if planned_title:
+                    form.wiki_title = planned_title
+                    self._log(logs, f"使用发布计划目标页面：{planned_title}")
+            else:
+                generated_title = self._configured_release_title(form, index_sync, profile)
+                if generated_title and not form.wiki_title:
+                    form.wiki_title = generated_title
+                    self._log(logs, f"按项目配置生成 Release 页面：{generated_title}")
             version_name = self._configured_version_name(form, index_sync, profile)
             version = self._get_or_create_version(form, logs, version_name=version_name)
             self._progress(progress, "release", "success")
@@ -82,7 +98,7 @@ class ReleasePublisher:
             existing = self.client.get_wiki_page(form.project_id, title)
             existing_text = (existing or {}).get("text", "")
             self._log(logs, f"Wiki 页面：{'编辑已有页面' if existing else '创建新页面'} {title}")
-            old_files = parse_release_files(existing_text) if existing_text else []
+            old_files = list(plan.get("old_files") or []) if plan and plan.get("mode") == "page" else (parse_release_files(existing_text) if existing_text else [])
         except Exception:
             self._progress(progress, "wiki", "failed")
             raise
@@ -94,7 +110,7 @@ class ReleasePublisher:
                 self._progress(progress, "file", "skipped")
             self._log(
                 logs,
-                f"附件策略：{'替换旧附件列表' if form.replace_attachments else '保留旧附件并追加'}；"
+                f"附件策略：{plan.get('attachment_plan') if plan and plan.get('mode') == 'page' else ('替换旧附件列表' if form.replace_attachments else '保留旧附件并追加')}；"
                 f"已有 {len(old_files)} 个，本次选择 {len(form.files)} 个",
             )
             new_files = self._upload_files(form, version["id"], logs)
@@ -144,6 +160,156 @@ class ReleasePublisher:
             self._progress(progress, "index", "failed")
             raise
         return title
+
+    def _publish_locked_inline(
+        self,
+        form: ReleaseForm,
+        index_sync,
+        profile,
+        logs: list[str] | None = None,
+        progress: StageProgress | None = None,
+        plan: dict[str, Any] | None = None,
+    ) -> str:
+        try:
+            self._log(logs, f"项目发布结构：{profile.mode}，内联版本")
+            self._validate_category(form, index_sync, profile, logs)
+            version_name = self._configured_version_name(form, index_sync, profile)
+            version = self._get_or_create_version(form, logs, version_name=version_name)
+            self._progress(progress, "release", "success")
+        except Exception:
+            self._progress(progress, "release", "failed")
+            raise
+
+        old_block_id = form.version_name.strip()
+        is_edit = False
+        if plan and plan.get("mode") == "inline":
+            container_page = str(plan.get("container_page") or "").strip()
+            new_block_id = str(plan.get("block_id") or "").strip()
+            old_block_id = str(plan.get("old_block_id") or old_block_id).strip()
+            is_edit = bool(plan.get("is_edit"))
+            form.wiki_title = None
+        else:
+            inline_target = parse_inline_ref(form.wiki_title)
+            if inline_target:
+                container_page, old_block_id = inline_target
+                form.wiki_title = None
+                is_edit = True
+            else:
+                container_page = index_sync.inline_container_for_release(
+                    profile,
+                    form.page_title,
+                    f"**产品线:** {form.product_line}\n**Commit:** {form.commit}\n",
+                )
+            new_block_id = ""
+
+        try:
+            self._progress(progress, "wiki", "running")
+            page = self.client.get_wiki_page(form.project_id, container_page)
+            current_text = (page or {}).get("text", "")
+            if plan and plan.get("mode") == "inline":
+                old_files = list(plan.get("old_files") or [])
+            else:
+                old_block = extract_inline_release_block(current_text, old_block_id)
+                old_display_version = self._inline_display_version(old_block_id, old_block)
+                new_block_id = self._next_block_id(old_block_id, old_display_version, form.version_name, is_edit)
+                old_files = parse_release_files(old_block) if old_block else []
+            if is_edit and old_block_id != new_block_id:
+                self._log(logs, f"内联编辑目标块：{old_block_id} -> {new_block_id}")
+            elif is_edit and old_block_id != form.version_name.strip():
+                self._log(logs, f"内联编辑保留唯一块标识：{old_block_id}，显示版本：{form.version_name.strip()}")
+            self._log(logs, f"内联版本页面：{container_page}，已有附件 {len(old_files)} 个")
+        except Exception:
+            self._progress(progress, "wiki", "failed")
+            raise
+
+        try:
+            if form.files:
+                self._progress(progress, "file", "running")
+            else:
+                self._progress(progress, "file", "skipped")
+            new_files = self._upload_files(form, version["id"], logs)
+            linked_files = merge_release_files(old_files, new_files, replace=form.replace_attachments)
+            self._log(logs, f"附件列表合并完成：最终 {len(linked_files)} 个")
+            if form.files:
+                self._progress(progress, "file", "success")
+        except Exception:
+            self._progress(progress, "file", "failed")
+            raise
+
+        try:
+            base_text = current_text
+            if old_block_id and old_block_id != new_block_id:
+                base_text = delete_inline_release_block(base_text, old_block_id)
+                self._log(logs, f"已删除旧内联版本块：{old_block_id}")
+            block = build_inline_release_block(form, int(version["id"]), linked_files, block_id=new_block_id)
+            new_text = replace_inline_release_block(base_text, new_block_id, block)
+            parent_title = self._inline_parent_title(profile, container_page)
+            self.client.put_wiki_page(
+                form.project_id,
+                container_page,
+                new_text,
+                "release tool inline update",
+                parent_title=parent_title,
+            )
+            self._log(logs, f"内联版本写入完成：{container_page} / {form.version_name}")
+            self._progress(progress, "wiki", "success")
+        except Exception:
+            self._progress(progress, "wiki", "failed")
+            raise
+
+        try:
+            self._progress(progress, "release", "running")
+            self.client.update_version(
+                version["id"],
+                wiki_page_title=container_page,
+                due_date=form.release_date,
+                description=self._version_description(form),
+            )
+            self._progress(progress, "release", "success")
+        except Exception:
+            self._progress(progress, "release", "failed")
+            raise
+
+        try:
+            self._progress(progress, "index", "running")
+            index_sync.sync_after_publish(container_page, new_text)
+            self._log(logs, "内联版本索引同步完成")
+            self._progress(progress, "index", "success")
+        except Exception:
+            self._progress(progress, "index", "failed")
+            raise
+
+        return inline_ref(container_page, new_block_id)
+
+    def _is_inline_profile(self, profile) -> bool:
+        return getattr(profile, "release_detail_mode", "inline") == "inline"
+
+    def _inline_display_version(self, block_id: str, block: str) -> str:
+        if not block:
+            return ""
+        try:
+            parsed = parse_release_page(inline_ref("_", block_id), block)
+            return str(parsed.get("version_name") or "").strip()
+        except Exception:
+            return ""
+
+    def _next_block_id(self, old_block_id: str, old_display_version: str, new_display_version: str, is_edit: bool) -> str:
+        new_display_version = (new_display_version or "").strip()
+        if not is_edit:
+            return new_display_version
+        old_block_id = (old_block_id or "").strip()
+        old_display_version = (old_display_version or "").strip()
+        if old_block_id and old_display_version and old_block_id != old_display_version:
+            return old_block_id
+        return new_display_version
+
+    def _inline_parent_title(self, profile, container_page: str) -> str | None:
+        if profile.mode != "multi_list":
+            return None
+        for category in profile.categories:
+            if category.list_page == container_page:
+                return category.hub if category.list_page != category.hub else profile.main_page
+        return None
 
     def _preflight_release(self, form: ReleaseForm, logs: list[str] | None = None) -> None:
         if not form.files:
@@ -211,6 +377,25 @@ class ReleasePublisher:
         return form.version_name.strip()
 
     def list_releases(self, project_id: str) -> list[dict]:
+        sync = IndexSync(self.client, project_id)
+        try:
+            profile = sync.discover_profile()
+        except RedmineError:
+            profile = None
+        if profile and self._is_inline_profile(profile):
+            rows = []
+            for item in sync._build_items(profile):
+                rows.append(
+                    {
+                        "title": item["page"],
+                        "version": item["ver"],
+                        "date": item["date"],
+                        "product_line": item.get("product_line", ""),
+                        "summary": item.get("summary", ""),
+                    }
+                )
+            rows.sort(key=lambda x: x["date"], reverse=True)
+            return rows
         pages = self.client.get_wiki_index(project_id)
         releases = []
         for item in pages:

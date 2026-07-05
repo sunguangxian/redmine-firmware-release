@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Request, Response
 
 from .api_app import (
     SESSION_COOKIE,
-    SESSIONS,
+    SESSION_STORE,
     LoginRequest,
     LoginResponse,
     _current_client,
@@ -94,7 +94,7 @@ def register_auth_routes(app: FastAPI) -> None:
             "last_seen_at": now,
         }
         sid = uuid.uuid4().hex
-        SESSIONS[sid] = session
+        SESSION_STORE.set(sid, session)
         _set_session_cookie(response, sid)
         store_login(base_url, username, payload.password, payload.remember, auth_mode=auth_mode, api_key=api_key)
         return _public_session(session)
@@ -108,6 +108,6 @@ def register_auth_routes(app: FastAPI) -> None:
     @app.post("/api/auth/logout")
     def api_logout(request: Request, response: Response) -> Dict[str, bool]:
         sid = request.cookies.get(SESSION_COOKIE, "")
-        SESSIONS.pop(sid, None)
+        SESSION_STORE.delete(sid)
         response.delete_cookie(SESSION_COOKIE)
         return {"ok": True}

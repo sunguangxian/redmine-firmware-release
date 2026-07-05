@@ -10,6 +10,7 @@ class FakeProfile:
     categories = []
     main_page = "Release_Notes"
     release_page_prefix = ""
+    release_detail_mode = "page"
 
 
 class FakeIndexSync:

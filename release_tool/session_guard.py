@@ -8,7 +8,7 @@ from typing import Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from .api_app import SESSION_COOKIE, SESSIONS
+from .api_app import SESSION_COOKIE, SESSION_STORE
 from .session_config import SESSION_IDLE_SECONDS, SESSION_TTL_SECONDS
 
 
@@ -27,11 +27,11 @@ def register_session_guard(app: FastAPI) -> None:
     async def session_expiration_guard(request: Request, call_next: Callable):
         if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/auth/login"):
             sid = request.cookies.get(SESSION_COOKIE, "")
-            session = SESSIONS.get(sid)
+            session = SESSION_STORE.get(sid)
             if sid and session:
                 now = time.time()
                 if _expired(session, now):
-                    SESSIONS.pop(sid, None)
+                    SESSION_STORE.delete(sid)
                     response = JSONResponse(status_code=401, content={"detail": "登录会话已过期，请重新登录"})
                     response.delete_cookie(SESSION_COOKIE)
                     return response

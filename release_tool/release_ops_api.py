@@ -19,6 +19,7 @@ from .api_app import (
 from .email_sender import EmailSendError
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
+from .release_planner import ReleasePlanner
 from .release_page import ReleaseForm, parse_release_files, proj_tag_from_project
 from .release_structure_guard import ensure_release_structure_ready
 
@@ -108,15 +109,10 @@ def register_release_ops_routes(app: FastAPI) -> None:
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
         logs: List[str] = []
-        action = "编辑版本" if edit_title else "发布新版本"
         items = _split_changelog(changelog)
-        warnings: List[str] = []
         try:
             _validate_release_preflight(project_id, version_name, release_date, commit, items)
             logs.append("基础字段预检查通过")
-
-            index_sync, profile = ensure_release_structure_ready(client, project_id, logs)
-
             if notice_enabled:
                 notice_scope, notice_to_addrs, notice_cc_addrs = _validate_notice_preflight(
                     session, mail_scope, mail_to, mail_cc, mail_subject, mail_body
@@ -140,53 +136,78 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 wiki_title=edit_title or None,
                 replace_attachments=bool(replace_attachments),
             )
-
-            publisher = ReleasePublisher(client)
-            publisher._validate_category(form, index_sync, profile, logs)
-            generated_title = publisher._configured_release_title(form, index_sync, profile)
-            wiki_title = edit_title or generated_title or form.page_title
-            version_plan = "将复用已有 Version"
-            version_name_final = publisher._configured_version_name(form, index_sync, profile)
-            if not any(v.get("name", "").strip() == version_name_final for v in client.list_versions(project_id)):
-                version_plan = "将创建新 Version"
-
-            old_files_count = 0
-            if edit_title:
-                page = client.get_wiki_page(project_id, edit_title)
-                if page:
-                    old_files_count = len(parse_release_files(page.get("text", "")))
-                if replace_attachments and not preview_files:
-                    warnings.append("编辑版本未选择新附件，实际更新时会自动保留已有附件列表。")
-                    attachment_plan = f"保留已有附件 {old_files_count} 个，不上传新附件"
-                elif replace_attachments:
-                    attachment_plan = f"用 {len(preview_files)} 个新附件替换旧附件列表"
-                else:
-                    attachment_plan = f"保留已有附件 {old_files_count} 个，并追加 {len(preview_files)} 个新附件"
-            else:
-                attachment_plan = f"上传 {len(preview_files)} 个新附件"
-                if not preview_files:
-                    warnings.append("本次发布没有选择附件，Wiki 文件列表会显示为空。")
-
-            preview = {
-                "ok": True,
-                "action": action,
-                "project_id": project_id,
-                "version_name": version_name.strip(),
-                "release_date": release_date.strip(),
-                "wiki_title": wiki_title,
-                "version_plan": version_plan,
-                "attachment_plan": attachment_plan,
-                "files": preview_files,
-                "notice_enabled": bool(notice_enabled),
-                "mail_scope_label": mail_scope_label,
-                "mail_to_count": len(notice_to_addrs),
-                "mail_cc_count": len(notice_cc_addrs),
-                "warnings": warnings,
-                "logs": logs,
-            }
-            return {**preview, "summary": "\n".join(_build_preview_lines(preview))}
+            preview = ReleasePlanner(client).build_plan(
+                form,
+                new_files=preview_files,
+                notice_enabled=notice_enabled,
+                mail_scope_label=mail_scope_label,
+                mail_to_count=len(notice_to_addrs),
+                mail_cc_count=len(notice_cc_addrs),
+                logs=logs,
+            )
+            return {**preview, "logs": logs, "summary": "\n".join(preview["summary_lines"])}
         except (ValueError, EmailSendError, RedmineError) as exc:
             logs.append(f"预览失败：{exc}")
+            return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
+
+    @app.post("/api/releases/plan")
+    async def api_plan_release(
+        project_id: str = Form(...),
+        version_name: str = Form(...),
+        release_date: str = Form(...),
+        commit: str = Form(...),
+        product_line: str = Form(""),
+        changelog: str = Form(...),
+        replace_attachments: bool = Form(False),
+        edit_title: str = Form(""),
+        notice_enabled: bool = Form(False),
+        mail_scope: str = Form("internal"),
+        mail_to: str = Form(""),
+        mail_cc: str = Form(""),
+        mail_subject: str = Form(""),
+        mail_body: str = Form(""),
+        files: Optional[List[UploadFile]] = File(None),
+        session: Dict[str, Any] = Depends(_current_session),
+        client: RedmineClient = Depends(_current_client),
+    ) -> Dict[str, Any]:
+        logs: List[str] = []
+        items = _split_changelog(changelog)
+        try:
+            _validate_release_preflight(project_id, version_name, release_date, commit, items)
+            if notice_enabled:
+                notice_scope, notice_to_addrs, notice_cc_addrs = _validate_notice_preflight(
+                    session, mail_scope, mail_to, mail_cc, mail_subject, mail_body
+                )
+                mail_scope_label = _mail_scope_label(notice_scope)
+            else:
+                notice_to_addrs = []
+                notice_cc_addrs = []
+                mail_scope_label = ""
+            preview_files = await _read_preview_files(files)
+            form = ReleaseForm(
+                project_id=project_id,
+                proj_tag=proj_tag_from_project(project_id, edit_title or None),
+                version_name=version_name.strip(),
+                release_date=release_date.strip(),
+                commit=commit.strip(),
+                product_line=product_line.strip(),
+                changelog_items=items,
+                files=[(item["filename"], "", b"x") for item in preview_files],
+                wiki_title=edit_title or None,
+                replace_attachments=bool(replace_attachments),
+            )
+            plan = ReleasePlanner(client).build_plan(
+                form,
+                new_files=preview_files,
+                notice_enabled=notice_enabled,
+                mail_scope_label=mail_scope_label,
+                mail_to_count=len(notice_to_addrs),
+                mail_cc_count=len(notice_cc_addrs),
+                logs=logs,
+            )
+            return {**plan, "logs": logs}
+        except (ValueError, EmailSendError, RedmineError) as exc:
+            logs.append(f"计划生成失败：{exc}")
             return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
 
     @app.post("/api/releases/notice/send")
@@ -224,6 +245,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 mail_cc=cc_addrs,
                 mail_subject=mail_subject,
                 mail_body=mail_body,
+                send_type="retry",
             )
             logs.append(message)
             return {"ok": True, "message": message, "logs": logs}

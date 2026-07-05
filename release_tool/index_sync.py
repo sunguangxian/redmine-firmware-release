@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .redmine_api import RELEASE_PAGE_RE, RedmineClient, RedmineError
-from .release_page import proj_tag_from_project
+from .release_page import parse_inline_releases, proj_tag_from_project
 from .wiki_config import CONFIG_PAGE_TITLE, ConfigCategory, parse_release_wiki_config
 
 SYNC_BEGIN = "<!-- RELEASE_SYNC_BEGIN -->"
@@ -46,6 +46,7 @@ class WikiProfile:
     main_page: str
     categories: list[CategoryProfile]
     release_page_prefix: str = ""
+    release_detail_mode: str = "inline"
 
 
 class IndexSync:
@@ -59,6 +60,10 @@ class IndexSync:
     def sync_after_publish(self, page_title: str, page_text: str) -> None:
         self._page_cache[page_title] = {"title": page_title, "text": page_text}
         profile = self.discover_profile()
+        if self._is_inline_profile(profile):
+            if profile.mode == "multi_list":
+                self._refresh_main_preserving_manual_content(profile, self._build_items(profile))
+            return
         items = self._build_items(profile)
 
         if profile.mode == "multi_list":
@@ -79,6 +84,10 @@ class IndexSync:
     def refresh_all(self) -> int:
         profile = self.discover_profile()
         items = self._build_items(profile)
+        if self._is_inline_profile(profile):
+            if profile.mode == "multi_list" and items:
+                self._refresh_main_preserving_manual_content(profile, items)
+            return len(items)
         if not items:
             return 0
 
@@ -211,6 +220,7 @@ class IndexSync:
                 main_page=config.main_page,
                 categories=[],
                 release_page_prefix=config.release_page_prefix,
+                release_detail_mode=config.release_detail_mode,
             )
         else:
             categories = [self._category_from_config(c) for c in config.categories]
@@ -219,6 +229,7 @@ class IndexSync:
                 main_page=config.main_page,
                 categories=categories,
                 release_page_prefix=config.release_page_prefix,
+                release_detail_mode=config.release_detail_mode,
             )
 
         self._profile_cache = profile
@@ -243,6 +254,8 @@ class IndexSync:
         return [p["title"] for p in pages if RELEASE_PAGE_RE.match(p.get("title", ""))]
 
     def _build_items(self, profile: WikiProfile) -> list[dict[str, Any]]:
+        if self._is_inline_profile(profile):
+            return self._build_inline_items(profile)
         items = []
         for title in self._release_titles():
             page = self._get_page(title)
@@ -265,6 +278,52 @@ class IndexSync:
                 }
             )
         return items
+
+    def _is_inline_profile(self, profile: WikiProfile) -> bool:
+        return getattr(profile, "release_detail_mode", "inline") == "inline"
+
+    def _build_inline_items(self, profile: WikiProfile) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        containers = (
+            [(category.key, category.list_page) for category in profile.categories]
+            if profile.mode == "multi_list"
+            else [("", profile.main_page)]
+        )
+        for category_key, container in containers:
+            page = self._get_page(container)
+            if not page:
+                continue
+            for item in parse_inline_releases(page.get("text", ""), container):
+                text = item.get("text", "")
+                category = category_key or self._categorize(
+                    item["title"],
+                    text,
+                    item["version"],
+                    self._extract_commit(text),
+                    profile.categories,
+                )
+                result.append(
+                    {
+                        "cat": category,
+                        "ver": item["version"],
+                        "date": item["date"],
+                        "page": item["title"],
+                        "container_page": container,
+                        "block_id": item.get("block_id", ""),
+                        "summary": item["summary"],
+                        "product_line": item.get("product_line", ""),
+                    }
+                )
+        return result
+
+    def inline_container_for_release(self, profile: WikiProfile, page_title: str, page_text: str) -> str:
+        if profile.mode != "multi_list":
+            return profile.main_page
+        category = self._categorize(page_title, page_text, categories=profile.categories)
+        for item in profile.categories:
+            if item.key == category:
+                return item.list_page
+        raise RedmineError("无法按当前分类配置确定内联版本应写入哪个列表页。")
 
     def _sync_categories(
         self,
@@ -329,14 +388,7 @@ class IndexSync:
                         )
 
         if update_main:
-            main = self._build_main(profile, items)
-            self.client.put_wiki_page(
-                self.project_id,
-                profile.main_page,
-                main,
-                comment="auto sync main counts",
-            )
-            self._page_cache[profile.main_page] = {"title": profile.main_page, "text": main}
+            self._refresh_main_preserving_manual_content(profile, items)
 
     def _refresh_single(self, profile: WikiProfile, items: list[dict[str, Any]] | None = None) -> int:
         items = items or self._build_items(profile)
@@ -354,13 +406,11 @@ class IndexSync:
             f"## 版本列表\n\n"
             f"{lines}"
         )
-        self.client.put_wiki_page(
-            self.project_id,
-            profile.main_page,
-            fallback,
-            comment="Release Notes 索引",
-        )
-        self._page_cache[profile.main_page] = {"title": profile.main_page, "text": fallback}
+        page = self._get_page(profile.main_page)
+        current = (page or {}).get("text", "")
+        new_text = self._replace_generated_region(current, lines, "版本列表") if current else fallback
+        self.client.put_wiki_page(self.project_id, profile.main_page, new_text, comment="Release Notes 索引")
+        self._page_cache[profile.main_page] = {"title": profile.main_page, "text": new_text}
         for item in sorted_items:
             page = self._get_page(item["page"])
             if page and (page.get("parent") or {}).get("title") != profile.main_page:
@@ -429,7 +479,7 @@ class IndexSync:
 
     def _format_release_lines(self, items: list[dict[str, Any]]) -> str:
         return "\n".join(
-            f"- [[{i['page']}|{i['ver']} ({i['date']})]] - {i['summary']}" for i in items
+            f"- [[{i.get('container_page') or i['page']}|{i['ver']} ({i['date']})]] - {i['summary']}" for i in items
         )
 
     def _build_category_page(self, profile: WikiProfile, category: CategoryProfile, list_text: str) -> str:
@@ -453,11 +503,11 @@ class IndexSync:
         )
 
     def _build_main(self, profile: WikiProfile, items: list[dict[str, Any]]) -> str:
-        tag = proj_tag_from_project(self.project_id, items[0]["page"] if items else None)
-        lines = [
-            "## Product Lines",
-            "",
-        ]
+        generated = self._build_main_generated(profile, items)
+        return self._build_main_fallback(profile, items, generated)
+
+    def _build_main_generated(self, profile: WikiProfile, items: list[dict[str, Any]]) -> str:
+        lines = ["## Product Lines", ""]
         for category in profile.categories:
             count = sum(1 for i in items if i["cat"] == category.key)
             suffix = f" ({count})" if count else ""
@@ -481,8 +531,10 @@ class IndexSync:
                     "",
                 ]
             )
+        return "\n".join(lines).rstrip()
 
-        generated = "\n".join(lines).rstrip()
+    def _build_main_fallback(self, profile: WikiProfile, items: list[dict[str, Any]], generated: str) -> str:
+        tag = proj_tag_from_project(self.project_id, items[0]["page"] if items else None)
         return (
             f"# Release Notes\n\n"
             f"{tag} firmware release index. Firmware binaries are stored in "
@@ -492,6 +544,15 @@ class IndexSync:
             f"{{{{>toc}}}}\n\n"
             f"{generated}"
         )
+
+    def _refresh_main_preserving_manual_content(self, profile: WikiProfile, items: list[dict[str, Any]]) -> None:
+        generated = self._build_main_generated(profile, items)
+        fallback = self._build_main_fallback(profile, items, generated)
+        page = self._get_page(profile.main_page)
+        current = (page or {}).get("text", "")
+        new_text = self._replace_generated_region(current, generated, "Product Lines") if current else fallback
+        self.client.put_wiki_page(self.project_id, profile.main_page, new_text, comment="auto sync main counts")
+        self._page_cache[profile.main_page] = {"title": profile.main_page, "text": new_text}
 
     def _category_by_key(self, profile: WikiProfile, key: str) -> CategoryProfile | None:
         for category in profile.categories:

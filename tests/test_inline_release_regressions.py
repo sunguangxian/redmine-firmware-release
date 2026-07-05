@@ -5,8 +5,9 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from release_tool import mail_history, release_publish_history
-from release_tool.inline_release_patch import _format_release_lines_inline_aware, _next_block_id
+from release_tool.index_sync import IndexSync
 from release_tool.mail_history import _wiki_title_candidates as mail_title_candidates
+from release_tool.publisher import ReleasePublisher
 from release_tool.release_page import (
     ReleaseForm,
     build_inline_release_block,
@@ -49,8 +50,9 @@ class InlineReleaseRegressionTest(unittest.TestCase):
         self.assertIn("V1.0.1", extract_inline_release_block(text, "V1.0.1"))
 
     def test_unique_migration_block_id_is_preserved_on_edit(self):
+        publisher = ReleasePublisher(None)
         self.assertEqual(
-            _next_block_id(
+            publisher._next_block_id(
                 "Release_DM181_FW_V1_0_0_20260705",
                 "V1.0.0",
                 "V1.0.1",
@@ -58,11 +60,11 @@ class InlineReleaseRegressionTest(unittest.TestCase):
             ),
             "Release_DM181_FW_V1_0_0_20260705",
         )
-        self.assertEqual(_next_block_id("V1.0.0", "V1.0.0", "V1.0.1", True), "V1.0.1")
+        self.assertEqual(publisher._next_block_id("V1.0.0", "V1.0.0", "V1.0.1", True), "V1.0.1")
 
     def test_index_links_use_container_page_for_inline_items(self):
-        lines = _format_release_lines_inline_aware(
-            None,
+        sync = IndexSync.__new__(IndexSync)
+        lines = sync._format_release_lines(
             [
                 {
                     "page": inline_ref("Release_Notes_DM181", "Release_DM181_FW_V1_0_0"),

@@ -24,9 +24,11 @@ from .api_app import (
     _validate_release_preflight,
 )
 from .email_sender import EmailSendError
+from .attachment_policy import sha256_hex
 from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
+from .release_planner import ReleasePlanner
 from .release_page import ReleaseForm, proj_tag_from_project
 from .release_publish_history import create_publish_history, get_publish_history, list_publish_history, update_publish_history
 
@@ -197,7 +199,20 @@ def register_release_publish_routes(app: FastAPI) -> None:
         )
 
         try:
-            title = ReleasePublisher(client).publish(form, logs, progress=progress)
+            plan_files = [
+                {"filename": filename, "size": len(content), "sha256": sha256_hex(content)}
+                for filename, _desc, content in file_rows
+            ]
+            plan = ReleasePlanner(client).build_plan(
+                form,
+                new_files=plan_files,
+                notice_enabled=notice_enabled,
+                mail_scope_label=_mail_scope_label(notice_scope) if notice_enabled else "",
+                mail_to_count=len(notice_to_addrs),
+                mail_cc_count=len(notice_cc_addrs),
+                logs=logs,
+            )
+            title = ReleasePublisher(client).publish(form, logs, progress=progress, plan=plan)
             update_publish_history(
                 history_id,
                 wiki_title=title,
@@ -250,6 +265,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
             "mail_status": mail_status,
             "mail_status_label": f"邮件发送{_mail_status_label(mail_status)}",
             "result_summary": f"Redmine 发布：成功\n附件处理：{'成功' if file_rows else '未选择'}\n邮件发送：{_mail_status_label(mail_status)}",
+            "plan": plan,
         }
 
     @app.get("/api/releases/publish-history")
