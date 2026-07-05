@@ -76,3 +76,10 @@ def apply_mail_history_patch() -> None:
         release_ops_api._send_release_notice = _wrap_send(release_ops_api._send_release_notice, send_type="retry")
     except Exception:
         pass
+
+    try:
+        from . import release_publish_api
+
+        release_publish_api._send_release_notice = _wrap_send(release_publish_api._send_release_notice, send_type="publish")
+    except Exception:
+        pass
