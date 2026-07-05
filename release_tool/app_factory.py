@@ -19,6 +19,7 @@ from .mail_settings_api import register_mail_settings_routes
 from .mail_test_api import register_mail_test_routes
 from .release_catalog_api import register_release_catalog_routes
 from .release_ops_api import register_release_ops_routes
+from .release_preview_api import register_release_preview_routes
 from .release_publish_api import register_release_publish_routes
 from .secure_config import apply_secure_config_patches
 from .session_guard import register_session_guard
@@ -59,6 +60,7 @@ def create_app():
     register_legacy_migration_routes(app)
     register_release_catalog_routes(app)
     register_release_ops_routes(app)
+    register_release_preview_routes(app)
     register_release_publish_routes(app)
     register_wiki_config_routes(app)
     move_frontend_routes_to_end()
