@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import threading
+from collections import defaultdict
 from urllib.parse import quote, urlparse
 
+from .attachment_policy import sha256_hex, validate_attachment_batch
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
 from .release_page import (
@@ -14,6 +17,8 @@ from .release_page import (
     parse_release_page,
 )
 
+_RELEASE_LOCKS: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+
 
 class ReleasePublisher:
     def __init__(self, client: RedmineClient):
@@ -21,7 +26,13 @@ class ReleasePublisher:
 
     def publish(self, form: ReleaseForm, logs: list[str] | None = None) -> str:
         self._log(logs, f"开始处理版本：{form.version_name}")
+        self._preflight_release(form, logs)
+        lock_key = f"{form.project_id}:{form.version_name}".lower()
+        self._log(logs, "发布控制：同一项目同一版本串行执行，避免并发覆盖")
+        with _RELEASE_LOCKS[lock_key]:
+            return self._publish_locked(form, logs)
 
+    def _publish_locked(self, form: ReleaseForm, logs: list[str] | None = None) -> str:
         index_sync = IndexSync(self.client, form.project_id)
         self._log(logs, "读取项目 Release_Tool_Config 配置")
         profile = index_sync.discover_profile()
@@ -70,6 +81,18 @@ class ReleasePublisher:
         index_sync.sync_after_publish(title, markdown)
         self._log(logs, "版本索引同步完成")
         return title
+
+    def _preflight_release(self, form: ReleaseForm, logs: list[str] | None = None) -> None:
+        self._log(logs, "发布预检查：校验附件类型、大小和 SHA256")
+        validate_attachment_batch(form.files)
+        files: list[tuple[str, str, bytes]] = []
+        for filename, description, content in form.files:
+            digest = sha256_hex(content)
+            desc = (description or "").strip()
+            sha_desc = f"SHA256: {digest}"
+            files.append((filename, f"{desc}; {sha_desc}" if desc else sha_desc, content))
+        form.files = files
+        self._log(logs, "发布预检查完成：附件校验通过，已生成 SHA256")
 
     def _validate_category(self, form: ReleaseForm, index_sync: IndexSync, profile, logs: list[str] | None = None) -> None:
         if profile.mode != "multi_list":
