@@ -3,16 +3,62 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
+import os
+import time
+from typing import Any, Dict, List, Tuple
 
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient
 
 RECENT_RELEASE_LIMIT = 50
+_RELEASE_CACHE: dict[Tuple[str, str], tuple[float, List[Dict[str, Any]]]] = {}
 
 
-def list_release_rows(client: RedmineClient, project_id: str, product_line: str = "") -> List[Dict[str, Any]]:
-    releases = ReleasePublisher(client).list_releases(project_id)
+def release_cache_ttl_seconds() -> int:
+    try:
+        return max(0, int(os.environ.get("RELEASE_TOOL_RELEASE_CACHE_TTL", "30")))
+    except ValueError:
+        return 30
+
+
+def invalidate_release_rows(project_id: str = "") -> None:
+    normalized_project = (project_id or "").strip()
+    if not normalized_project:
+        _RELEASE_CACHE.clear()
+        return
+    for key in list(_RELEASE_CACHE):
+        if key[1] == normalized_project:
+            _RELEASE_CACHE.pop(key, None)
+
+
+def _cache_key(client: RedmineClient, project_id: str) -> Tuple[str, str]:
+    return (getattr(client, "base_url", ""), (project_id or "").strip())
+
+
+def _copy_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [dict(item) for item in rows]
+
+
+def list_release_rows(
+    client: RedmineClient,
+    project_id: str,
+    product_line: str = "",
+    *,
+    use_cache: bool = False,
+) -> List[Dict[str, Any]]:
+    cache_key = _cache_key(client, project_id)
+    ttl = release_cache_ttl_seconds()
+    now = time.monotonic()
+    if use_cache and ttl > 0:
+        cached = _RELEASE_CACHE.get(cache_key)
+        if cached and now - cached[0] <= ttl:
+            releases = _copy_rows(cached[1])
+        else:
+            releases = ReleasePublisher(client).list_releases(project_id)
+            _RELEASE_CACHE[cache_key] = (now, _copy_rows(releases))
+    else:
+        releases = ReleasePublisher(client).list_releases(project_id)
+
     if product_line:
         releases = [item for item in releases if item.get("product_line") == product_line]
     return releases[:RECENT_RELEASE_LIMIT]
