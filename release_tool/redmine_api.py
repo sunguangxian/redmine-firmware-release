@@ -50,7 +50,11 @@ class RedmineClient:
         return f"{self.base_url}{path}"
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
-        resp = self.session.request(method, self._url(path), timeout=60, **kwargs)
+        try:
+            resp = self.session.request(method, self._url(path), timeout=60, **kwargs)
+        except requests.RequestException as exc:
+            raise RedmineError(f"Redmine {method} {path} 请求失败：{exc}") from exc
+
         if resp.status_code == 401:
             raise RedmineError("登录失败：用户名密码或 API Key 错误，或无 API 访问权限")
         if resp.status_code == 403:
@@ -62,7 +66,11 @@ class RedmineClient:
             raise RedmineError(f"Redmine {method} {path} 返回 HTTP {resp.status_code}: {detail}")
         if resp.status_code == 204 or not resp.content:
             return None
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            detail = resp.text[:500]
+            raise RedmineError(f"Redmine {method} {path} 返回了无法解析的 JSON: {detail}") from exc
 
     def test_login(self) -> dict[str, Any]:
         return self._request("GET", "/my/account.json")
@@ -158,22 +166,32 @@ class RedmineClient:
 
     def upload_file(self, filename: str, content: bytes) -> str:
         upload_url = f"{self.base_url}/uploads.json?filename={quote(filename)}"
-        resp = self.session.post(
-            upload_url,
-            data=content,
-            headers={"Content-Type": "application/octet-stream"},
-            timeout=120,
-        )
+        try:
+            resp = self.session.post(
+                upload_url,
+                data=content,
+                headers={"Content-Type": "application/octet-stream"},
+                timeout=120,
+            )
+        except requests.RequestException as exc:
+            raise RedmineError(f"上传失败 {filename}: {exc}") from exc
         if resp.status_code >= 400:
             raise RedmineError(f"上传失败 {filename}: HTTP {resp.status_code} {resp.text[:200]}")
-        token = resp.json()["upload"]["token"]
+        try:
+            data = resp.json()
+            token = data["upload"]["token"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RedmineError(f"上传失败 {filename}: Redmine 返回内容无法解析") from exc
         return token
 
     def download_content_url(self, content_url: str) -> bytes:
         url = content_url
         if content_url.startswith("/"):
             url = f"{self.base_url}{content_url}"
-        resp = self.session.get(url, timeout=120)
+        try:
+            resp = self.session.get(url, timeout=120)
+        except requests.RequestException as exc:
+            raise RedmineError(f"下载附件失败: {exc}") from exc
         if resp.status_code >= 400:
             raise RedmineError(f"下载附件失败: HTTP {resp.status_code} {resp.text[:200]}")
         return resp.content
