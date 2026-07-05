@@ -8,9 +8,10 @@ from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
 from . import config_store
-from .api_app import _current_session, _json_error, _mail_scope_label, _normalize_mail_scope
 from .config_store import MAIL_SCOPE_EXTERNAL, MAIL_SCOPE_INTERNAL
+from .dependencies import _current_session, _json_error
 from .email_sender import EmailSendError, EmailSettings, test_smtp_connection
+from .mail_contact_helpers import mail_scope_label, normalize_mail_scope
 
 
 class MailConnectionTestRequest(BaseModel):
@@ -29,7 +30,7 @@ def _stored_user_mail_settings(scope: str, user_key: str) -> Dict[str, Any]:
 
 
 def _build_test_settings(payload: MailConnectionTestRequest, session: Dict[str, Any]) -> Tuple[str, EmailSettings]:
-    scope = _normalize_mail_scope(payload.scope)
+    scope = normalize_mail_scope(payload.scope)
     server = config_store.get_email_server_settings(scope)
     user_cfg = _stored_user_mail_settings(scope, session.get("user_key", ""))
     password = payload.smtp_password or user_cfg.get("smtp_password", "")
@@ -62,4 +63,4 @@ def register_mail_test_routes(app: FastAPI) -> None:
             test_smtp_connection(settings)
         except EmailSendError as exc:
             raise _json_error(str(exc)) from exc
-        return {"ok": True, "message": f"{_mail_scope_label(scope)} SMTP 连通性测试通过"}
+        return {"ok": True, "message": f"{mail_scope_label(scope)} SMTP 连通性测试通过"}
