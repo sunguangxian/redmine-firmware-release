@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -31,7 +31,7 @@ from .legacy_job_store import append_legacy_job_log, legacy_job_snapshot, update
 from .mail_history import record_mail_send
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
-from .release_page import PRODUCT_LINES, parse_inline_ref
+from .release_page import parse_inline_ref
 from .session_store import InMemorySessionStore
 
 SESSION_COOKIE = "release_tool_session"
@@ -424,25 +424,6 @@ def _send_release_notice(
 @app.exception_handler(RedmineError)
 async def redmine_error_handler(_request: Request, exc: RedmineError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
-
-
-@app.get("/api/meta")
-def api_meta() -> Dict[str, Any]:
-    return {
-        "product_lines": list(PRODUCT_LINES.keys()),
-        "mail_scopes": [
-            {"label": "内网邮件", "value": MAIL_SCOPE_INTERNAL},
-            {"label": "外网邮件", "value": MAIL_SCOPE_EXTERNAL},
-        ],
-        "today": date.today().isoformat(),
-    }
-
-
-@app.get("/api/projects")
-def api_projects(session: Dict[str, Any] = Depends(_current_session), client: RedmineClient = Depends(_current_client)) -> List[Dict[str, Any]]:
-    if not session.get("is_admin"):
-        session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
-    return session.get("projects", [])
 
 
 def _mount_frontend() -> None:
