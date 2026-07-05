@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import os
+import re
 import time
 from typing import Any
 from urllib.parse import quote
@@ -16,7 +16,7 @@ class RedmineError(Exception):
 
 
 VERSION_DESCRIPTION_LIMIT = 255
-RETRY_STATUS_CODES = {502, 503, 504}
+RETRY_STATUS_CODES = {429, 502, 503, 504}
 
 
 def _limit_version_description(value: str) -> str:
@@ -62,6 +62,27 @@ class RedmineClient:
             methods = {item.strip().upper() for item in configured.split(",") if item.strip()}
         return methods
 
+    def _timeout_seconds(self, env_name: str, default: int) -> int:
+        try:
+            return max(1, int(os.environ.get(env_name, str(default))))
+        except ValueError:
+            return default
+
+    def _request_timeout(self) -> int:
+        return self._timeout_seconds("RELEASE_TOOL_REDMINE_TIMEOUT", 60)
+
+    def _file_timeout(self) -> int:
+        return self._timeout_seconds("RELEASE_TOOL_REDMINE_FILE_TIMEOUT", 120)
+
+    def _retry_delay(self, attempt: int, resp: requests.Response | None = None) -> float:
+        retry_after = (resp.headers.get("Retry-After", "") if resp is not None else "").strip()
+        if retry_after:
+            try:
+                return min(max(float(retry_after), 0.0), 5.0)
+            except ValueError:
+                pass
+        return min(0.2 * attempt, 1.0)
+
     def _should_retry(self, method: str, path: str) -> bool:
         method = method.upper()
         if method == "POST" and path.endswith("/files.json"):
@@ -75,23 +96,26 @@ class RedmineClient:
         method = method.upper()
         max_attempts = 1 + self._retry_count() if self._should_retry(method, path) else 1
         last_error: requests.RequestException | None = None
+        resp: requests.Response | None = None
         for attempt in range(1, max_attempts + 1):
             try:
-                resp = self.session.request(method, self._url(path), timeout=60, **kwargs)
+                resp = self.session.request(method, self._url(path), timeout=self._request_timeout(), **kwargs)
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt < max_attempts:
-                    time.sleep(min(0.2 * attempt, 1.0))
+                    time.sleep(self._retry_delay(attempt))
                     continue
                 raise RedmineError(f"Redmine {method} {path} 请求失败：{exc}") from exc
 
             if resp.status_code in RETRY_STATUS_CODES and attempt < max_attempts:
-                time.sleep(min(0.2 * attempt, 1.0))
+                time.sleep(self._retry_delay(attempt, resp))
                 continue
             break
         else:
             raise RedmineError(f"Redmine {method} {path} 请求失败：{last_error}")
 
+        if resp is None:
+            raise RedmineError(f"Redmine {method} {path} 请求失败：未收到响应")
         if resp.status_code == 401:
             raise RedmineError("登录失败：用户名密码或 API Key 错误，或无 API 访问权限")
         if resp.status_code == 403:
@@ -208,7 +232,7 @@ class RedmineClient:
                 upload_url,
                 data=content,
                 headers={"Content-Type": "application/octet-stream"},
-                timeout=120,
+                timeout=self._file_timeout(),
             )
         except requests.RequestException as exc:
             raise RedmineError(f"上传失败 {filename}: {exc}") from exc
@@ -226,7 +250,7 @@ class RedmineClient:
         if content_url.startswith("/"):
             url = f"{self.base_url}{content_url}"
         try:
-            resp = self.session.get(url, timeout=120)
+            resp = self.session.get(url, timeout=self._file_timeout())
         except requests.RequestException as exc:
             raise RedmineError(f"下载附件失败: {exc}") from exc
         if resp.status_code >= 400:
