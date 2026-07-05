@@ -9,13 +9,18 @@
         <el-input v-model="entryPagesText" placeholder="入口页，多个用逗号分隔" style="width: 280px">
           <template #prepend>入口页</template>
         </el-input>
+        <el-select v-model="releaseDetailMode" placeholder="版本模式" style="width: 220px" @change="clearPreview">
+          <el-option label="自动：沿用项目配置，否则内联" value="auto" />
+          <el-option label="内联：多个版本合并到列表页" value="inline" />
+          <el-option label="一版本一页：兼容旧结构" value="page" />
+        </el-select>
         <el-button :loading="previewing" @click="preview">预览升级</el-button>
         <el-button type="danger" :loading="executing" :disabled="executeDisabled" @click="execute">确认执行升级</el-button>
       </div>
 
       <el-alert class="card" type="warning" :closable="false" show-icon>
         <template #title>
-          执行升级会创建/复用 Redmine Version、把旧 Wiki 附件上传到项目文件、生成新的 Release Wiki 和索引；不会删除旧 Changelog 页面。
+          执行升级会创建/复用 Redmine Version、把旧 Wiki 附件上传到项目文件、生成新的 Release Wiki 和索引；不会删除旧 Changelog 页面。版本模式可按本次迁移动态选择。
         </template>
       </el-alert>
 
@@ -27,6 +32,8 @@
     <el-card v-if="previewData" class="card">
       <template #header>升级预览</template>
       <div class="migration-summary">
+        <div>版本模式：{{ previewData.release_detail_mode_label || modeLabel(releaseDetailMode) }}</div>
+        <div>目标页面类型：{{ previewData.target_page_label || (previewData.release_detail_mode === 'page' ? 'Release 明细页' : '承载页面') }}</div>
         <div>分类/型号：{{ previewData.model_count }}</div>
         <div>源页面：{{ previewData.source_page_count }}</div>
         <div>历史版本：{{ previewData.release_count }}</div>
@@ -34,8 +41,8 @@
         <div>匹配附件：{{ previewData.matched_attachment_count }}</div>
         <div>新建 Version：{{ previewData.versions_to_create }}</div>
         <div>复用 Version：{{ previewData.existing_versions }}</div>
-        <div>新建 Release 页：{{ previewData.release_pages_to_create }}</div>
-        <div>更新 Release 页：{{ previewData.existing_release_pages }}</div>
+        <div>{{ previewData.release_detail_mode === 'page' ? '新建 Release 页' : '待写入版本块' }}：{{ previewData.release_pages_to_create }}</div>
+        <div>{{ previewData.release_detail_mode === 'page' ? '更新 Release 页' : '已有版本块' }}：{{ previewData.existing_release_pages }}</div>
         <div>上传项目文件：{{ previewData.project_files_to_upload }}</div>
         <div>复用项目文件：{{ previewData.existing_project_files }}</div>
       </div>
@@ -91,12 +98,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { errorMessage, getLegacyMigrationJob, previewLegacyMigration, startLegacyMigrationJob } from '../api/http'
+import { errorMessage, getLegacyMigrationJob, previewLegacyMigration, startLegacyMigrationJob, type LegacyReleaseDetailMode } from '../api/http'
 import type { LegacyMigrationJob, LegacyMigrationPreview, Project } from '../types'
 
 const props = defineProps<{ projects: Project[] }>()
 const projectId = ref(props.projects[0]?.identifier || '')
 const entryPagesText = ref('Changelog')
+const releaseDetailMode = ref<LegacyReleaseDetailMode>('auto')
 const previewData = ref<LegacyMigrationPreview | null>(null)
 const previewing = ref(false)
 const executing = ref(false)
@@ -129,6 +137,20 @@ watch(
   scrollProgressToBottom,
   { flush: 'post' }
 )
+
+function modeLabel(mode: LegacyReleaseDetailMode): string {
+  if (mode === 'page') return '一版本一页'
+  if (mode === 'inline') return '内联模式'
+  return '自动'
+}
+
+function migrationPayload() {
+  return {
+    project_id: projectId.value,
+    entry_pages: entryPages(),
+    release_detail_mode: releaseDetailMode.value
+  }
+}
 
 function entryPages(): string[] {
   const pages = entryPagesText.value.split(/[,，;\s]+/).map((item) => item.trim()).filter(Boolean)
@@ -193,8 +215,9 @@ async function preview() {
   if (!projectId.value) return ElMessage.warning('请选择项目')
   previewing.value = true
   try {
-    previewData.value = await previewLegacyMigration({ project_id: projectId.value, entry_pages: entryPages() })
-    message.value = `预览完成：识别 ${previewData.value.model_count} 个型号、${previewData.value.release_count} 个历史版本`
+    previewData.value = await previewLegacyMigration(migrationPayload())
+    const modeText = previewData.value.release_detail_mode_label || modeLabel(releaseDetailMode.value)
+    message.value = `预览完成：${modeText}，识别 ${previewData.value.model_count} 个型号、${previewData.value.release_count} 个历史版本`
     ok.value = !previewData.value.warnings.length && !previewData.value.problems.length
   } catch (error) {
     ElMessage.error(errorMessage(error))
@@ -205,9 +228,10 @@ async function preview() {
 
 async function execute() {
   if (!projectId.value || !previewData.value) return
+  const modeText = previewData.value.release_detail_mode_label || modeLabel(releaseDetailMode.value)
   try {
     await ElMessageBox.confirm(
-      '将写入 Redmine：创建/复用版本、上传旧附件到项目文件、生成 Release Wiki、重建索引。旧 Changelog 页面不会删除。是否继续？',
+      `将按“${modeText}”写入 Redmine：创建/复用版本、上传旧附件到项目文件、生成 Release Wiki、重建索引。旧 Changelog 页面不会删除。是否继续？`,
       '确认执行旧项目升级',
       { type: 'warning' }
     )
@@ -222,7 +246,7 @@ async function execute() {
   currentJobStatus.value = 'running'
   stopPolling()
   try {
-    const job = await startLegacyMigrationJob({ project_id: projectId.value, entry_pages: entryPages() })
+    const job = await startLegacyMigrationJob(migrationPayload())
     applyJob(job)
     if (job.status === 'running') {
       pollTimer = window.setTimeout(pollJob, 1000)
