@@ -30,6 +30,10 @@ class MailNoticeHelpersTest(unittest.TestCase):
 
         self.assertEqual(scope, MAIL_SCOPE_INTERNAL)
 
+    def test_validate_notice_fields_normalizes_scope_error_to_email_error(self):
+        with self.assertRaisesRegex(EmailSendError, "邮件类型只能是 internal 或 external"):
+            validate_notice_fields("bad", "a@example.com", "", "主题", "正文")
+
     def test_validate_notice_fields_requires_recipient(self):
         with self.assertRaisesRegex(EmailSendError, "请填写或选择至少一个收件人"):
             validate_notice_fields(MAIL_SCOPE_INTERNAL, "", "", "主题", "正文")
