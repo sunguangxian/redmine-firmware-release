@@ -15,14 +15,10 @@ from typing import Any, Dict, List
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
-from .api_app import (
-    _append_legacy_job_log,
-    _legacy_job_snapshot,
-    _set_legacy_job_state,
-)
 from .audit_log import record_audit
 from .dependencies import _client_from_session, _current_client, _current_session, _require_admin
 from .legacy_changelog_migrator import LegacyChangelogMigrator
+from .legacy_job_helpers import append_legacy_log, get_legacy_job_snapshot, set_legacy_job_state
 from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job
 from .redmine_api import RedmineClient
 from .release_page import extract_inline_release_block
@@ -75,7 +71,7 @@ def _create_legacy_job(job_id: str, payload: LegacyMigrationRequestV2) -> None:
         entry_pages=payload.entry_pages,
         release_detail_mode=payload.release_detail_mode,
     )
-    _append_legacy_job_log(job_id, f"准备执行旧项目升级，版本模式：{payload.release_detail_mode or 'auto'}")
+    append_legacy_log(job_id, f"准备执行旧项目升级，版本模式：{payload.release_detail_mode or 'auto'}")
 
 
 def _legacy_inline_container(release: Any, *, single_list: bool) -> str:
@@ -119,19 +115,19 @@ def _preview_with_mode(migrator: LegacyChangelogMigrator) -> Dict[str, Any]:
 
 def _run_legacy_migration_job(job_id: str, payload: LegacyMigrationRequestV2, session: Dict[str, Any]) -> None:
     try:
-        _append_legacy_job_log(job_id, "后台任务已启动")
+        append_legacy_log(job_id, "后台任务已启动")
         client = _client_from_session(session)
         migrator = _make_migrator(
             client,
             payload,
-            log_callback=lambda message: _append_legacy_job_log(job_id, message),
+            log_callback=lambda message: append_legacy_log(job_id, message),
         )
         result = migrator.execute()
-        _append_legacy_job_log(job_id, result.get("message", "旧项目升级完成"))
-        _set_legacy_job_state(job_id, status="succeeded", result=result)
+        append_legacy_log(job_id, result.get("message", "旧项目升级完成"))
+        set_legacy_job_state(job_id, status="succeeded", result=result)
     except Exception as exc:
-        _append_legacy_job_log(job_id, f"执行失败：{exc}")
-        _set_legacy_job_state(job_id, status="failed", error=str(exc))
+        append_legacy_log(job_id, f"执行失败：{exc}")
+        set_legacy_job_state(job_id, status="failed", error=str(exc))
 
 
 def register_legacy_migration_routes(app: FastAPI) -> None:
@@ -188,10 +184,10 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
             daemon=True,
         )
         thread.start()
-        return _legacy_job_snapshot(job_id)
+        return get_legacy_job_snapshot(job_id)
 
     @app.get("/api/legacy-migration/jobs/{job_id}")
     def api_get_legacy_migration_job(job_id: str, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
         _require_admin(session)
         cleanup_legacy_jobs()
-        return _legacy_job_snapshot(job_id)
+        return get_legacy_job_snapshot(job_id)
