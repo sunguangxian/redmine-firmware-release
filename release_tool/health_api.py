@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 from fastapi import Depends, FastAPI
 
+from .access_control import require_project_access
 from .api_app import _current_client, _current_session, _json_error
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
@@ -104,9 +105,10 @@ def register_health_routes(app: FastAPI) -> None:
     @app.post("/api/projects/{project_id}/rebuild-release-index")
     def api_rebuild_release_index(
         project_id: str,
-        _session: Dict[str, Any] = Depends(_current_session),
+        session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
+        require_project_access(session, project_id)
         try:
             sync = IndexSync(client, project_id)
             preview = sync.preview_refresh_all()
