@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Depends, FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
+from .attachment_policy import sha256_hex
 from .api_app import (
     _current_client,
     _current_session,
@@ -31,7 +32,7 @@ async def _read_preview_files(files: Optional[List[UploadFile]]) -> List[Dict[st
     for upload in files or []:
         content = await upload.read()
         if upload.filename and content:
-            result.append({"filename": upload.filename, "size": len(content)})
+            result.append({"filename": upload.filename, "size": len(content), "sha256": sha256_hex(content)})
     return result
 
 
@@ -64,7 +65,9 @@ def _build_preview_lines(preview: Dict[str, Any]) -> List[str]:
     ]
     if preview["files"]:
         lines.append("新附件：")
-        lines.extend(f"- {item['filename']} ({_size_text(item['size'])})" for item in preview["files"])
+        for item in preview["files"]:
+            lines.append(f"- {item['filename']} ({_size_text(item['size'])})")
+            lines.append(f"  SHA256: {item['sha256']}")
     else:
         lines.append("新附件：无")
     if preview["notice_enabled"]:
