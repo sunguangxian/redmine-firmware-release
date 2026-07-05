@@ -10,13 +10,12 @@ from fastapi.responses import JSONResponse
 from .access_control import require_project_access
 from .attachment_policy import sha256_hex
 from .api_app import (
-    _current_client,
-    _current_session,
     _mail_scope_label,
     _send_release_notice,
     _validate_notice_preflight,
     _validate_release_preflight,
 )
+from .dependencies import _current_client, _current_session
 from .email_sender import EmailSendError
 from .redmine_api import RedmineClient, RedmineError
 from .release_planner import ReleasePlanner
