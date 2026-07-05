@@ -55,8 +55,18 @@ export async function getReleaseDetail(projectId: string, wikiTitle: string): Pr
   return data
 }
 
+export async function previewRelease(form: FormData): Promise<{ ok: boolean; summary: string; logs: string[] }> {
+  const { data } = await http.post('/api/releases/preview', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  return data
+}
+
 export async function publishRelease(form: FormData): Promise<{ ok: boolean; title: string; notice_message: string; releases: ReleaseSummary[]; logs: string[] }> {
   const { data } = await http.post('/api/releases/publish', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  return data
+}
+
+export async function sendReleaseNotice(form: FormData): Promise<{ ok: boolean; message: string; logs: string[] }> {
+  const { data } = await http.post('/api/releases/notice/send', form, { headers: { 'Content-Type': 'multipart/form-data' } })
   return data
 }
 
