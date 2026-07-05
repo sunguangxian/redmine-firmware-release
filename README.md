@@ -80,9 +80,29 @@ docs\production_deployment.md
 
 - `single_list`：单列表项目，版本分类可以为空。
 - `multi_list`：多分类项目，发布或编辑版本时必须填写版本分类，并且必须匹配配置中的分类。
+- `release_detail_mode: inline`：默认模式，版本明细直接写在主页面或分类列表页中，不单独创建每个版本的 Wiki 页面。
+- `release_detail_mode: page`：兼容旧模式，每个版本单独创建一个 Release Wiki 页面。
+
+推荐小项目使用默认内联模式：
+
+```yaml
+mode: single_list
+main_page: Release_Notes
+release_detail_mode: inline
+```
+
+需要保留“一版本一页”的大项目可以显式配置：
+
+```yaml
+mode: single_list
+main_page: Release_Notes
+release_detail_mode: page
+release_page_prefix: Release_DP580_FW_
+```
 
 注意：
 
+- 未配置 `release_detail_mode` 的旧配置会按 `inline` 处理。
 - 不会再强制所有项目使用 `5X 常规 / 集群 / record / np500` 等固定分类。
 - 发布和编辑页面的分类下拉框按当前项目 `Release_Tool_Config` 动态加载。
 - 只有配置为 `multi_list` 的项目才要求版本分类。
@@ -118,24 +138,28 @@ h2. version:V1.0.0.1 (2021-01-01)
 ## version:V1.0.0.1 (2021-01-01)
 ```
 
-升级后的目标结构：
+升级后的默认目标结构为内联模式：
 
 ```text
 Release_Notes
 ├─ Release_Notes_DM181
-│  └─ Release_Notes_DM181_List
-└─ Release_DM181_FW_V1_0_0_1
+│  ├─ V1.0.0.1
+│  └─ V1.0.0.2
+└─ Release_Notes_D705SM
+   ├─ V1.0.0.1
+   └─ V1.0.0.2
 ```
 
 规则：
 
+- 旧项目升级默认写入 `release_detail_mode: inline`。
+- 如果项目已经存在 `Release_Tool_Config` 且显式配置 `release_detail_mode: page`，旧项目升级会继续使用“一版本一页”模式。
 - Redmine 项目 identifier 只作为平台/容器，不再写入 Release 页面名。
 - 型号作为分类，例如 `DM181`、`D705SM`。
-- Release Wiki 标题格式为 `Release_{model}_FW_{version}`。
 - Redmine Version 名称使用平台统一版本号，例如 `V1.0.0.1`。
 - 如果同一型号下存在重复版本号，迁移器会自动追加日期和序号避免覆盖。
 - 旧 Wiki 附件会下载后重新上传到项目 Files，并绑定到对应 Redmine Version。
-- 新 Release Wiki 页面中的附件表指向项目 Files 下载链接。
+- 新 Release 记录中的附件表指向项目 Files 下载链接。
 - 旧 Changelog 页面和旧 Wiki 附件默认保留，不删除。
 
 升级流程：
@@ -259,57 +283,6 @@ redmine-firmware-release/
 │  └─ wiki_templates.py
 ├─ main.py
 ├─ requirements.txt
-└─ run.bat
+├─ run.bat
+└─ scripts/
 ```
-
-## API 文档
-
-FastAPI 启动后访问：
-
-```text
-http://127.0.0.1:7860/docs
-```
-
-主要接口：
-
-```text
-POST /api/auth/login
-GET  /api/auth/me
-POST /api/auth/logout
-GET  /api/projects
-GET  /api/projects/{project_id}/release-categories
-GET  /api/releases
-GET  /api/releases/detail
-POST /api/releases/publish
-GET  /api/mail/settings
-PUT  /api/mail/admin-settings
-PUT  /api/mail/user-internal-settings
-PUT  /api/mail/user-external-settings
-GET  /api/mail/contacts
-POST /api/legacy-migration/preview
-POST /api/legacy-migration/execute
-GET  /api/wiki-config/templates
-POST /api/wiki-config/generate
-GET  /api/wiki-config/{project_id}/refresh-preview
-POST /api/wiki-config/{project_id}/refresh
-GET  /api/wiki-config/{project_id}
-POST /api/wiki-config/check
-PUT  /api/wiki-config/{project_id}
-```
-
-## 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `RELEASE_TOOL_HOST` | 监听地址，默认 `127.0.0.1`；服务器部署可设为 `0.0.0.0` |
-| `RELEASE_TOOL_PORT` | 监听端口，默认 `7860` |
-| `REDMINE_BASE_URL` | 工具连接的 Redmine 地址 |
-| `RELEASE_TOOL_SAVE_LOGIN_SECRETS` | 默认不在服务器保存 Redmine 登录凭据；设为 `1` 时允许保存 |
-
-## 版本编辑附件规则
-
-- 不选择新附件：保留旧附件。
-- 选择新附件且不勾选替换旧附件列表：保留旧附件并追加新附件。
-- 选择新附件并勾选替换旧附件列表：Wiki 页面只显示新附件。
-
-替换旧附件列表只修改 Wiki 页面里的附件表，不会删除 Redmine 项目文件里的旧文件。
