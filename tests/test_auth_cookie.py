@@ -2,8 +2,8 @@ import unittest
 
 from fastapi import Response
 
-from release_tool.api_app import SESSION_COOKIE
 from release_tool.auth_api import _set_session_cookie
+from release_tool.dependencies import SESSION_COOKIE
 
 
 class AuthCookieTest(unittest.TestCase):

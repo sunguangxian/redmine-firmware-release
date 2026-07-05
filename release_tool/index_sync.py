@@ -403,7 +403,6 @@ class IndexSync:
             f"[项目文件](/projects/{self.project_id}/files)，Wiki 仅记录变更。\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
-            f"## 版本列表\n\n"
             f"{lines}"
         )
         page = self._get_page(profile.main_page)
@@ -467,7 +466,7 @@ class IndexSync:
 
         first_generated_line = generated.lstrip().splitlines()[0] if generated.strip() else ""
         generated_has_heading = bool(heading_re.match(first_generated_line))
-        start = match.start() if generated_has_heading else match.end()
+        start = match.start() if generated_has_heading or section_title == "版本列表" else match.end()
 
         if generated_has_heading:
             end = len(text)
@@ -488,7 +487,6 @@ class IndexSync:
             f"[[{profile.main_page}|← 返回 Release Notes]]\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
-            f"## 版本列表\n\n"
             f"{list_text}"
         )
 
@@ -498,7 +496,6 @@ class IndexSync:
             f"[[{profile.main_page}|返回 Release Notes]]\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
-            f"## Version List\n\n"
             f"{{{{include({category.list_page})}}}}"
         )
 
@@ -647,6 +644,10 @@ class IndexSync:
         m = re.search(rf"# Release {re.escape(tag)} (?:NP500 )?FW ([^\r\n]+)", text, re.I)
         if not m:
             m = re.search(r"# Release [A-Za-z0-9_+-]+(?: NP500)? FW ([^\r\n]+)", text, re.I)
+        if not m:
+            m = re.search(r"^#{1,2}\s+\[([^\]\r\n]+)\]\([^)]+\)", text, re.I | re.M)
+        if not m:
+            m = re.search(r"^#{1,2}\s+(V[^\s\r\n]+)", text, re.I | re.M)
         if m:
             return m.group(1).strip()
         if "_FW_" in title:

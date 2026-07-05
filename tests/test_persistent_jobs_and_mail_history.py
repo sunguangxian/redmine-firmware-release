@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from release_tool import audit_log, legacy_job_store, mail_history
-from release_tool.api_app import _send_release_notice
 from release_tool.config_store import _init_db, clear_local_credentials, get_saved_login, store_login
 from release_tool.email_sender import EmailSendError, EmailSettings
+from release_tool.mail_delivery_helpers import send_release_notice
 
 
 @contextmanager
@@ -55,11 +55,11 @@ class PersistentJobsAndMailHistoryTest(unittest.TestCase):
                 raise EmailSendError("SMTP failed")
 
             with patch("release_tool.mail_history.db", lambda: temp_db(db_file)), patch(
-                "release_tool.api_app._build_email_settings",
+                "release_tool.mail_delivery_helpers.build_email_settings",
                 return_value=(EmailSettings("smtp", 25, "user", "pw", "from@example.com", False), [], []),
-            ), patch("release_tool.api_app.send_release_email", fail_send):
+            ), patch("release_tool.mail_delivery_helpers.send_release_email", fail_send):
                 with self.assertRaises(EmailSendError):
-                    _send_release_notice(
+                    send_release_notice(
                         session={"user_login": "tester"},
                         client=Client(),
                         project_id="dp5x",

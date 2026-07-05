@@ -107,12 +107,8 @@ def build_release_markdown(
     linked_files: list[dict[str, str | None]],
     main_page: str = "Release_Notes",
 ) -> str:
-    meta = form.product_meta
-    title_suffix = (
-        f"NP500 FW {form.version_name}" if meta["np500"] else f"FW {form.version_name}"
-    )
     return (
-        f"# Release {form.proj_tag} {title_suffix}\n\n"
+        f"# {_version_heading_markdown(form.project_id, form.version_name, version_id)}\n\n"
         f"{_release_body_markdown(form, version_id, linked_files)}\n\n"
         f"[[{(main_page or 'Release_Notes').strip() or 'Release_Notes'}|← 返回 Release Notes]]"
     )
@@ -125,17 +121,23 @@ def build_inline_release_block(
     source_page: str = "",
     block_id: str | None = None,
     display_version: str | None = None,
+    container_page: str = "",
 ) -> str:
     marker = inline_block_id(block_id or form.version_name)
     version = (display_version or form.version_name).strip()
-    source = f"\n\n## 迁移来源\n\n- [[{source_page}]]" if source_page else ""
+    source = f"\n\n**迁移来源**\n\n- [[{source_page}]]" if source_page else ""
     return (
         f"{INLINE_BEGIN_PREFIX}{marker} -->\n"
-        f"## {version} ({form.release_date})\n\n"
-        f"{_release_body_markdown(form, version_id, linked_files)}"
+        f"## {_version_heading_markdown(form.project_id, version, version_id)}\n\n"
+        f"{_release_body_markdown(form, version_id, linked_files, heading_level=0)}"
         f"{source}\n"
         f"{INLINE_END_PREFIX}{marker} -->"
     )
+
+
+def _version_heading_markdown(project_id: str, version_name: str, version_id: int | None) -> str:
+    version = (version_name or "").strip()
+    return f"[{version}]({version_or_roadmap_link(project_id, version_id)})" if version else ""
 
 
 def inline_block_id(version_name: str) -> str:
@@ -152,16 +154,66 @@ def _inline_block_pattern(block_id: str, capture_body: bool = False) -> re.Patte
 
 
 def replace_inline_release_block(page_text: str, block_id: str, block: str) -> str:
-    text = page_text or ""
+    text = _remove_version_list_heading(_normalize_inline_block_headings(_ensure_inline_toc(page_text or "")))
     pattern = _inline_block_pattern(block_id)
     if pattern.search(text):
         return pattern.sub(block, text, count=1)
     base = text.rstrip()
     if not base:
-        base = "# Release Notes\n\n固件版本发布记录。"
-    if "## 版本列表" not in base and "<!-- RELEASE_INLINE_BEGIN:" not in base:
-        base += "\n\n## 版本列表"
+        base = _ensure_inline_toc("# Release Notes\n\n固件版本发布记录。")
     return base.rstrip() + "\n\n" + block + "\n"
+
+
+def _ensure_inline_toc(page_text: str) -> str:
+    text = page_text or ""
+    if "{{>toc}}" in text:
+        return text
+    if not text.strip():
+        return "# Release Notes\n\n{{>toc}}\n\n固件版本发布记录。"
+    heading = re.match(r"(?P<head>\s*#\s+[^\r\n]+)(?P<rest>.*)", text, re.S)
+    if heading:
+        return f"{heading.group('head')}\n\n{{{{>toc}}}}\n{heading.group('rest')}"
+    return f"{{{{>toc}}}}\n\n{text}"
+
+
+def _normalize_inline_block_headings(page_text: str) -> str:
+    pattern = re.compile(
+        rf"({re.escape(INLINE_BEGIN_PREFIX)}.*?\s*-->)(?P<body>.*?)({re.escape(INLINE_END_PREFIX)}.*?\s*-->)",
+        re.S,
+    )
+
+    def repl(match: re.Match[str]) -> str:
+        body = match.group("body")
+        body = _link_inline_release_heading(body)
+        body = re.sub(r"^#{2,6}\s+(变更说明|固件文件|迁移来源)\s*$", r"**\1**", body, flags=re.M)
+        return f"{match.group(1)}{body}{match.group(3)}"
+
+    return pattern.sub(repl, page_text or "")
+
+
+def _remove_version_list_heading(page_text: str) -> str:
+    return re.sub(r"(?m)^\s*#{2,6}\s+版本列表\s*\r?\n+", "", page_text or "")
+
+
+def _link_inline_release_heading(block_body: str) -> str:
+    linked_heading = re.search(
+        r"^##\s+\[Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\]\r\n]+)\]\(([^)]+)\)\s*$",
+        block_body,
+        re.I | re.M,
+    )
+    if linked_heading:
+        version = linked_heading.group(1).strip()
+        url = linked_heading.group(2).strip()
+        return block_body[: linked_heading.start()] + f"## [{version}]({url})" + block_body[linked_heading.end() :]
+
+    heading = re.search(r"^##\s+(?!\[)(Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\r\n]+))\s*$", block_body, re.I | re.M)
+    if not heading:
+        return block_body
+    version = heading.group(2).strip()
+    link = re.search(rf"\[版本\s+{re.escape(version)}\]\(([^)]+)\)", block_body)
+    if not link:
+        return block_body
+    return block_body[: heading.start()] + f"## [{version}]({link.group(1)})" + block_body[heading.end() :]
 
 
 def delete_inline_release_block(page_text: str, block_id: str) -> str:
@@ -210,11 +262,14 @@ def _release_body_markdown(
     form: ReleaseForm,
     version_id: int | None,
     linked_files: list[dict[str, str | None]],
+    heading_level: int = 2,
 ) -> str:
+    heading = "#" * max(1, min(6, int(heading_level))) if heading_level else ""
+    changes_title = f"{heading} 变更说明" if heading else "**变更说明**"
+    files_title = f"{heading} 固件文件" if heading else "**固件文件**"
     changes = "\n".join(f"1. {item}" for item in form.changelog_items) or "（见历史 changelog）"
     ver_link = version_or_roadmap_link(form.project_id, version_id)
     files_link = project_path(form.project_id, "/files")
-    product_line_block = f"**产品线:** {form.product_line}\n\n" if form.product_line.strip() else ""
     rows = []
     for item in linked_files:
         name = item.get("filename") or ""
@@ -227,13 +282,12 @@ def _release_body_markdown(
     if not rows:
         rows.append("| （无） | |")
     return (
-        f"{product_line_block}"
         f"**日期:** {form.release_date}\n"
         f"**Commit:** {form.commit}\n\n"
         f"--------------\n\n"
-        f"## 变更说明\n\n"
+        f"{changes_title}\n\n"
         f"{changes}\n\n"
-        f"## 固件文件\n\n"
+        f"{files_title}\n\n"
         f"下载: [版本 {form.version_name}]({ver_link}) | [项目文件]({files_link})\n\n"
         f"| 文件名 | 说明 |\n"
         f"|--------|------|\n"
@@ -244,7 +298,9 @@ def _release_body_markdown(
 def parse_release_files(text: str) -> list[dict[str, str | None]]:
     """解析 Release Wiki 中已有的固件文件表。"""
     files: list[dict[str, str | None]] = []
-    section = re.search(r"## 固件文件\s*\n+(.*?)(?:\n## |\Z)", text, re.S)
+    section = re.search(r"^#{2,6}\s+固件文件\s*\n+(.*?)(?:\n#{1,6}\s+|\Z)", text, re.S | re.M)
+    if not section:
+        section = re.search(r"^\*\*固件文件\*\*\s*\n+(.*?)(?:\n\*\*迁移来源\*\*|\n#{1,6}\s+|\Z)", text, re.S | re.M)
     if not section:
         return files
 
@@ -310,7 +366,13 @@ def format_release_files(files: list[dict[str, str | None]]) -> str:
 
 
 def parse_release_page(title: str, text: str) -> dict:
-    version_match = re.search(r"# Release \S+(?: NP500)? FW ([^\r\n]+)", text, re.I)
+    version_match = re.search(r"^#{1,2}\s+Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\r\n]+)", text, re.I | re.M)
+    if not version_match:
+        version_match = re.search(r"^#{1,2}\s+\[Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\]\r\n]+)\]\([^)]+\)", text, re.I | re.M)
+    if not version_match:
+        version_match = re.search(r"^#{1,2}\s+\[([^\]\r\n]+)\]\([^)]+\)", text, re.I | re.M)
+    if not version_match:
+        version_match = re.search(r"^#{1,2}\s+(V[^\s\r\n]+)", text, re.I | re.M)
     if not version_match:
         version_match = re.search(r"^##\s+([^\s(]+)\s*\((\d{4}-\d{2}-\d{2})\)", text, re.I | re.M)
     version_name = version_match.group(1).strip() if version_match else ""
@@ -334,6 +396,9 @@ def parse_release_page(title: str, text: str) -> dict:
         product_line = product_match.group(1).strip()
     elif "_NP500_FW_" in title:
         product_line = "NP500"
+    elif "_FW_" in title:
+        prefix = title.split("_FW_", 1)[0]
+        product_line = prefix.rsplit("_", 1)[-1].replace("_", " ").strip()
     elif re.search(r"^V5\.4\.7\.", version_name, re.I):
         product_line = "Trunking 集群"
     elif re.search(r"Record|录音", commit) or re.search(r"录音", text):
@@ -342,7 +407,9 @@ def parse_release_page(title: str, text: str) -> dict:
         product_line = ""
 
     changelog = []
-    section = re.search(r"## 变更说明\s*\n+(.*?)(?:\n## |\Z)", text, re.S)
+    section = re.search(r"^#{2,6}\s+变更说明\s*\n+(.*?)(?:\n#{1,6}\s+|\Z)", text, re.S | re.M)
+    if not section:
+        section = re.search(r"^\*\*变更说明\*\*\s*\n+(.*?)(?:\n\*\*固件文件\*\*|\n#{1,6}\s+|\Z)", text, re.S | re.M)
     if section:
         for line in section.group(1).splitlines():
             line = re.sub(r"^\d+\.\s*", "", line.strip())

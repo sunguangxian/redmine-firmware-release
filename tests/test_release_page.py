@@ -16,6 +16,9 @@ class ReleasePageTest(unittest.TestCase):
             files=[],
         )
         markdown = build_release_markdown(form, None, [], main_page="DP580_Releases")
+        self.assertIn("# [V1.2.3](/projects/dp580/roadmap)", markdown)
+        self.assertNotIn("# Release DP580 FW V1.2.3", markdown)
+        self.assertNotIn("**产品线:**", markdown)
         self.assertIn("[[DP580_Releases|← 返回 Release Notes]]", markdown)
         self.assertNotIn("[[Release_Notes|← 返回 Release Notes]]", markdown)
 

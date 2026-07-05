@@ -48,13 +48,122 @@ main_page: Release_Notes
         )
         block = build_inline_release_block(form, 12, [], source_page="Changelog")
         text = replace_inline_release_block("# Release Notes\n", "V1.2.3", block)
+        self.assertIn("{{>toc}}", text)
         self.assertIn("RELEASE_INLINE_BEGIN:V1.2.3", text)
+        self.assertIn("## [V1.2.3](/versions/12)", text)
+        self.assertNotIn("Release DP580 FW V1.2.3", text)
+        self.assertIn("**变更说明**", text)
+        self.assertIn("**固件文件**", text)
+        self.assertIn("**迁移来源**", text)
+        self.assertNotIn("### 变更说明", text)
+        self.assertNotIn("### 固件文件", text)
+        self.assertNotIn("**产品线:**", text)
+        self.assertNotIn("## 版本列表", text)
         self.assertIn("[[Changelog]]", text)
         self.assertIn("修复问题", extract_inline_release_block(text, "V1.2.3"))
         rows = parse_inline_releases(text, "Release_Notes")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["version"], "V1.2.3")
-        self.assertEqual(rows[0]["product_line"], "常规版本 (5X)")
+        self.assertEqual(rows[0]["product_line"], "")
+
+    def test_inline_container_uses_toc_navigation(self):
+        form = ReleaseForm(
+            project_id="dp580",
+            proj_tag="DP580",
+            version_name="V1.2.3",
+            release_date="2026-07-05",
+            commit="abc123",
+            product_line="常规版本 (5X)",
+            changelog_items=["修复问题"],
+        )
+        block = build_inline_release_block(form, 12, [], container_page="Release_Notes")
+        text = replace_inline_release_block("# Release Notes\n", "V1.2.3", block)
+        self.assertIn("{{>toc}}", text)
+        self.assertIn("## [V1.2.3](/versions/12)", text)
+        self.assertIn("[版本 V1.2.3](/versions/12)", text)
+        self.assertNotIn("## 版本列表", text)
+
+    def test_existing_inline_blocks_are_normalized_for_toc(self):
+        old_block = """# Release Notes
+
+{{>toc}}
+
+<!-- RELEASE_INLINE_BEGIN:V1.0.0 -->
+## Release DP580 FW V1.0.0
+
+### 变更说明
+
+1. old change
+
+### 固件文件
+
+下载: [版本 V1.0.0](/versions/10) | [项目文件](/projects/dp580/files)
+
+| 文件名 | 说明 |
+|--------|------|
+| （无） | |
+
+### 迁移来源
+
+- [[Changelog]]
+<!-- RELEASE_INLINE_END:V1.0.0 -->
+"""
+        form = ReleaseForm(
+            project_id="dp580",
+            proj_tag="DP580",
+            version_name="V1.2.3",
+            release_date="2026-07-05",
+            commit="abc123",
+            product_line="常规版本 (5X)",
+            changelog_items=["修复问题"],
+        )
+        block = build_inline_release_block(form, 12, [])
+        text = replace_inline_release_block(old_block, "V1.2.3", block)
+
+        self.assertIn("## [V1.0.0](/versions/10)", text)
+        self.assertNotIn("## Release DP580 FW V1.0.0", text)
+        self.assertIn("**变更说明**", text)
+        self.assertIn("**固件文件**", text)
+        self.assertIn("**迁移来源**", text)
+        self.assertNotIn("### 变更说明", text)
+        self.assertNotIn("### 固件文件", text)
+        self.assertNotIn("### 迁移来源", text)
+
+    def test_existing_linked_inline_titles_are_simplified(self):
+        old_block = """# Release Notes
+
+{{>toc}}
+
+<!-- RELEASE_INLINE_BEGIN:V1.0.0 -->
+## [Release DP580 FW V1.0.0](/versions/10)
+
+**变更说明**
+
+1. old change
+
+**固件文件**
+
+下载: [版本 V1.0.0](/versions/10) | [项目文件](/projects/dp580/files)
+
+| 文件名 | 说明 |
+|--------|------|
+| （无） | |
+<!-- RELEASE_INLINE_END:V1.0.0 -->
+"""
+        form = ReleaseForm(
+            project_id="dp580",
+            proj_tag="DP580",
+            version_name="V1.2.3",
+            release_date="2026-07-05",
+            commit="abc123",
+            product_line="常规版本 (5X)",
+            changelog_items=["修复问题"],
+        )
+        block = build_inline_release_block(form, 12, [])
+        text = replace_inline_release_block(old_block, "V1.2.3", block)
+
+        self.assertIn("## [V1.0.0](/versions/10)", text)
+        self.assertNotIn("Release DP580 FW V1.0.0", text)
 
 
 if __name__ == "__main__":

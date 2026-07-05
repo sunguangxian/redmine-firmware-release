@@ -293,6 +293,7 @@ class LegacyChangelogMigrator:
                         source_page=release.source_page,
                         block_id=release.wiki_title,
                         display_version=release.version,
+                        container_page=container,
                     )
                     new_text = replace_inline_release_block(current, release.wiki_title, block)
                     self._log(f"写入内联 Release 块：{container} / {release.wiki_title}")

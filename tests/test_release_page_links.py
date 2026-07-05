@@ -37,10 +37,11 @@ class ReleasePageLinksTest(unittest.TestCase):
         self.assertIn("[[Release_Main|← 返回 Release Notes]]", text)
 
     def test_build_inline_release_block_quotes_project_file_link(self):
-        text = build_inline_release_block(self._form(), None, [], block_id="V1.0.0")
+        text = build_inline_release_block(self._form(), None, [], block_id="V1.0.0", container_page="Release Main")
 
         self.assertIn("[项目文件](/projects/demo%20project/files)", text)
         self.assertIn("[版本 V1.0.0](/projects/demo%20project/roadmap)", text)
+        self.assertNotIn("导航：", text)
 
 
 if __name__ == "__main__":

@@ -78,8 +78,14 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         client = self.seed_inline()
         title = ReleasePublisher(client).publish(form())
         self.assertEqual(title, inline_ref("Release_Notes_Regular", "V1.0.0"))
-        self.assertIn("<!-- RELEASE_INLINE_BEGIN:V1.0.0 -->", client.pages["Release_Notes_Regular"]["text"])
+        container_text = client.pages["Release_Notes_Regular"]["text"]
+        self.assertIn("<!-- RELEASE_INLINE_BEGIN:V1.0.0 -->", container_text)
+        self.assertNotIn("## 版本列表", container_text)
+        self.assertNotIn("**产品线:**", container_text)
         self.assertIn("[[Release_Notes_Regular|V1.0.0 (2026-07-05)]]", client.pages["Release_Notes"]["text"])
+
+        rows = ReleasePublisher(client).list_releases("dp5x")
+        self.assertEqual(rows[0]["product_line"], "常规版本 (5X)")
 
     def test_inline_edit_can_rename_display_version_block(self):
         client = self.seed_inline()
@@ -95,8 +101,13 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         client = self.seed_page()
         title = ReleasePublisher(client).publish(form())
         self.assertEqual(title, "Release_Regular_FW_V1_0_0")
-        self.assertIn("# Release DP5X FW V1.0.0", client.pages[title]["text"])
+        self.assertIn("# [V1.0.0](/versions/", client.pages[title]["text"])
+        self.assertNotIn("**产品线:**", client.pages[title]["text"])
         self.assertIn("[[Release_Regular_FW_V1_0_0|V1.0.0 (2026-07-05)]]", client.pages["Release_Notes_Regular_List"]["text"])
+        self.assertNotIn("## 版本列表", client.pages["Release_Notes_Regular_List"]["text"])
+
+        rows = ReleasePublisher(client).list_releases("dp5x")
+        self.assertEqual(rows[0]["product_line"], "常规版本 (5X)")
 
     def test_planner_reports_page_and_inline_targets(self):
         inline_client = self.seed_inline()

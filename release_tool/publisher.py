@@ -7,6 +7,7 @@ from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 from .attachment_policy import sha256_hex, validate_attachment_batch
+from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
 from .release_lock import PublishLockTimeout, acquire_publish_lock
 from .release_page import (
@@ -246,7 +247,13 @@ class ReleasePublisher:
             if old_block_id and old_block_id != new_block_id:
                 base_text = delete_inline_release_block(base_text, old_block_id)
                 self._log(logs, f"已删除旧内联版本块：{old_block_id}")
-            block = build_inline_release_block(form, int(version["id"]), linked_files, block_id=new_block_id)
+            block = build_inline_release_block(
+                form,
+                int(version["id"]),
+                linked_files,
+                block_id=new_block_id,
+                container_page=container_page,
+            )
             new_text = replace_inline_release_block(base_text, new_block_id, block)
             parent_title = self._inline_parent_title(profile, container_page)
             self.client.put_wiki_page(
@@ -397,6 +404,7 @@ class ReleasePublisher:
             profile = None
         if profile and self._is_inline_profile(profile):
             rows = []
+            category_titles = {category.key: category.title for category in getattr(profile, "categories", [])}
             for item in sync._build_items(profile):
                 rows.append(
                     {
@@ -406,7 +414,7 @@ class ReleasePublisher:
                         "block_id": item.get("block_id", ""),
                         "version": item["ver"],
                         "date": item["date"],
-                        "product_line": item.get("product_line", ""),
+                        "product_line": item.get("product_line", "") or category_titles.get(item.get("cat", ""), ""),
                         "summary": item.get("summary", ""),
                     }
                 )
@@ -414,6 +422,7 @@ class ReleasePublisher:
             return rows
         pages = self.client.get_wiki_index(project_id)
         releases = []
+        category_titles = {category.key: category.title for category in getattr(profile, "categories", [])} if profile else {}
         for item in pages:
             title = item["title"]
             if not title.startswith("Release_") or "_FW_" not in title:
@@ -421,7 +430,15 @@ class ReleasePublisher:
             page = self.client.get_wiki_page(project_id, title)
             if not page:
                 continue
-            parsed = parse_release_page(title, page.get("text", ""))
+            text = page.get("text", "")
+            parsed = parse_release_page(title, text)
+            category = sync._categorize(
+                title,
+                text,
+                parsed.get("version_name", ""),
+                parsed.get("commit", ""),
+                getattr(profile, "categories", []) if profile else [],
+            )
             releases.append(
                 {
                     "title": title,
@@ -430,7 +447,7 @@ class ReleasePublisher:
                     "block_id": "",
                     "version": parsed["version_name"],
                     "date": parsed["release_date"],
-                    "product_line": parsed["product_line"],
+                    "product_line": category_titles.get(category, parsed["product_line"]),
                     "summary": (parsed["changelog"].splitlines() or [""])[0],
                 }
             )
