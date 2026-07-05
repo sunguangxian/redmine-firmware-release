@@ -4,17 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
 from typing import Iterable
 
 from .redmine_api import RedmineError
 
-DEFAULT_ALLOWED_EXTENSIONS = ".bin,.zip,.hex,.dfu,.img,.tar,.gz,.7z,.rar,.pdf,.txt,.md"
-ALLOWED_ATTACHMENT_EXTENSIONS = {
-    item.strip().lower()
-    for item in os.environ.get("RELEASE_TOOL_ALLOWED_ATTACHMENT_EXTENSIONS", DEFAULT_ALLOWED_EXTENSIONS).split(",")
-    if item.strip()
-}
 MAX_ATTACHMENT_BYTES = int(os.environ.get("RELEASE_TOOL_MAX_ATTACHMENT_MB", "200")) * 1024 * 1024
 MAX_TOTAL_ATTACHMENT_BYTES = int(os.environ.get("RELEASE_TOOL_MAX_TOTAL_ATTACHMENT_MB", "800")) * 1024 * 1024
 
@@ -27,10 +20,6 @@ def validate_attachment(filename: str, content: bytes) -> None:
     name = (filename or "").strip()
     if not name:
         raise RedmineError("附件文件名为空")
-    suffix = Path(name).suffix.lower()
-    if ALLOWED_ATTACHMENT_EXTENSIONS and suffix not in ALLOWED_ATTACHMENT_EXTENSIONS:
-        allowed = "、".join(sorted(ALLOWED_ATTACHMENT_EXTENSIONS))
-        raise RedmineError(f"附件类型不允许：{name}，允许类型：{allowed}")
     size = len(content or b"")
     if size <= 0:
         raise RedmineError(f"附件为空：{name}")
