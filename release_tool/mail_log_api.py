@@ -20,6 +20,7 @@ def register_mail_log_routes(app: FastAPI) -> None:
     def api_mail_history(
         project_id: str = Query(""),
         wiki_title: str = Query(""),
+        version_name: str = Query(""),
         limit: int = Query(50),
         session: Dict[str, Any] = Depends(_current_session),
     ) -> Dict[str, Any]:
@@ -27,6 +28,7 @@ def register_mail_log_routes(app: FastAPI) -> None:
             session,
             project_id=project_id,
             wiki_title=wiki_title,
+            version_name=version_name,
             limit=limit,
             loader=list_mail_history,
         )
