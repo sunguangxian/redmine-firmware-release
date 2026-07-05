@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,8 +25,6 @@ from .config_store import (
     get_internal_contact_settings,
     get_user_external_email_settings,
     get_user_internal_email_settings,
-    store_user_external_email_settings,
-    store_user_internal_email_settings,
 )
 from .email_sender import EmailSendError, EmailSettings, send_release_email, split_emails
 from .legacy_job_store import append_legacy_job_log, legacy_job_snapshot, update_legacy_job
@@ -445,80 +443,6 @@ def api_projects(session: Dict[str, Any] = Depends(_current_session), client: Re
     if not session.get("is_admin"):
         session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
     return session.get("projects", [])
-
-
-@app.get("/api/mail/settings")
-def api_mail_settings(session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
-    internal_server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
-    external_server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
-    internal_contacts = get_internal_contact_settings()
-    user_internal = get_user_internal_email_settings(session.get("user_key", ""))
-    user_external = get_user_external_email_settings(session.get("user_key", ""))
-    return {
-        "is_admin": bool(session.get("is_admin")),
-        "admin": {
-            "internal_server": internal_server,
-            "external_server": external_server,
-            "internal_contacts": internal_contacts,
-        },
-        "user_internal": {
-            "smtp_user": user_internal["smtp_user"],
-            "smtp_password": "",
-            "smtp_password_set": bool(user_internal.get("smtp_password")),
-            "smtp_from": user_internal["smtp_from"],
-            "contacts_to": user_internal["contacts_to"],
-            "contacts_cc": user_internal["contacts_cc"],
-            "contact_templates": user_internal["contact_templates"],
-        },
-        "user_external": {
-            "smtp_user": user_external["smtp_user"],
-            "smtp_password": "",
-            "smtp_password_set": bool(user_external.get("smtp_password")),
-            "smtp_from": user_external["smtp_from"],
-            "contacts_to": user_external["contacts_to"],
-            "contacts_cc": user_external["contacts_cc"],
-            "contact_templates": user_external["contact_templates"],
-        },
-    }
-
-
-@app.put("/api/mail/user-internal-settings")
-def api_save_user_internal_mail_settings(payload: UserInternalMailRequest, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, bool]:
-    user_key = session.get("user_key", "")
-    old = get_user_internal_email_settings(user_key)
-    smtp_password = payload.smtp_password or old.get("smtp_password", "")
-    store_user_internal_email_settings(
-        user_key,
-        smtp_user=payload.smtp_user,
-        smtp_password=smtp_password,
-        smtp_from=payload.smtp_from,
-        contacts_to=payload.contacts_to,
-        contacts_cc=payload.contacts_cc,
-        contact_templates=[item.dict() for item in payload.contact_templates],
-    )
-    return {"ok": True}
-
-
-@app.put("/api/mail/user-external-settings")
-def api_save_user_external_mail_settings(payload: UserExternalMailRequest, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, bool]:
-    user_key = session.get("user_key", "")
-    old = get_user_external_email_settings(user_key)
-    smtp_password = payload.smtp_password or old.get("smtp_password", "")
-    store_user_external_email_settings(
-        user_key,
-        smtp_user=payload.smtp_user,
-        smtp_password=smtp_password,
-        smtp_from=payload.smtp_from,
-        contacts_to=payload.contacts_to,
-        contacts_cc=payload.contacts_cc,
-        contact_templates=[item.dict() for item in payload.contact_templates],
-    )
-    return {"ok": True}
-
-
-@app.get("/api/mail/contacts")
-def api_mail_contacts(scope: str = Query(MAIL_SCOPE_INTERNAL), session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
-    return _contacts_for_scope(session, _normalize_mail_scope(scope))
 
 
 def _mount_frontend() -> None:
