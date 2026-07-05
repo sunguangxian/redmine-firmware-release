@@ -7,11 +7,10 @@ from typing import Any, Dict, List
 from fastapi import Depends, FastAPI, Query
 
 from .access_control import require_project_access
-from .api_app import RECENT_RELEASE_LIMIT
 from .dependencies import _current_client, _current_session, _json_error
 from .index_sync import IndexSync
-from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
+from .release_helpers import list_release_rows
 from .release_page import (
     extract_inline_release_block,
     format_release_files,
@@ -71,10 +70,7 @@ def register_release_catalog_routes(app: FastAPI) -> None:
         client: RedmineClient = Depends(_current_client),
     ) -> List[Dict[str, Any]]:
         require_project_access(session, project_id)
-        releases = ReleasePublisher(client).list_releases(project_id)
-        if product_line:
-            releases = [item for item in releases if item.get("product_line") == product_line]
-        return releases[:RECENT_RELEASE_LIMIT]
+        return list_release_rows(client, project_id, product_line)
 
     @app.get("/api/releases/detail")
     def api_release_detail(
