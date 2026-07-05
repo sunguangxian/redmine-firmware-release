@@ -17,14 +17,11 @@ from pydantic import BaseModel, Field
 
 from .api_app import (
     _append_legacy_job_log,
-    _client_from_session,
-    _current_client,
-    _current_session,
     _legacy_job_snapshot,
-    _require_admin,
     _set_legacy_job_state,
 )
 from .audit_log import record_audit
+from .dependencies import _client_from_session, _current_client, _current_session, _require_admin
 from .legacy_changelog_migrator import LegacyChangelogMigrator
 from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job
 from .redmine_api import RedmineClient
