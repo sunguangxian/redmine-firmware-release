@@ -14,11 +14,9 @@ from pydantic import BaseModel
 
 from .access_control import list_visible_history, require_project_access
 from .api_app import (
-    _list_release_rows,
     _mail_scope_label,
     _send_release_notice,
     _validate_notice_preflight,
-    _validate_release_preflight,
 )
 from .attachment_policy import sha256_hex
 from .config_store import MAIL_SCOPE_INTERNAL
@@ -27,6 +25,7 @@ from .email_sender import EmailSendError
 from .index_sync import IndexSync
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
+from .release_helpers import list_release_rows, validate_release_preflight
 from .release_page import ReleaseForm, proj_tag_from_project
 from .release_planner import ReleasePlanner
 from .release_publish_history import create_publish_history, get_publish_history, list_publish_history, update_publish_history
@@ -161,7 +160,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
 
         try:
             logs.append(f"开始{action}：项目 {project_id}")
-            _validate_release_preflight(project_id, version_name, release_date, commit, items)
+            validate_release_preflight(project_id, version_name, release_date, commit, items)
             logs.append("基础字段预检查通过")
             logs.append(f"变更说明校验通过：{len(items)} 条")
             if notice_enabled:
@@ -244,7 +243,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
         else:
             logs.append("邮件通知未启用，跳过发送")
 
-        releases = _list_release_rows(client, project_id, product_line.strip())
+        releases = list_release_rows(client, project_id, product_line.strip())
         logs.append(f"刷新版本列表完成：返回 {len(releases)} 条")
         logs.append(f"{action}完成：{title}")
         update_publish_history(history_id, wiki_title=title, form_payload={**payload, "edit_title": title}, mail_status=mail_status, logs=logs)
