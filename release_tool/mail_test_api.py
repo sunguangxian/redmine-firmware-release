@@ -7,14 +7,9 @@ from typing import Any, Dict, Tuple
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
+from . import config_store
 from .api_app import _current_session, _json_error, _mail_scope_label, _normalize_mail_scope
-from .config_store import (
-    MAIL_SCOPE_EXTERNAL,
-    MAIL_SCOPE_INTERNAL,
-    get_email_server_settings,
-    get_user_external_email_settings,
-    get_user_internal_email_settings,
-)
+from .config_store import MAIL_SCOPE_EXTERNAL, MAIL_SCOPE_INTERNAL
 from .email_sender import EmailSendError, EmailSettings, test_smtp_connection
 
 
@@ -27,15 +22,15 @@ class MailConnectionTestRequest(BaseModel):
 
 def _stored_user_mail_settings(scope: str, user_key: str) -> Dict[str, Any]:
     if scope == MAIL_SCOPE_INTERNAL:
-        return get_user_internal_email_settings(user_key)
+        return config_store.get_user_internal_email_settings(user_key)
     if scope == MAIL_SCOPE_EXTERNAL:
-        return get_user_external_email_settings(user_key)
+        return config_store.get_user_external_email_settings(user_key)
     return {}
 
 
 def _build_test_settings(payload: MailConnectionTestRequest, session: Dict[str, Any]) -> Tuple[str, EmailSettings]:
     scope = _normalize_mail_scope(payload.scope)
-    server = get_email_server_settings(scope)
+    server = config_store.get_email_server_settings(scope)
     user_cfg = _stored_user_mail_settings(scope, session.get("user_key", ""))
     password = payload.smtp_password or user_cfg.get("smtp_password", "")
     sender = payload.smtp_from or user_cfg.get("smtp_from", "") or server.get("smtp_from", "")
