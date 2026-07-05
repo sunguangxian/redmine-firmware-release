@@ -12,7 +12,7 @@ from .email_sender import EmailSendError
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
 from .release_ops_api import _build_preview_lines, _read_preview_files, _split_changelog
-from .release_page import ReleaseForm, extract_inline_release_block, parse_inline_ref, parse_release_files, proj_tag_from_project
+from .release_page import ReleaseForm, extract_inline_release_block, inline_ref, parse_inline_ref, parse_release_files, parse_release_page, proj_tag_from_project
 from .release_structure_guard import ensure_release_structure_ready
 
 
@@ -31,13 +31,24 @@ def _is_inline_profile(profile: Any) -> bool:
     return getattr(profile, "release_detail_mode", "inline") == "inline"
 
 
-def _inline_preview_target(index_sync: Any, profile: Any, form: ReleaseForm, edit_title: str) -> tuple[str, str, str, int]:
+def _inline_display_version(block_id: str, block: str) -> str:
+    if not block:
+        return ""
+    try:
+        parsed = parse_release_page(inline_ref("_", block_id), block)
+        return str(parsed.get("version_name") or "").strip()
+    except Exception:
+        return ""
+
+
+def _inline_preview_target(index_sync: Any, profile: Any, form: ReleaseForm, edit_title: str) -> tuple[str, str, str, str, int]:
     inline_target = parse_inline_ref(edit_title)
     if inline_target:
         container_page, old_block_id = inline_target
         page = index_sync.client.get_wiki_page(form.project_id, container_page)
         block = extract_inline_release_block((page or {}).get("text", ""), old_block_id)
-        return f"{container_page} / {form.version_name}", container_page, old_block_id, len(parse_release_files(block)) if block else 0
+        old_display_version = _inline_display_version(old_block_id, block)
+        return f"{container_page} / {form.version_name}", container_page, old_block_id, old_display_version, len(parse_release_files(block)) if block else 0
 
     container_page = index_sync.inline_container_for_release(
         profile,
@@ -45,7 +56,7 @@ def _inline_preview_target(index_sync: Any, profile: Any, form: ReleaseForm, edi
         f"**产品线:** {form.product_line}\n**Commit:** {form.commit}\n",
     )
     block_id = form.version_name.strip()
-    return f"{container_page} / {form.version_name}", container_page, block_id, 0
+    return f"{container_page} / {form.version_name}", container_page, block_id, block_id, 0
 
 
 def register_release_preview_routes(app: FastAPI) -> None:
@@ -114,9 +125,11 @@ def register_release_preview_routes(app: FastAPI) -> None:
 
             old_files_count = 0
             if _is_inline_profile(profile):
-                wiki_title, _container_page, old_block_id, old_files_count = _inline_preview_target(index_sync, profile, form, edit_title)
-                if edit_title and old_block_id != form.version_name.strip():
+                wiki_title, _container_page, old_block_id, old_display_version, old_files_count = _inline_preview_target(index_sync, profile, form, edit_title)
+                if edit_title and old_block_id == (old_display_version or old_block_id) and old_block_id != form.version_name.strip():
                     warnings.append(f"本次会把旧内联版本块 {old_block_id} 重命名为 {form.version_name.strip()}。")
+                elif edit_title and old_block_id != form.version_name.strip():
+                    warnings.append(f"本次会保留唯一块标识 {old_block_id}，页面显示版本更新为 {form.version_name.strip()}。")
             else:
                 generated_title = publisher._configured_release_title(form, index_sync, profile)
                 wiki_title = edit_title or generated_title or form.page_title
