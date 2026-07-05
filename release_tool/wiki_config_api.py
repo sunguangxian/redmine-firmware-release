@@ -11,6 +11,7 @@ from .audit_log import record_audit
 from .dependencies import _current_client, _current_session, _json_error, _require_admin
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient
+from .release_helpers import invalidate_release_rows
 from .wiki_config import CONFIG_PAGE_TITLE
 from .wiki_templates import TEMPLATE_CHOICES, build_config_template, validate_config_text
 
@@ -99,6 +100,7 @@ def register_wiki_config_routes(app: FastAPI) -> None:
         sync = IndexSync(client, project_id)
         preview = sync.preview_refresh_all()
         updated_count = sync.refresh_all()
+        invalidate_release_rows(project_id)
         return {
             "ok": True,
             "updated_release_count": updated_count,
@@ -132,6 +134,7 @@ def register_wiki_config_routes(app: FastAPI) -> None:
         if not ok:
             raise _json_error(msg)
         client.put_wiki_page(project_id, CONFIG_PAGE_TITLE, payload.text, "release tool config update")
+        invalidate_release_rows(project_id)
         record_audit(
             actor=session.get("user_login", ""),
             action="wiki_config_updated",
