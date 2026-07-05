@@ -58,6 +58,12 @@ def _ensure_table(conn) -> None:
             ON release_publish_history(project_id, wiki_title, created_at)
         """
     )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_release_publish_history_version_lookup
+            ON release_publish_history(project_id, wiki_title, version_name, created_at)
+        """
+    )
 
 
 def _wiki_title_candidates(wiki_title: str) -> list[str]:
