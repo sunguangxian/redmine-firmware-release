@@ -23,6 +23,7 @@ python -m unittest discover -s tests
 5. Release 页面底部返回链接应使用 `Release_Tool_Config` 中配置的 `main_page`。
 6. 发布失败时，发布历史中的 `release_status`、`file_status`、`wiki_status`、`index_status`、`mail_status` 应能指出失败阶段。
 7. 未选择附件发布或编辑时，`file_status` 应为 `skipped`，不应被错误标记为 `success`。
+8. Redmine 项目文件超过一页时，同名附件检查应覆盖全部文件，而不是只检查第一页。
 
 ## 发布状态字段含义
 
