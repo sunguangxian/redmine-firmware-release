@@ -92,6 +92,16 @@ export async function testMailConnection(payload: { scope: string; smtp_user: st
   return data
 }
 
+export async function testAdminMailServer(payload: { scope: string; smtp_host: string; smtp_port: number; smtp_from: string; use_tls: boolean }): Promise<{ ok: boolean; message: string }> {
+  const { data } = await http.post('/api/mail/admin-test-connection', payload)
+  return data
+}
+
+export async function getMailHistory(params: { project_id?: string; wiki_title?: string; limit?: number }): Promise<{ ok: boolean; items: unknown[] }> {
+  const { data } = await http.get('/api/mail/history', { params })
+  return data
+}
+
 export async function getContacts(scope: string): Promise<{ contacts_to: string[]; contacts_cc: string[]; contact_templates: ContactTemplateConfig[] }> {
   const { data } = await http.get('/api/mail/contacts', { params: { scope } })
   return data
