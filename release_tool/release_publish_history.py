@@ -24,11 +24,15 @@ def _ensure_table(conn) -> None:
             mail_status TEXT NOT NULL DEFAULT 'skipped',
             error_message TEXT NOT NULL DEFAULT '',
             logs TEXT NOT NULL DEFAULT '[]',
+            form_payload TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(release_publish_history)").fetchall()}
+    if "form_payload" not in columns:
+        conn.execute("ALTER TABLE release_publish_history ADD COLUMN form_payload TEXT NOT NULL DEFAULT '{}'")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_release_publish_history_lookup
@@ -43,16 +47,23 @@ def create_publish_history(
     version_name: str,
     action: str,
     logs: list[str] | None = None,
+    form_payload: dict[str, Any] | None = None,
 ) -> int:
     with db() as conn:
         _ensure_table(conn)
         cur = conn.execute(
             """
             INSERT INTO release_publish_history(
-                project_id, version_name, action, logs, created_at, updated_at
-            ) VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                project_id, version_name, action, logs, form_payload, created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
-            (project_id or "", version_name or "", action or "", json.dumps(logs or [], ensure_ascii=False)),
+            (
+                project_id or "",
+                version_name or "",
+                action or "",
+                json.dumps(logs or [], ensure_ascii=False),
+                json.dumps(form_payload or {}, ensure_ascii=False),
+            ),
         )
         return int(cur.lastrowid or 0)
 
@@ -72,6 +83,7 @@ def update_publish_history(history_id: int, **fields: Any) -> None:
         "mail_status",
         "error_message",
         "logs",
+        "form_payload",
     }
     updates: list[str] = []
     params: list[Any] = []
@@ -79,8 +91,8 @@ def update_publish_history(history_id: int, **fields: Any) -> None:
         if key not in allowed:
             continue
         updates.append(f"{key} = ?")
-        if key == "logs":
-            params.append(json.dumps(value or [], ensure_ascii=False))
+        if key in {"logs", "form_payload"}:
+            params.append(json.dumps(value or ([] if key == "logs" else {}), ensure_ascii=False))
         else:
             params.append(value if value is not None else "")
     if not updates:
@@ -93,6 +105,26 @@ def update_publish_history(history_id: int, **fields: Any) -> None:
             f"UPDATE release_publish_history SET {', '.join(updates)} WHERE id = ?",
             params,
         )
+
+
+def _decode_row(row) -> dict[str, Any]:
+    item = dict(row)
+    try:
+        item["logs"] = json.loads(item.get("logs") or "[]")
+    except Exception:
+        item["logs"] = []
+    try:
+        item["form_payload"] = json.loads(item.get("form_payload") or "{}")
+    except Exception:
+        item["form_payload"] = {}
+    return item
+
+
+def get_publish_history(history_id: int) -> dict[str, Any] | None:
+    with db() as conn:
+        _ensure_table(conn)
+        row = conn.execute("SELECT * FROM release_publish_history WHERE id = ?", (int(history_id),)).fetchone()
+    return _decode_row(row) if row else None
 
 
 def list_publish_history(project_id: str = "", wiki_title: str = "", limit: int = 50) -> list[dict[str, Any]]:
@@ -118,12 +150,4 @@ def list_publish_history(project_id: str = "", wiki_title: str = "", limit: int 
             """,
             (*params, limit),
         ).fetchall()
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        try:
-            item["logs"] = json.loads(item.get("logs") or "[]")
-        except Exception:
-            item["logs"] = []
-        result.append(item)
-    return result
+    return [_decode_row(row) for row in rows]
