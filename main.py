@@ -6,6 +6,7 @@ from release_tool.mail_history_patch import apply_mail_history_patch
 from release_tool.mail_log_api import register_mail_log_routes
 from release_tool.mail_test_api import register_mail_test_routes
 from release_tool.release_ops_api import register_release_ops_routes
+from release_tool.release_status_patch import register_release_status_patch
 from release_tool.secure_config import apply_secure_config_patches
 from release_tool.session_guard import register_session_guard
 
@@ -26,6 +27,7 @@ def move_frontend_routes_to_end():
 apply_secure_config_patches()
 apply_index_sync_patches()
 apply_mail_history_patch()
+register_release_status_patch(app)
 register_session_guard(app)
 register_mail_test_routes(app)
 register_admin_mail_test_routes(app)
