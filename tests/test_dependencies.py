@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from release_tool.dependencies import (
     SESSION_COOKIE,
     SESSION_STORE,
+    SESSIONS,
     _current_client,
     _current_session,
     _json_error,
@@ -17,7 +18,7 @@ from release_tool.dependencies import (
 
 class DependenciesTest(unittest.TestCase):
     def tearDown(self):
-        SESSION_STORE.clear()
+        SESSIONS.clear()
 
     def test_user_key_normalizes_base_url(self):
         self.assertEqual(_user_key("http://redmine.local/", "admin"), "http://redmine.local|admin")
@@ -79,9 +80,8 @@ class DependenciesTest(unittest.TestCase):
         )
 
         self.assertEqual(client.base_url, "http://redmine.local")
-        self.assertEqual(client.username, "admin")
-        self.assertEqual(client.api_key, "key")
         self.assertEqual(client.auth_mode, "api_key")
+        self.assertEqual(client.session.headers.get("X-Redmine-API-Key"), "key")
 
 
 if __name__ == "__main__":
