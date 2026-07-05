@@ -6,7 +6,6 @@ from typing import Any, Dict
 
 from fastapi import Depends, FastAPI, Query
 
-from .api_app import _contacts_for_scope, _normalize_mail_scope
 from .audit_log import record_audit
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
@@ -21,6 +20,7 @@ from .config_store import (
     store_user_internal_email_settings,
 )
 from .dependencies import _current_session, _require_admin
+from .mail_contact_helpers import contacts_for_scope, normalize_mail_scope
 from .schemas import AdminMailSettingsRequest, UserExternalMailRequest, UserInternalMailRequest
 
 
@@ -164,4 +164,4 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         scope: str = Query(MAIL_SCOPE_INTERNAL),
         session: Dict[str, Any] = Depends(_current_session),
     ) -> Dict[str, Any]:
-        return _contacts_for_scope(session, _normalize_mail_scope(scope))
+        return contacts_for_scope(session, normalize_mail_scope(scope))
