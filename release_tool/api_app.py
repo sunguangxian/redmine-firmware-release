@@ -1,6 +1,6 @@
 """FastAPI 应用共享入口。
 
-本模块只保留全局 app、公共导出、邮件 helper 和前端挂载。
+本模块只保留全局 app、公共导出、邮件发送 helper 和前端挂载。
 具体业务接口由 app_factory 统一注册到独立 *_api 模块。
 """
 
@@ -39,6 +39,14 @@ from .dependencies import (
 )
 from .email_sender import EmailSendError, EmailSettings, send_release_email, split_emails
 from .legacy_job_store import append_legacy_job_log, legacy_job_snapshot, update_legacy_job
+from .mail_contact_helpers import (
+    MAIL_SCOPES,
+    contact_people,
+    contacts_for_scope,
+    mail_scope_label,
+    merge_contact_lists,
+    normalize_mail_scope,
+)
 from .mail_history import record_mail_send
 from .redmine_api import RedmineClient, RedmineError
 from .release_helpers import RECENT_RELEASE_LIMIT, list_release_rows, validate_release_preflight
@@ -55,8 +63,6 @@ from .schemas import (
     UserInternalMailRequest,
 )
 
-MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
-
 app = FastAPI(title="Redmine Firmware Release API")
 app.add_middleware(
     CORSMiddleware,
@@ -72,45 +78,15 @@ def _list_release_rows(client: RedmineClient, project_id: str, product_line: str
 
 
 def _contact_people(emails: List[str]) -> List[Dict[str, str]]:
-    result: List[Dict[str, str]] = []
-    for email in emails:
-        value = (email or "").strip()
-        if not value or "@" not in value:
-            continue
-        result.append({"name": value.split("@")[0] or value, "email": value})
-    return result
+    return contact_people(emails)
 
 
 def _merge_contact_lists(*groups: List[str]) -> List[str]:
-    result: List[str] = []
-    seen = set()
-    for group in groups:
-        for item in group:
-            email = (item or "").strip()
-            key = email.lower()
-            if not email or key in seen:
-                continue
-            seen.add(key)
-            result.append(email)
-    return result
+    return merge_contact_lists(*groups)
 
 
 def _contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
-    if scope == MAIL_SCOPE_INTERNAL:
-        global_contacts = get_internal_contact_settings()
-        user_contacts = get_user_internal_email_settings(session.get("user_key", ""))
-        return {
-            "contacts_to": _merge_contact_lists(global_contacts.get("contacts_to", []), user_contacts.get("contacts_to", [])),
-            "contacts_cc": _merge_contact_lists(global_contacts.get("contacts_cc", []), user_contacts.get("contacts_cc", [])),
-            "contact_templates": user_contacts.get("contact_templates", []),
-        }
-
-    contacts = get_user_external_email_settings(session.get("user_key", ""))
-    return {
-        "contacts_to": contacts.get("contacts_to", []),
-        "contacts_cc": contacts.get("contacts_cc", []),
-        "contact_templates": contacts.get("contact_templates", []),
-    }
+    return contacts_for_scope(session, scope)
 
 
 def _append_legacy_job_log(job_id: str, message: str) -> None:
@@ -134,14 +110,11 @@ def _set_legacy_job_state(job_id: str, **fields: Any) -> None:
 
 
 def _normalize_mail_scope(scope: Optional[str]) -> str:
-    value = (scope or MAIL_SCOPE_INTERNAL).strip().lower()
-    if value not in MAIL_SCOPES:
-        raise _json_error("邮件类型只能是 internal 或 external")
-    return value
+    return normalize_mail_scope(scope)
 
 
 def _mail_scope_label(scope: str) -> str:
-    return "外网" if scope == MAIL_SCOPE_EXTERNAL else "内网"
+    return mail_scope_label(scope)
 
 
 def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSettings, List[str], List[str]]:
@@ -162,8 +135,8 @@ def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSet
                 smtp_from=user_cfg["smtp_from"] or server["smtp_from"],
                 use_tls=server["use_tls"],
             ),
-            _merge_contact_lists(global_contacts.get("contacts_to", []), user_cfg.get("contacts_to", [])),
-            _merge_contact_lists(global_contacts.get("contacts_cc", []), user_cfg.get("contacts_cc", [])),
+            merge_contact_lists(global_contacts.get("contacts_to", []), user_cfg.get("contacts_to", [])),
+            merge_contact_lists(global_contacts.get("contacts_cc", []), user_cfg.get("contacts_cc", [])),
         )
 
     server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
