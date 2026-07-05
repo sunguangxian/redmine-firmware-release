@@ -46,6 +46,7 @@ def list_visible_history(
     wiki_title: str = "",
     limit: int = 50,
     loader: HistoryLoader,
+    **loader_kwargs: Any,
 ) -> List[Dict[str, Any]]:
     """按项目权限过滤历史记录。
 
@@ -58,13 +59,13 @@ def list_visible_history(
 
     if project_id:
         require_project_access(session, project_id)
-        return loader(project_id=project_id, wiki_title=wiki_title, limit=limited)
+        return loader(project_id=project_id, wiki_title=wiki_title, limit=limited, **loader_kwargs)
 
     if session.get("is_admin"):
-        return loader(project_id="", wiki_title=wiki_title, limit=limited)
+        return loader(project_id="", wiki_title=wiki_title, limit=limited, **loader_kwargs)
 
     items: List[Dict[str, Any]] = []
     for visible_project in sorted(visible_project_ids(session)):
-        items.extend(loader(project_id=visible_project, wiki_title=wiki_title, limit=limited))
+        items.extend(loader(project_id=visible_project, wiki_title=wiki_title, limit=limited, **loader_kwargs))
     items.sort(key=lambda item: int(item.get("id") or 0), reverse=True)
     return items[:limited]
