@@ -8,6 +8,7 @@ from release_tool.mail_delivery_helpers import (
     send_release_notice,
     validate_notice_preflight,
 )
+from release_tool.release_page import inline_ref
 
 
 def _server(sender="sender@example.com"):
@@ -33,11 +34,12 @@ class MailDeliveryHelpersTest(unittest.TestCase):
     def test_build_notice_body_replaces_links(self):
         client = Mock()
         client.base_url = "http://redmine.local/"
+        wiki_title = inline_ref("Release_Notes", "V1.0.0")
 
         title, body = build_notice_body(
             client,
             "demo",
-            "Release_Notes#V1.0.0",
+            wiki_title,
             "Wiki={{wiki_url}}\nFiles={{files_url}}",
         )
 
@@ -95,12 +97,13 @@ class MailDeliveryHelpersTest(unittest.TestCase):
         contacts.return_value = {"contacts_to": [], "contacts_cc": []}
         client = Mock()
         client.base_url = "http://redmine.local"
+        wiki_title = inline_ref("Release_Notes", "V1.0.0")
 
         message = send_release_notice(
             session={"user_key": "u1", "user_login": "admin"},
             client=client,
             project_id="demo",
-            wiki_title="Release_Notes#V1.0.0",
+            wiki_title=wiki_title,
             version_name="V1.0.0",
             file_rows=[("fw.bin", "", b"123")],
             mail_scope=MAIL_SCOPE_INTERNAL,
@@ -129,13 +132,14 @@ class MailDeliveryHelpersTest(unittest.TestCase):
         sender.side_effect = EmailSendError("failed")
         client = Mock()
         client.base_url = "http://redmine.local"
+        wiki_title = inline_ref("Release_Notes", "V1.0.0")
 
         with self.assertRaisesRegex(EmailSendError, "failed"):
             send_release_notice(
                 session={"user_key": "u1", "user_login": "admin"},
                 client=client,
                 project_id="demo",
-                wiki_title="Release_Notes#V1.0.0",
+                wiki_title=wiki_title,
                 version_name="V1.0.0",
                 file_rows=[],
                 mail_scope=MAIL_SCOPE_INTERNAL,
