@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from .api_app import app as app
+from .auth_api import register_auth_routes
 from .health_api import register_health_routes
 from .index_sync_patch import apply_index_sync_patches
 from .mail_admin_test_api import register_admin_mail_test_routes
@@ -42,6 +43,7 @@ def create_app():
     apply_mail_policy_patches()
     apply_index_sync_patches()
     apply_mail_history_patch()
+    register_auth_routes(app)
     register_session_guard(app)
     register_mail_test_routes(app)
     register_admin_mail_test_routes(app)
