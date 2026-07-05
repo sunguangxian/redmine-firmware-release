@@ -79,15 +79,31 @@
       <template #header>版本操作记录</template>
       <el-tabs>
         <el-tab-pane label="发布记录">
-          <el-table :data="publishHistory" border height="220">
+          <el-table :data="publishHistory" border height="260">
             <el-table-column prop="created_at" label="时间" width="160" />
             <el-table-column prop="action" label="操作" width="120" />
-            <el-table-column prop="release_status" label="发布" width="100" />
-            <el-table-column prop="file_status" label="附件" width="100" />
-            <el-table-column prop="wiki_status" label="Wiki" width="100" />
-            <el-table-column prop="index_status" label="索引" width="100" />
-            <el-table-column prop="mail_status" label="邮件" width="100" />
-            <el-table-column prop="error_message" label="错误" min-width="240" />
+            <el-table-column label="发布" width="100"><template #default="scope">{{ statusLabel(scope.row, 'release_status') }}</template></el-table-column>
+            <el-table-column label="附件" width="100"><template #default="scope">{{ statusLabel(scope.row, 'file_status') }}</template></el-table-column>
+            <el-table-column label="Wiki" width="100"><template #default="scope">{{ statusLabel(scope.row, 'wiki_status') }}</template></el-table-column>
+            <el-table-column label="索引" width="100"><template #default="scope">{{ statusLabel(scope.row, 'index_status') }}</template></el-table-column>
+            <el-table-column label="邮件" width="100"><template #default="scope">{{ statusLabel(scope.row, 'mail_status') }}</template></el-table-column>
+            <el-table-column prop="status_summary" label="状态摘要" min-width="260" show-overflow-tooltip />
+            <el-table-column prop="error_message" label="错误" min-width="240" show-overflow-tooltip />
+            <el-table-column label="恢复" width="180" fixed="right">
+              <template #default="scope">
+                <template v-if="(scope.row.recover_actions || []).length">
+                  <el-button
+                    v-for="action in scope.row.recover_actions"
+                    :key="action.action"
+                    link
+                    type="primary"
+                    :loading="recoveringHistoryId === scope.row.id && recoveringAction === action.action"
+                    @click="recoverHistory(scope.row, action.action)"
+                  >{{ action.label }}</el-button>
+                </template>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
           </el-table>
         </el-tab-pane>
         <el-tab-pane label="邮件记录">
@@ -114,7 +130,22 @@
 import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { errorLogs, errorMessage, getContacts, getMailHistory, getProjectReleaseCategories, getPublishHistory, getReleaseDetail, listReleases, previewRelease, publishRelease, sendReleaseNotice, type MailHistoryItem, type PublishHistoryItem } from '../api/http'
+import {
+  errorLogs,
+  errorMessage,
+  getContacts,
+  getMailHistory,
+  getProjectReleaseCategories,
+  getPublishHistory,
+  getReleaseDetail,
+  listReleases,
+  previewRelease,
+  publishRelease,
+  recoverPublishHistory,
+  sendReleaseNotice,
+  type MailHistoryItem,
+  type PublishHistoryItem
+} from '../api/http'
 import type { ContactTemplateConfig, MetaInfo, Project, ReleaseSummary } from '../types'
 
 const props = defineProps<{ projects: Project[]; meta: MetaInfo; mailVersion: number }>()
@@ -128,6 +159,8 @@ const mailHistory = ref<MailHistoryItem[]>([])
 const loadingReleases = ref(false)
 const publishing = ref(false)
 const retryingNotice = ref(false)
+const recoveringHistoryId = ref<number | null>(null)
+const recoveringAction = ref('')
 const status = ref('')
 const logs = ref<string[]>([])
 const logDialogVisible = ref(false)
@@ -153,22 +186,70 @@ const form = reactive({ version_name: '', release_date: props.meta.today || new 
 watch(() => props.projects, (value) => { if (!projectId.value && value.length) projectId.value = value[0].identifier }, { immediate: true })
 watch(() => props.meta, (value) => { if (!form.release_date && value.today) form.release_date = value.today }, { immediate: true })
 watch(() => props.mailVersion, loadContacts)
-watch(() => [noticeEnabled.value, projectId.value, mailScope.value, form.version_name, form.release_date, form.commit, form.product_line, form.changelog, selectedFiles.value.map((file) => file.name).join('|'), filesInfo.value, replaceAttachments.value], () => { if (noticeEnabled.value && !mailContentEdited.value) generateMailContent() })
+watch(
+  () => [noticeEnabled.value, projectId.value, mailScope.value, form.version_name, form.release_date, form.commit, form.product_line, form.changelog, selectedFiles.value.map((file) => file.name).join('|'), filesInfo.value, replaceAttachments.value],
+  () => { if (noticeEnabled.value && !mailContentEdited.value) generateMailContent() }
+)
+
+function statusLabel(row: PublishHistoryItem, field: 'release_status' | 'file_status' | 'wiki_status' | 'index_status' | 'mail_status'): string {
+  return String(row[`${field}_label`] || row[field] || '')
+}
 
 function onFileChange(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
 function onFileRemove(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
-async function loadReleases() { if (!projectId.value) return; loadingReleases.value = true; try { releases.value = await listReleases(projectId.value, filterProductLine.value) } catch (error) { ElMessage.error(errorMessage(error)) } finally { loadingReleases.value = false } }
-async function reloadAll() { selectedWikiTitle.value = ''; publishHistory.value = []; mailHistory.value = []; await loadCategories(); await loadReleases() }
-async function loadCategories() { if (!projectId.value) return; try { const data = await getProjectReleaseCategories(projectId.value); projectCategories.value = data.categories; const values = new Set(projectCategories.value.map((item) => item.title || item.key)); if (filterProductLine.value && !values.has(filterProductLine.value)) filterProductLine.value = ''; if (form.product_line && !values.has(form.product_line)) form.product_line = '' } catch (error) { projectCategories.value = []; ElMessage.error(errorMessage(error)) } }
+
+async function loadReleases() {
+  if (!projectId.value) return
+  loadingReleases.value = true
+  try {
+    releases.value = await listReleases(projectId.value, filterProductLine.value)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    loadingReleases.value = false
+  }
+}
+
+async function reloadAll() {
+  selectedWikiTitle.value = ''
+  publishHistory.value = []
+  mailHistory.value = []
+  await loadCategories()
+  await loadReleases()
+}
+
+async function loadCategories() {
+  if (!projectId.value) return
+  try {
+    const data = await getProjectReleaseCategories(projectId.value)
+    projectCategories.value = data.categories
+    const values = new Set(projectCategories.value.map((item) => item.title || item.key))
+    if (filterProductLine.value && !values.has(filterProductLine.value)) filterProductLine.value = ''
+    if (form.product_line && !values.has(form.product_line)) form.product_line = ''
+  } catch (error) {
+    projectCategories.value = []
+    ElMessage.error(errorMessage(error))
+  }
+}
+
 async function loadDetail() {
   if (!projectId.value || !selectedWikiTitle.value) return
   try {
     const detail = await getReleaseDetail(projectId.value, selectedWikiTitle.value)
-    form.version_name = detail.version_name; form.release_date = detail.release_date; form.commit = detail.commit; form.product_line = detail.product_line; form.changelog = detail.changelog
-    filesInfo.value = detail.files_info; selectedFiles.value = []; canRetryNotice.value = false
+    form.version_name = detail.version_name
+    form.release_date = detail.release_date
+    form.commit = detail.commit
+    form.product_line = detail.product_line
+    form.changelog = detail.changelog
+    filesInfo.value = detail.files_info
+    selectedFiles.value = []
+    canRetryNotice.value = false
     await loadHistories()
-  } catch (error) { ElMessage.error(errorMessage(error)) }
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
 }
+
 async function loadHistories() {
   if (!projectId.value || !selectedWikiTitle.value) return
   const [publishData, mailData] = await Promise.all([
@@ -178,22 +259,203 @@ async function loadHistories() {
   publishHistory.value = publishData.items
   mailHistory.value = mailData.items
 }
-async function loadContacts() { try { const data = await getContacts(mailScope.value); contactsTo.value = data.contacts_to; contactsCc.value = data.contacts_cc; contactTemplates.value = data.contact_templates || []; selectedTemplateNames.value = []; mailTo.value = []; mailCc.value = [] } catch (error) { ElMessage.error(errorMessage(error)) } }
-function mergeEmails(groups: string[][]): string[] { const seen = new Set<string>(); const result: string[] = []; groups.flat().forEach((email) => { const value = email.trim(); const key = value.toLowerCase(); if (value && !seen.has(key)) { seen.add(key); result.push(value) } }); return result }
-function contactLabel(email: string): string { const key = email.trim().toLowerCase(); for (const template of contactTemplates.value) { const contact = [...template.contacts_to, ...template.contacts_cc].find((item) => item.email.trim().toLowerCase() === key); if (contact) return `${contact.name || contact.email.split('@')[0]} <${contact.email}>` } return email }
-function applyContactTemplates() { const selected = contactTemplates.value.filter((item) => selectedTemplateNames.value.includes(item.name)); mailTo.value = mergeEmails(selected.map((item) => item.contacts_to.map((contact) => contact.email))); mailCc.value = mergeEmails(selected.map((item) => item.contacts_cc.map((contact) => contact.email))) }
+
+async function loadContacts() {
+  try {
+    const data = await getContacts(mailScope.value)
+    contactsTo.value = data.contacts_to
+    contactsCc.value = data.contacts_cc
+    contactTemplates.value = data.contact_templates || []
+    selectedTemplateNames.value = []
+    mailTo.value = []
+    mailCc.value = []
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+function mergeEmails(groups: string[][]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  groups.flat().forEach((email) => {
+    const value = email.trim()
+    const key = value.toLowerCase()
+    if (value && !seen.has(key)) { seen.add(key); result.push(value) }
+  })
+  return result
+}
+
+function contactLabel(email: string): string {
+  const key = email.trim().toLowerCase()
+  for (const template of contactTemplates.value) {
+    const contact = [...template.contacts_to, ...template.contacts_cc].find((item) => item.email.trim().toLowerCase() === key)
+    if (contact) return `${contact.name || contact.email.split('@')[0]} <${contact.email}>`
+  }
+  return email
+}
+
+function applyContactTemplates() {
+  const selected = contactTemplates.value.filter((item) => selectedTemplateNames.value.includes(item.name))
+  mailTo.value = mergeEmails(selected.map((item) => item.contacts_to.map((contact) => contact.email)))
+  mailCc.value = mergeEmails(selected.map((item) => item.contacts_cc.map((contact) => contact.email)))
+}
+
 function changelogLines(): string[] { return form.changelog.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }
-function attachmentNames(): string[] { const selected = selectedFiles.value.map((file) => file.name).filter(Boolean); if (replaceAttachments.value || selected.length) return selected; return filesInfo.value.split(/\r?\n/).map((line) => line.replace(/^-\s*/, '').trim().split(/\s+/)[0]).filter((item) => item && item !== '（无已有附件）') }
-function uniqueItems(items: string[]): string[] { const seen = new Set<string>(); const result: string[] = []; items.forEach((item) => { const value = item.trim(); const key = value.toLowerCase(); if (value && !seen.has(key)) { seen.add(key); result.push(value) } }); return result }
-function releaseNameFromAttachments(names: string[]): string { const models: string[] = []; let parsedVersion = ''; let parsedDate = ''; names.forEach((filename) => { const stem = filename.replace(/\.[A-Za-z0-9]+$/, ''); const parts = stem.split('_').filter(Boolean); const versionIndex = parts.findIndex((part) => /^V?\d+(?:\.\d+)+$/i.test(part)); const dateIndex = parts.findIndex((part) => /^\d{8}$|^\d{4}-\d{2}-\d{2}$/.test(part)); if (versionIndex > 0) { const model = parts.slice(0, versionIndex).join('_'); if (model) models.push(model); if (!parsedVersion) parsedVersion = parts[versionIndex]; if (dateIndex > versionIndex && !parsedDate) parsedDate = parts[dateIndex] } else if (stem) models.push(stem) }); const cleanModels = uniqueItems(models); const modelText = cleanModels.length > 4 ? `${cleanModels.slice(0, 4).join('/')} 等${cleanModels.length}个机型` : cleanModels.join('/'); return [modelText, parsedVersion || form.version_name, parsedDate || form.release_date.replace(/-/g, '')].filter(Boolean).join(' ') }
+function attachmentNames(): string[] {
+  const selected = selectedFiles.value.map((file) => file.name).filter(Boolean)
+  if (replaceAttachments.value || selected.length) return selected
+  return filesInfo.value.split(/\r?\n/).map((line) => line.replace(/^-\s*/, '').trim().split(/\s+/)[0]).filter((item) => item && item !== '（无已有附件）')
+}
+function uniqueItems(items: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  items.forEach((item) => { const value = item.trim(); const key = value.toLowerCase(); if (value && !seen.has(key)) { seen.add(key); result.push(value) } })
+  return result
+}
+function releaseNameFromAttachments(names: string[]): string {
+  const models: string[] = []
+  let parsedVersion = ''
+  let parsedDate = ''
+  names.forEach((filename) => {
+    const stem = filename.replace(/\.[A-Za-z0-9]+$/, '')
+    const parts = stem.split('_').filter(Boolean)
+    const versionIndex = parts.findIndex((part) => /^V?\d+(?:\.\d+)+$/i.test(part))
+    const dateIndex = parts.findIndex((part) => /^\d{8}$|^\d{4}-\d{2}-\d{2}$/.test(part))
+    if (versionIndex > 0) {
+      const model = parts.slice(0, versionIndex).join('_')
+      if (model) models.push(model)
+      if (!parsedVersion) parsedVersion = parts[versionIndex]
+      if (dateIndex > versionIndex && !parsedDate) parsedDate = parts[dateIndex]
+    } else if (stem) models.push(stem)
+  })
+  const cleanModels = uniqueItems(models)
+  const modelText = cleanModels.length > 4 ? `${cleanModels.slice(0, 4).join('/')} 等${cleanModels.length}个机型` : cleanModels.join('/')
+  return [modelText, parsedVersion || form.version_name, parsedDate || form.release_date.replace(/-/g, '')].filter(Boolean).join(' ')
+}
 function generatedMailSubject(): string { const releaseName = releaseNameFromAttachments(attachmentNames()); return mailScope.value === 'external' ? `Firmware Release ${releaseName}` : `固件版本发布 ${releaseName}` }
-function generatedMailBody(): string { const releaseName = releaseNameFromAttachments(attachmentNames()); const changelog = changelogLines().map((item, index) => `${index + 1}. ${item}`).join('\n') || '（无）'; const attachments = attachmentNames().map((name) => `- ${name}`).join('\n') || (mailScope.value === 'external' ? '（本次邮件未附加文件，请联系相关人员获取固件文件）' : '（本次邮件未附加文件，请查看 Redmine 项目文件）'); if (mailScope.value === 'external') return ['您好，', '', '固件版本已发布，请查收。', '', `版本：${releaseName}`, `发布日期：${form.release_date}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`, '', '如有问题，请联系技术支持人员。'].join('\n'); return ['固件版本已发布。', '', `版本：${releaseName}`, `发布日期：${form.release_date}`, `Commit：${form.commit}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`, '', 'Wiki：{{wiki_url}}', '项目文件：{{files_url}}'].join('\n') }
+function generatedMailBody(): string {
+  const releaseName = releaseNameFromAttachments(attachmentNames())
+  const changelog = changelogLines().map((item, index) => `${index + 1}. ${item}`).join('\n') || '（无）'
+  const attachments = attachmentNames().map((name) => `- ${name}`).join('\n') || (mailScope.value === 'external' ? '（本次邮件未附加文件，请联系相关人员获取固件文件）' : '（本次邮件未附加文件，请查看 Redmine 项目文件）')
+  if (mailScope.value === 'external') return ['您好，', '', '固件版本已发布，请查收。', '', `版本：${releaseName}`, `发布日期：${form.release_date}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`, '', '如有问题，请联系技术支持人员。'].join('\n')
+  return ['固件版本已发布。', '', `版本：${releaseName}`, `发布日期：${form.release_date}`, `Commit：${form.commit}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`, '', 'Wiki：{{wiki_url}}', '项目文件：{{files_url}}'].join('\n')
+}
 function generateMailContent() { mailSubject.value = generatedMailSubject(); mailBody.value = generatedMailBody() }
 function resetMailContent() { mailContentEdited.value = false; generateMailContent() }
-function buildReleaseFormData(): FormData { const data = new FormData(); data.append('project_id', projectId.value); data.append('version_name', form.version_name); data.append('release_date', form.release_date); data.append('commit', form.commit); data.append('product_line', form.product_line); data.append('changelog', form.changelog); data.append('replace_attachments', String(replaceAttachments.value)); data.append('edit_title', selectedWikiTitle.value); data.append('notice_enabled', String(noticeEnabled.value)); data.append('mail_scope', mailScope.value); data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(',')); data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(',')); data.append('mail_subject', mailSubject.value); data.append('mail_body', mailBody.value); selectedFiles.value.forEach((file) => data.append('files', file)); return data }
-function buildNoticeFormData(): FormData { const data = new FormData(); data.append('project_id', projectId.value); data.append('wiki_title', selectedWikiTitle.value); data.append('version_name', form.version_name); data.append('mail_scope', mailScope.value); data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(',')); data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(',')); data.append('mail_subject', mailSubject.value); data.append('mail_body', mailBody.value); selectedFiles.value.forEach((file) => data.append('files', file)); return data }
-async function confirmPreview(): Promise<boolean> { const preview = await previewRelease(buildReleaseFormData()); logs.value = preview.logs || []; try { await ElMessageBox.confirm(preview.summary || '确认更新？', '更新前预览', { confirmButtonText: '确认更新', cancelButtonText: '取消', type: 'warning', customStyle: { whiteSpace: 'pre-line', maxWidth: '760px' } }); return true } catch { return false } }
-async function publish() { if (!projectId.value || !selectedWikiTitle.value) return ElMessage.warning('请选择要编辑的版本'); publishing.value = true; status.value = ''; canRetryNotice.value = false; logs.value = ['正在生成更新前预览']; logDialogVisible.value = true; try { const confirmed = await confirmPreview(); if (!confirmed) { logs.value = ['已取消更新']; return } logs.value = ['已确认更新，等待后端执行']; const result = await publishRelease(buildReleaseFormData()); releases.value = result.releases; logs.value = result.logs || []; selectedWikiTitle.value = result.title; canRetryNotice.value = noticeEnabled.value && result.mail_status === 'failed'; status.value = [`更新完成：${result.title}`, result.result_summary, result.notice_message].filter(Boolean).join('\n'); await loadHistories(); ElMessage.success('更新流程完成') } catch (error) { const message = errorMessage(error); const backendLogs = errorLogs(error); logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]; ElMessage.error(message) } finally { publishing.value = false; logDialogVisible.value = true } }
-async function retryNotice() { if (!selectedWikiTitle.value) return ElMessage.warning('没有可重发邮件的版本'); retryingNotice.value = true; logs.value = ['正在重发邮件']; logDialogVisible.value = true; try { const result = await sendReleaseNotice(buildNoticeFormData()); logs.value = result.logs || []; status.value = `${status.value}\n邮件重发：成功，${result.message}`; canRetryNotice.value = false; await loadHistories(); ElMessage.success('邮件重发成功') } catch (error) { const message = errorMessage(error); const backendLogs = errorLogs(error); logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]; ElMessage.error(message) } finally { retryingNotice.value = false; logDialogVisible.value = true } }
+function buildReleaseFormData(): FormData {
+  const data = new FormData()
+  data.append('project_id', projectId.value)
+  data.append('version_name', form.version_name)
+  data.append('release_date', form.release_date)
+  data.append('commit', form.commit)
+  data.append('product_line', form.product_line)
+  data.append('changelog', form.changelog)
+  data.append('replace_attachments', String(replaceAttachments.value))
+  data.append('edit_title', selectedWikiTitle.value)
+  data.append('notice_enabled', String(noticeEnabled.value))
+  data.append('mail_scope', mailScope.value)
+  data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(','))
+  data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(','))
+  data.append('mail_subject', mailSubject.value)
+  data.append('mail_body', mailBody.value)
+  selectedFiles.value.forEach((file) => data.append('files', file))
+  return data
+}
+function buildNoticeFormData(): FormData {
+  const data = new FormData()
+  data.append('project_id', projectId.value)
+  data.append('wiki_title', selectedWikiTitle.value)
+  data.append('version_name', form.version_name)
+  data.append('mail_scope', mailScope.value)
+  data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(','))
+  data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(','))
+  data.append('mail_subject', mailSubject.value)
+  data.append('mail_body', mailBody.value)
+  selectedFiles.value.forEach((file) => data.append('files', file))
+  return data
+}
+async function confirmPreview(): Promise<boolean> {
+  const preview = await previewRelease(buildReleaseFormData())
+  logs.value = preview.logs || []
+  try {
+    await ElMessageBox.confirm(preview.summary || '确认更新？', '更新前预览', { confirmButtonText: '确认更新', cancelButtonText: '取消', type: 'warning', customStyle: { whiteSpace: 'pre-line', maxWidth: '760px' } })
+    return true
+  } catch { return false }
+}
+async function publish() {
+  if (!projectId.value || !selectedWikiTitle.value) return ElMessage.warning('请选择要编辑的版本')
+  publishing.value = true
+  status.value = ''
+  canRetryNotice.value = false
+  logs.value = ['正在生成更新前预览']
+  logDialogVisible.value = true
+  try {
+    const confirmed = await confirmPreview()
+    if (!confirmed) { logs.value = ['已取消更新']; return }
+    logs.value = ['已确认更新，等待后端执行']
+    const result = await publishRelease(buildReleaseFormData())
+    releases.value = result.releases
+    logs.value = result.logs || []
+    selectedWikiTitle.value = result.title
+    canRetryNotice.value = noticeEnabled.value && result.mail_status === 'failed'
+    status.value = [`更新完成：${result.title}`, result.result_summary, result.notice_message].filter(Boolean).join('\n')
+    await loadHistories()
+    ElMessage.success('更新流程完成')
+  } catch (error) {
+    const message = errorMessage(error)
+    const backendLogs = errorLogs(error)
+    logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
+    ElMessage.error(message)
+  } finally {
+    publishing.value = false
+    logDialogVisible.value = true
+  }
+}
+async function retryNotice() {
+  if (!selectedWikiTitle.value) return ElMessage.warning('没有可重发邮件的版本')
+  retryingNotice.value = true
+  logs.value = ['正在重发邮件']
+  logDialogVisible.value = true
+  try {
+    const result = await sendReleaseNotice(buildNoticeFormData())
+    logs.value = result.logs || []
+    status.value = `${status.value}\n邮件重发：成功，${result.message}`
+    canRetryNotice.value = false
+    await loadHistories()
+    ElMessage.success('邮件重发成功')
+  } catch (error) {
+    const message = errorMessage(error)
+    const backendLogs = errorLogs(error)
+    logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
+    ElMessage.error(message)
+  } finally {
+    retryingNotice.value = false
+    logDialogVisible.value = true
+  }
+}
+async function recoverHistory(row: PublishHistoryItem, action: 'rebuild_index' | 'continue') {
+  try {
+    const actionLabel = row.recover_actions?.find((item) => item.action === action)?.label || action
+    await ElMessageBox.confirm(`确认执行恢复操作：${actionLabel}？`, '恢复发布记录', { confirmButtonText: '确认执行', cancelButtonText: '取消', type: 'warning' })
+    recoveringHistoryId.value = row.id
+    recoveringAction.value = action
+    logs.value = [`正在执行恢复操作：${actionLabel}`]
+    logDialogVisible.value = true
+    const result = await recoverPublishHistory(row.id, action)
+    logs.value = result.logs || []
+    status.value = result.message
+    await loadHistories()
+    if (action === 'continue') await loadReleases()
+    ElMessage.success(result.message)
+  } catch (error) {
+    const message = errorMessage(error)
+    const backendLogs = errorLogs(error)
+    if (message !== 'cancel') logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
+    if (message !== 'cancel') ElMessage.error(message)
+  } finally {
+    recoveringHistoryId.value = null
+    recoveringAction.value = ''
+  }
+}
 onMounted(async () => { await loadContacts(); await loadCategories(); await loadReleases() })
 </script>
