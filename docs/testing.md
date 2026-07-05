@@ -25,6 +25,7 @@ python -m unittest discover -s tests
 7. 未选择附件发布或编辑时，`file_status` 应为 `skipped`，不应被错误标记为 `success`。
 8. Redmine 项目文件超过一页时，同名附件检查应覆盖全部文件，而不是只检查第一页。
 9. 发布历史接口应返回中文状态标签，例如 `release_status_label`、`status_summary`、`recover_actions`。
+10. 登录响应 Cookie 应包含 `HttpOnly`、`Max-Age`、`SameSite`，HTTPS 部署时可通过环境变量启用 `Secure`。
 
 ## 发布状态字段含义
 
@@ -42,3 +43,10 @@ python -m unittest discover -s tests
 - `status_summary`：把各阶段状态合并成一行摘要。
 - `recover_actions`：可执行的恢复动作列表，目前包括 `rebuild_index` 和 `continue`。
 - `can_rebuild_index` / `can_continue`：方便旧前端或简单按钮判断。
+
+## 会话 Cookie 配置
+
+- `RELEASE_TOOL_SESSION_TTL_SECONDS`：最长登录时长。
+- `RELEASE_TOOL_SESSION_IDLE_SECONDS`：空闲超时时长。
+- `RELEASE_TOOL_SESSION_COOKIE_SECURE`：HTTPS 下建议设为 `1`；HTTP 内网访问保持 `0`。
+- `RELEASE_TOOL_SESSION_COOKIE_SAMESITE`：默认 `lax`。
