@@ -1,16 +1,18 @@
-"""FastAPI 后端入口，供 Vue 前端调用。"""
+"""FastAPI 应用共享入口。
+
+本模块只保留全局 app、公共请求模型、依赖和通用 helper。
+具体业务接口由 app_factory 统一注册到独立 *_api 模块，避免旧路由和新路由同时存在。
+"""
 
 from __future__ import annotations
 
 import os
-import threading
-import uuid
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,40 +21,25 @@ from pydantic import BaseModel, Field
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
     MAIL_SCOPE_INTERNAL,
-    default_base_url,
     get_email_server_settings,
     get_internal_contact_settings,
     get_user_external_email_settings,
     get_user_internal_email_settings,
-    store_email_server_settings,
-    store_internal_contact_settings,
-    store_login,
     store_user_external_email_settings,
     store_user_internal_email_settings,
 )
-from .email_sender import (
-    EmailSendError,
-    EmailSettings,
-    send_release_email,
-    split_emails,
-)
-from .index_sync import IndexSync
-from .legacy_changelog_migrator import LegacyChangelogMigrator
-from .legacy_job_store import append_legacy_job_log, cleanup_legacy_jobs, create_legacy_job, legacy_job_snapshot, update_legacy_job
+from .email_sender import EmailSendError, EmailSettings, send_release_email, split_emails
+from .legacy_job_store import append_legacy_job_log, legacy_job_snapshot, update_legacy_job
 from .mail_history import record_mail_send
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
-from .release_page import PRODUCT_LINES, ReleaseForm, format_release_files, parse_inline_ref, parse_release_page, proj_tag_from_project
+from .release_page import PRODUCT_LINES, parse_inline_ref
 from .session_store import InMemorySessionStore
-from .wiki_config import CONFIG_PAGE_TITLE
-from .wiki_templates import TEMPLATE_CHOICES, build_config_template, validate_config_text
 
 SESSION_COOKIE = "release_tool_session"
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 SESSION_STORE = InMemorySessionStore(SESSIONS)
-LEGACY_MIGRATION_JOBS: Dict[str, Dict[str, Any]] = {}
-LEGACY_JOB_LOCK = threading.Lock()
 RECENT_RELEASE_LIMIT = 50
 
 app = FastAPI(title="Redmine Firmware Release API")
@@ -126,24 +113,6 @@ class UserInternalMailRequest(BaseModel):
     contacts_to: List[str] = Field(default_factory=list)
     contacts_cc: List[str] = Field(default_factory=list)
     contact_templates: List[ContactTemplateConfig] = Field(default_factory=list)
-
-
-class WikiConfigSaveRequest(BaseModel):
-    text: str = ""
-
-
-class WikiConfigCheckRequest(BaseModel):
-    text: str = ""
-
-
-class WikiConfigGenerateRequest(BaseModel):
-    project_id: str
-    template_key: str = "single_list"
-
-
-class LegacyMigrationRequest(BaseModel):
-    project_id: str
-    entry_pages: List[str] = Field(default_factory=lambda: ["Changelog"])
 
 
 def _user_key(base_url: str, login: str) -> str:
@@ -241,24 +210,6 @@ def _contact_people(emails: List[str]) -> List[Dict[str, str]]:
     return result
 
 
-def _contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
-    if scope == MAIL_SCOPE_INTERNAL:
-        global_contacts = get_internal_contact_settings()
-        user_contacts = get_user_internal_email_settings(session.get("user_key", ""))
-        return {
-            "contacts_to": _merge_contact_lists(global_contacts.get("contacts_to", []), user_contacts.get("contacts_to", [])),
-            "contacts_cc": _merge_contact_lists(global_contacts.get("contacts_cc", []), user_contacts.get("contacts_cc", [])),
-            "contact_templates": user_contacts.get("contact_templates", []),
-        }
-    else:
-        contacts = get_user_external_email_settings(session.get("user_key", ""))
-    return {
-        "contacts_to": contacts.get("contacts_to", []),
-        "contacts_cc": contacts.get("contacts_cc", []),
-        "contact_templates": contacts.get("contact_templates", []),
-    }
-
-
 def _merge_contact_lists(*groups: List[str]) -> List[str]:
     result: List[str] = []
     seen = set()
@@ -273,8 +224,22 @@ def _merge_contact_lists(*groups: List[str]) -> List[str]:
     return result
 
 
-def _job_timestamp() -> str:
-    return datetime.now().strftime("%H:%M:%S")
+def _contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
+    if scope == MAIL_SCOPE_INTERNAL:
+        global_contacts = get_internal_contact_settings()
+        user_contacts = get_user_internal_email_settings(session.get("user_key", ""))
+        return {
+            "contacts_to": _merge_contact_lists(global_contacts.get("contacts_to", []), user_contacts.get("contacts_to", [])),
+            "contacts_cc": _merge_contact_lists(global_contacts.get("contacts_cc", []), user_contacts.get("contacts_cc", [])),
+            "contact_templates": user_contacts.get("contact_templates", []),
+        }
+
+    contacts = get_user_external_email_settings(session.get("user_key", ""))
+    return {
+        "contacts_to": contacts.get("contacts_to", []),
+        "contacts_cc": contacts.get("contacts_cc", []),
+        "contact_templates": contacts.get("contact_templates", []),
+    }
 
 
 def _append_legacy_job_log(job_id: str, message: str) -> None:
@@ -295,23 +260,6 @@ def _set_legacy_job_state(job_id: str, **fields: Any) -> None:
         result=fields.get("result") if "result" in fields else None,
         error=fields.get("error") if "error" in fields else None,
     )
-
-
-def _run_legacy_migration_job(job_id: str, payload: LegacyMigrationRequest, session: Dict[str, Any]) -> None:
-    try:
-        _append_legacy_job_log(job_id, "后台任务已启动")
-        client = _client_from_session(session)
-        result = LegacyChangelogMigrator(
-            client,
-            payload.project_id,
-            payload.entry_pages,
-            log_callback=lambda message: _append_legacy_job_log(job_id, message),
-        ).execute()
-        _append_legacy_job_log(job_id, result.get("message", "旧项目升级完成"))
-        _set_legacy_job_state(job_id, status="succeeded", result=result)
-    except Exception as exc:
-        _append_legacy_job_log(job_id, f"执行失败：{exc}")
-        _set_legacy_job_state(job_id, status="failed", error=str(exc))
 
 
 def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSettings, List[str], List[str]]:
@@ -492,205 +440,11 @@ def api_meta() -> Dict[str, Any]:
     }
 
 
-@app.post("/api/auth/login", response_model=LoginResponse)
-def api_login(payload: LoginRequest, response: Response) -> LoginResponse:
-    base_url = default_base_url()
-    auth_mode = payload.auth_mode or "password"
-    username = payload.username.strip()
-    api_key = payload.api_key.strip()
-    if auth_mode == "api_key" and not api_key:
-        raise _json_error("请填写 API Key")
-    if auth_mode != "api_key" and (not username or not payload.password):
-        raise _json_error("请填写用户名和密码")
-
-    client = RedmineClient(base_url, username, payload.password, api_key=api_key, auth_mode=auth_mode)
-    account = client.test_login()
-    projects = client.list_projects()
-    user = account.get("user", {})
-    user_login = user.get("login") or username or "api-key"
-    is_admin = bool(user.get("admin", False))
-    projects = _visible_projects_for_user(client, projects, is_admin)
-    session = {
-        "connected": True,
-        "base_url": base_url,
-        "auth_mode": auth_mode,
-        "username": username,
-        "password": payload.password,
-        "api_key": api_key,
-        "user_login": user_login,
-        "user_key": _user_key(base_url, str(user_login)),
-        "is_admin": is_admin,
-        "projects": projects,
-    }
-    sid = uuid.uuid4().hex
-    SESSION_STORE.set(sid, session)
-    response.set_cookie(SESSION_COOKIE, sid, httponly=True, samesite="lax")
-    store_login(base_url, username, payload.password, payload.remember, auth_mode=auth_mode, api_key=api_key)
-    return _public_session(session)
-
-
-@app.get("/api/auth/me", response_model=LoginResponse)
-def api_me(session: Dict[str, Any] = Depends(_current_session), client: RedmineClient = Depends(_current_client)) -> LoginResponse:
-    if not session.get("is_admin"):
-        session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
-    return _public_session(session)
-
-
-@app.post("/api/auth/logout")
-def api_logout(request: Request, response: Response) -> Dict[str, bool]:
-    sid = request.cookies.get(SESSION_COOKIE, "")
-    SESSION_STORE.delete(sid)
-    response.delete_cookie(SESSION_COOKIE)
-    return {"ok": True}
-
-
 @app.get("/api/projects")
 def api_projects(session: Dict[str, Any] = Depends(_current_session), client: RedmineClient = Depends(_current_client)) -> List[Dict[str, Any]]:
     if not session.get("is_admin"):
         session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
     return session.get("projects", [])
-
-
-@app.get("/api/projects/{project_id}/release-categories")
-def api_project_release_categories(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
-    try:
-        profile = IndexSync(client, project_id).discover_profile()
-    except RedmineError:
-        return {"mode": "", "categories": []}
-    return {
-        "mode": profile.mode,
-        "categories": [
-            {"key": category.key, "title": category.title}
-            for category in profile.categories
-        ],
-    }
-
-
-@app.get("/api/releases")
-def api_releases(
-    project_id: str = Query(...),
-    product_line: str = Query(""),
-    client: RedmineClient = Depends(_current_client),
-) -> List[Dict[str, Any]]:
-    return _list_release_rows(client, project_id, product_line)
-
-
-@app.get("/api/releases/detail")
-def api_release_detail(
-    project_id: str = Query(...),
-    wiki_title: str = Query(...),
-    client: RedmineClient = Depends(_current_client),
-) -> Dict[str, Any]:
-    page = client.get_wiki_page(project_id, wiki_title)
-    if not page:
-        raise _json_error("未找到版本页面", 404)
-    parsed = parse_release_page(wiki_title, page.get("text", ""))
-    return {**parsed, "wiki_title": wiki_title, "files_info": format_release_files(parsed.get("files", []))}
-
-
-@app.post("/api/releases/publish")
-async def api_publish_release(
-    project_id: str = Form(...),
-    version_name: str = Form(...),
-    release_date: str = Form(...),
-    commit: str = Form(...),
-    product_line: str = Form(""),
-    changelog: str = Form(...),
-    replace_attachments: bool = Form(False),
-    edit_title: str = Form(""),
-    notice_enabled: bool = Form(False),
-    mail_scope: str = Form(MAIL_SCOPE_INTERNAL),
-    mail_to: str = Form(""),
-    mail_cc: str = Form(""),
-    mail_subject: str = Form(""),
-    mail_body: str = Form(""),
-    files: Optional[List[UploadFile]] = File(None),
-    session: Dict[str, Any] = Depends(_current_session),
-    client: RedmineClient = Depends(_current_client),
-) -> Dict[str, Any]:
-    logs: List[str] = []
-    action = "编辑版本" if edit_title else "发布新版本"
-    logs.append(f"开始{action}：项目 {project_id}")
-    items = [line.strip() for line in changelog.splitlines() if line.strip()]
-    notice_scope = ""
-    notice_to_addrs: List[str] = []
-    notice_cc_addrs: List[str] = []
-
-    try:
-        _validate_release_preflight(project_id, version_name, release_date, commit, items)
-        logs.append("基础字段预检查通过")
-        logs.append(f"变更说明校验通过：{len(items)} 条")
-        if notice_enabled:
-            notice_scope, notice_to_addrs, notice_cc_addrs = _validate_notice_preflight(
-                session,
-                mail_scope,
-                mail_to,
-                mail_cc,
-                mail_subject,
-                mail_body,
-            )
-            logs.append(
-                f"邮件预检查通过：{_mail_scope_label(notice_scope)}，"
-                f"收件人 {len(notice_to_addrs)} 个，抄送 {len(notice_cc_addrs)} 个"
-            )
-        else:
-            logs.append("邮件通知未启用，跳过邮件预检查")
-    except (ValueError, EmailSendError) as exc:
-        logs.append(f"预检查失败：{exc}")
-        return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
-
-    file_rows: List[Tuple[str, str, bytes]] = []
-    for upload in files or []:
-        content = await upload.read()
-        if upload.filename and content:
-            file_rows.append((upload.filename, "", content))
-    logs.append(f"附件读取完成：{len(file_rows)} 个有效附件")
-
-    form = ReleaseForm(
-        project_id=project_id,
-        proj_tag=proj_tag_from_project(project_id, edit_title or None),
-        version_name=version_name.strip(),
-        release_date=release_date.strip(),
-        commit=commit.strip(),
-        product_line=product_line.strip(),
-        changelog_items=items,
-        files=file_rows,
-        wiki_title=edit_title or None,
-        replace_attachments=bool(replace_attachments),
-    )
-    try:
-        title = ReleasePublisher(client).publish(form, logs)
-    except RedmineError as exc:
-        logs.append(f"{action}失败：{exc}")
-        return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
-
-    notice_message = ""
-    if notice_enabled:
-        try:
-            logs.append(f"邮件通知已启用：{_mail_scope_label(notice_scope)}，收件人 {len(notice_to_addrs)} 个，抄送 {len(notice_cc_addrs)} 个")
-            notice_message = _send_release_notice(
-                session=session,
-                client=client,
-                project_id=project_id,
-                wiki_title=title,
-                file_rows=file_rows,
-                mail_scope=notice_scope,
-                mail_to=notice_to_addrs,
-                mail_cc=notice_cc_addrs,
-                mail_subject=mail_subject,
-                mail_body=mail_body,
-            )
-            logs.append(notice_message)
-        except EmailSendError as exc:
-            notice_message = f"邮件发送失败：{exc}"
-            logs.append(notice_message)
-    else:
-        logs.append("邮件通知未启用，跳过发送")
-
-    releases = _list_release_rows(client, project_id, product_line.strip())
-    logs.append(f"刷新版本列表完成：返回 {len(releases)} 条")
-    logs.append(f"{action}完成：{title}")
-    return {"ok": True, "title": title, "notice_message": notice_message, "releases": releases, "logs": logs}
 
 
 @app.get("/api/mail/settings")
@@ -726,31 +480,6 @@ def api_mail_settings(session: Dict[str, Any] = Depends(_current_session)) -> Di
             "contact_templates": user_external["contact_templates"],
         },
     }
-
-
-@app.put("/api/mail/admin-settings")
-def api_save_admin_mail_settings(payload: AdminMailSettingsRequest, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, bool]:
-    _require_admin(session)
-    store_email_server_settings(
-        MAIL_SCOPE_INTERNAL,
-        smtp_host=payload.internal_server.smtp_host,
-        smtp_port=payload.internal_server.smtp_port,
-        smtp_from=payload.internal_server.smtp_from,
-        use_tls=payload.internal_server.use_tls,
-    )
-    store_email_server_settings(
-        MAIL_SCOPE_EXTERNAL,
-        smtp_host=payload.external_server.smtp_host,
-        smtp_port=payload.external_server.smtp_port,
-        smtp_from="",
-        use_tls=payload.external_server.use_tls,
-    )
-    contacts = payload.internal_contacts.contacts or _merge_contact_lists(
-        payload.internal_contacts.contacts_to,
-        payload.internal_contacts.contacts_cc,
-    )
-    store_internal_contact_settings(contacts=contacts)
-    return {"ok": True}
 
 
 @app.put("/api/mail/user-internal-settings")
@@ -792,108 +521,15 @@ def api_mail_contacts(scope: str = Query(MAIL_SCOPE_INTERNAL), session: Dict[str
     return _contacts_for_scope(session, _normalize_mail_scope(scope))
 
 
-@app.post("/api/legacy-migration/preview")
-def api_preview_legacy_migration(payload: LegacyMigrationRequest, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
-    return LegacyChangelogMigrator(client, payload.project_id, payload.entry_pages).preview()
-
-
-@app.post("/api/legacy-migration/execute")
-def api_execute_legacy_migration(
-    payload: LegacyMigrationRequest,
-    session: Dict[str, Any] = Depends(_current_session),
-    client: RedmineClient = Depends(_current_client),
-) -> Dict[str, Any]:
-    _require_admin(session)
-    return LegacyChangelogMigrator(client, payload.project_id, payload.entry_pages).execute()
-
-
-@app.post("/api/legacy-migration/execute-job")
-def api_start_legacy_migration_job(
-    payload: LegacyMigrationRequest,
-    session: Dict[str, Any] = Depends(_current_session),
-) -> Dict[str, Any]:
-    _require_admin(session)
-    job_id = uuid.uuid4().hex
-    cleanup_legacy_jobs()
-    create_legacy_job(job_id, project_id=payload.project_id, entry_pages=payload.entry_pages, release_detail_mode="auto")
-    _append_legacy_job_log(job_id, "准备执行旧项目升级")
-    thread = threading.Thread(
-        target=_run_legacy_migration_job,
-        args=(job_id, payload, dict(session)),
-        daemon=True,
-    )
-    thread.start()
-    return _legacy_job_snapshot(job_id)
-
-
-@app.get("/api/legacy-migration/jobs/{job_id}")
-def api_get_legacy_migration_job(job_id: str, session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
-    _require_admin(session)
-    return _legacy_job_snapshot(job_id)
-
-
-@app.get("/api/wiki-config/templates")
-def api_wiki_templates() -> List[Any]:
-    return TEMPLATE_CHOICES
-
-
-@app.post("/api/wiki-config/generate")
-def api_generate_wiki_config(payload: WikiConfigGenerateRequest) -> Dict[str, str]:
-    text = build_config_template(payload.template_key or "single_list", payload.project_id)
-    ok, msg = validate_config_text(text)
-    return {"text": text, "message": msg if ok else msg}
-
-
-@app.get("/api/wiki-config/{project_id}/refresh-preview")
-def api_preview_wiki_refresh(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
-    return IndexSync(client, project_id).preview_refresh_all()
-
-
-@app.post("/api/wiki-config/{project_id}/refresh")
-def api_refresh_wiki_index(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, Any]:
-    sync = IndexSync(client, project_id)
-    preview = sync.preview_refresh_all()
-    updated_count = sync.refresh_all()
-    return {
-        "ok": True,
-        "updated_release_count": updated_count,
-        "preview": preview,
-        "message": f"已按当前 Release_Tool_Config 重建索引，处理 Release {updated_count} 个。",
-    }
-
-
-@app.get("/api/wiki-config/{project_id}")
-def api_get_wiki_config(project_id: str, client: RedmineClient = Depends(_current_client)) -> Dict[str, str]:
-    page = client.get_wiki_page(project_id, CONFIG_PAGE_TITLE)
-    if not page:
-        return {"text": "", "message": f"未找到 {CONFIG_PAGE_TITLE}"}
-    text = page.get("text", "")
-    ok, msg = validate_config_text(text)
-    return {"text": text, "message": msg if ok else f"已读取，但{msg}"}
-
-
-@app.post("/api/wiki-config/check")
-def api_check_wiki_config(payload: WikiConfigCheckRequest) -> Dict[str, Any]:
-    ok, msg = validate_config_text(payload.text or "")
-    return {"ok": ok, "message": msg}
-
-
-@app.put("/api/wiki-config/{project_id}")
-def api_save_wiki_config(project_id: str, payload: WikiConfigSaveRequest, client: RedmineClient = Depends(_current_client)) -> Dict[str, str]:
-    ok, msg = validate_config_text(payload.text or "")
-    if not ok:
-        raise _json_error(msg)
-    client.put_wiki_page(project_id, CONFIG_PAGE_TITLE, payload.text, "release tool config update")
-    return {"message": f"已保存到 {CONFIG_PAGE_TITLE}。{msg}"}
-
-
 def _mount_frontend() -> None:
     dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
     index_file = dist / "index.html"
     if not index_file.exists():
+
         @app.get("/")
         def frontend_missing() -> Dict[str, str]:
             return {"message": "Vue 前端尚未构建。开发时请运行：cd frontend && npm run dev；发布时请先运行 npm run build。"}
+
         return
 
     @app.get("/")
