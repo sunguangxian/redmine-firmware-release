@@ -58,8 +58,8 @@ class ReleaseForm:
 
 def proj_tag_from_project(project_id: str, page_title: str | None = None) -> str:
     if page_title:
-        inline_ref = parse_inline_ref(page_title)
-        if inline_ref:
+        inline = parse_inline_ref(page_title)
+        if inline:
             return project_id.upper()
         match = re.match(r"^Release_([A-Za-z0-9_+-]+?)(?:_NP500)?_FW_", page_title, re.I)
         if match:
@@ -67,8 +67,8 @@ def proj_tag_from_project(project_id: str, page_title: str | None = None) -> str
     return project_id.upper()
 
 
-def inline_ref(container_page: str, version_name: str) -> str:
-    return f"{INLINE_REF_PREFIX}{quote(container_page or '', safe='')}::{quote(version_name or '', safe='')}"
+def inline_ref(container_page: str, block_id: str) -> str:
+    return f"{INLINE_REF_PREFIX}{quote(container_page or '', safe='')}::{quote(block_id or '', safe='')}"
 
 
 def parse_inline_ref(value: str | None) -> tuple[str, str] | None:
@@ -80,14 +80,18 @@ def parse_inline_ref(value: str | None) -> tuple[str, str] | None:
     if len(parts) != 2:
         return None
     page = unquote(parts[0]).strip()
-    version = unquote(parts[1]).strip()
-    if not page or not version:
+    block_id = unquote(parts[1]).strip()
+    if not page or not block_id:
         return None
-    return page, version
+    return page, block_id
 
 
 def release_anchor(version_name: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", (version_name or "").strip().lower()).strip("-") or "release"
+
+
+def inline_block_id(version_name: str) -> str:
+    return (version_name or "").strip()
 
 
 def build_release_markdown(
@@ -112,25 +116,33 @@ def build_inline_release_block(
     version_id: int | None,
     linked_files: list[dict[str, str | None]],
     source_page: str = "",
+    block_id: str | None = None,
+    display_version: str | None = None,
 ) -> str:
-    version = form.version_name.strip()
+    marker = inline_block_id(block_id or form.version_name)
+    version = (display_version or form.version_name).strip()
     source = f"\n\n## 迁移来源\n\n- [[{source_page}]]" if source_page else ""
     return (
-        f"{INLINE_BEGIN_PREFIX}{version} -->\n"
+        f"{INLINE_BEGIN_PREFIX}{marker} -->\n"
         f"## {version} ({form.release_date})\n\n"
         f"{_release_body_markdown(form, version_id, linked_files)}"
         f"{source}\n"
-        f"{INLINE_END_PREFIX}{version} -->"
+        f"{INLINE_END_PREFIX}{marker} -->"
     )
 
 
-def replace_inline_release_block(page_text: str, version_name: str, block: str) -> str:
-    text = page_text or ""
-    version = (version_name or "").strip()
-    pattern = re.compile(
-        rf"{re.escape(INLINE_BEGIN_PREFIX)}{re.escape(version)}\s*-->.*?{re.escape(INLINE_END_PREFIX)}{re.escape(version)}\s*-->",
+def _inline_block_pattern(block_id: str, capture_body: bool = False) -> re.Pattern[str]:
+    marker = inline_block_id(block_id)
+    middle = "(?P<body>.*?)" if capture_body else ".*?"
+    return re.compile(
+        rf"{re.escape(INLINE_BEGIN_PREFIX)}{re.escape(marker)}\s*-->{middle}{re.escape(INLINE_END_PREFIX)}{re.escape(marker)}\s*-->",
         re.S,
     )
+
+
+def replace_inline_release_block(page_text: str, block_id: str, block: str) -> str:
+    text = page_text or ""
+    pattern = _inline_block_pattern(block_id)
     if pattern.search(text):
         return pattern.sub(block, text, count=1)
     base = text.rstrip()
@@ -141,33 +153,38 @@ def replace_inline_release_block(page_text: str, version_name: str, block: str) 
     return base.rstrip() + "\n\n" + block + "\n"
 
 
-def extract_inline_release_block(page_text: str, version_name: str) -> str:
-    version = (version_name or "").strip()
-    pattern = re.compile(
-        rf"{re.escape(INLINE_BEGIN_PREFIX)}{re.escape(version)}\s*-->(.*?){re.escape(INLINE_END_PREFIX)}{re.escape(version)}\s*-->",
-        re.S,
-    )
+def delete_inline_release_block(page_text: str, block_id: str) -> str:
+    text = page_text or ""
+    if not block_id:
+        return text
+    return _inline_block_pattern(block_id).sub("", text, count=1).rstrip() + ("\n" if text else "")
+
+
+def extract_inline_release_block(page_text: str, block_id: str) -> str:
+    pattern = _inline_block_pattern(block_id, capture_body=True)
     match = pattern.search(page_text or "")
-    return match.group(1).strip() if match else ""
+    return match.group("body").strip() if match else ""
 
 
 def parse_inline_releases(page_text: str, container_page: str) -> list[dict]:
     result: list[dict] = []
     pattern = re.compile(
-        rf"{re.escape(INLINE_BEGIN_PREFIX)}(?P<version>.*?)\s*-->(?P<body>.*?){re.escape(INLINE_END_PREFIX)}(?P=version)\s*-->",
+        rf"{re.escape(INLINE_BEGIN_PREFIX)}(?P<block_id>.*?)\s*-->(?P<body>.*?){re.escape(INLINE_END_PREFIX)}(?P=block_id)\s*-->",
         re.S,
     )
     for match in pattern.finditer(page_text or ""):
-        version = match.group("version").strip()
+        block_id = match.group("block_id").strip()
         body = match.group("body").strip()
-        parsed = parse_release_page(inline_ref(container_page, version), body)
+        parsed = parse_release_page(inline_ref(container_page, block_id), body)
+        version = parsed.get("version_name") or block_id
         if not parsed.get("version_name"):
             parsed["version_name"] = version
         result.append(
             {
-                "title": inline_ref(container_page, parsed.get("version_name") or version),
+                "title": inline_ref(container_page, block_id),
                 "container_page": container_page,
-                "version": parsed.get("version_name") or version,
+                "block_id": block_id,
+                "version": version,
                 "date": parsed.get("release_date") or "0000-01-01",
                 "product_line": parsed.get("product_line") or "",
                 "summary": (parsed.get("changelog", "").splitlines() or [""])[0],
