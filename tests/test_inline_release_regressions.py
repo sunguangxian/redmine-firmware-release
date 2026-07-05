@@ -1,6 +1,7 @@
 import unittest
 
-from release_tool.inline_release_patch import _format_release_lines_inline_aware
+from release_tool.inline_release_patch import _format_release_lines_inline_aware, _next_block_id
+from release_tool.mail_history import _wiki_title_candidates as mail_title_candidates
 from release_tool.release_page import (
     ReleaseForm,
     build_inline_release_block,
@@ -10,6 +11,7 @@ from release_tool.release_page import (
     parse_inline_releases,
     replace_inline_release_block,
 )
+from release_tool.release_publish_history import _wiki_title_candidates as publish_title_candidates
 
 
 class InlineReleaseRegressionTest(unittest.TestCase):
@@ -41,6 +43,18 @@ class InlineReleaseRegressionTest(unittest.TestCase):
         self.assertEqual(extract_inline_release_block(text, "V1.0.0"), "")
         self.assertIn("V1.0.1", extract_inline_release_block(text, "V1.0.1"))
 
+    def test_unique_migration_block_id_is_preserved_on_edit(self):
+        self.assertEqual(
+            _next_block_id(
+                "Release_DM181_FW_V1_0_0_20260705",
+                "V1.0.0",
+                "V1.0.1",
+                True,
+            ),
+            "Release_DM181_FW_V1_0_0_20260705",
+        )
+        self.assertEqual(_next_block_id("V1.0.0", "V1.0.0", "V1.0.1", True), "V1.0.1")
+
     def test_index_links_use_container_page_for_inline_items(self):
         lines = _format_release_lines_inline_aware(
             None,
@@ -56,6 +70,11 @@ class InlineReleaseRegressionTest(unittest.TestCase):
         )
         self.assertIn("[[Release_Notes_DM181|V1.0.0 (2026-07-05)]]", lines)
         self.assertNotIn("INLINE::", lines)
+
+    def test_inline_history_title_candidates_include_container_page(self):
+        title = inline_ref("Release_Notes_DM181", "Release_DM181_FW_V1_0_0")
+        self.assertEqual(mail_title_candidates(title), [title, "Release_Notes_DM181"])
+        self.assertEqual(publish_title_candidates(title), [title, "Release_Notes_DM181"])
 
 
 if __name__ == "__main__":
