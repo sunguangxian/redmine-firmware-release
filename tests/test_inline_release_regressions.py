@@ -76,6 +76,14 @@ class InlineReleaseRegressionTest(unittest.TestCase):
         self.assertEqual(mail_title_candidates(title), [title, "Release_Notes_DM181"])
         self.assertEqual(publish_title_candidates(title), [title, "Release_Notes_DM181"])
 
+    def test_inline_history_needs_version_filter_for_container_records(self):
+        title = inline_ref("Release_Notes_DM181", "Release_DM181_FW_V1_0_0")
+        candidates = publish_title_candidates(title)
+        self.assertIn("Release_Notes_DM181", candidates)
+        self.assertIn(title, candidates)
+        # 查询接口会额外带 version_name，避免同一承载页下多个版本的历史混在一起。
+        self.assertEqual(len(candidates), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
