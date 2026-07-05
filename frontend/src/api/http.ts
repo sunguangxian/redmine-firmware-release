@@ -6,6 +6,57 @@ const http = axios.create({
   withCredentials: true
 })
 
+export type PublishReleaseResult = {
+  ok: boolean
+  title: string
+  notice_message: string
+  releases: ReleaseSummary[]
+  logs: string[]
+  publish_history_id: number
+  release_status: string
+  release_status_label: string
+  file_status: string
+  wiki_status: string
+  index_status: string
+  mail_status: string
+  mail_status_label: string
+  result_summary: string
+}
+
+export type MailHistoryItem = {
+  id: number
+  project_id: string
+  wiki_title: string
+  version_name: string
+  scope: string
+  subject: string
+  to_addrs: string[]
+  cc_addrs: string[]
+  attachment_count: number
+  sender_user: string
+  status: string
+  error_message: string
+  send_type: string
+  created_at: string
+}
+
+export type PublishHistoryItem = {
+  id: number
+  project_id: string
+  wiki_title: string
+  version_name: string
+  action: string
+  release_status: string
+  file_status: string
+  wiki_status: string
+  index_status: string
+  mail_status: string
+  error_message: string
+  logs: string[]
+  created_at: string
+  updated_at: string
+}
+
 export function errorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail
@@ -60,7 +111,7 @@ export async function previewRelease(form: FormData): Promise<{ ok: boolean; sum
   return data
 }
 
-export async function publishRelease(form: FormData): Promise<{ ok: boolean; title: string; notice_message: string; releases: ReleaseSummary[]; logs: string[] }> {
+export async function publishRelease(form: FormData): Promise<PublishReleaseResult> {
   const { data } = await http.post('/api/releases/publish', form, { headers: { 'Content-Type': 'multipart/form-data' } })
   return data
 }
@@ -97,8 +148,13 @@ export async function testAdminMailServer(payload: { scope: string; smtp_host: s
   return data
 }
 
-export async function getMailHistory(params: { project_id?: string; wiki_title?: string; limit?: number }): Promise<{ ok: boolean; items: unknown[] }> {
+export async function getMailHistory(params: { project_id?: string; wiki_title?: string; limit?: number }): Promise<{ ok: boolean; items: MailHistoryItem[] }> {
   const { data } = await http.get('/api/mail/history', { params })
+  return data
+}
+
+export async function getPublishHistory(params: { project_id?: string; wiki_title?: string; limit?: number }): Promise<{ ok: boolean; items: PublishHistoryItem[] }> {
+  const { data } = await http.get('/api/releases/publish-history', { params })
   return data
 }
 
