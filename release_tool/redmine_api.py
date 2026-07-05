@@ -197,8 +197,25 @@ class RedmineClient:
         return resp.content
 
     def list_project_files(self, project_id: str) -> list[dict[str, Any]]:
-        data = self._request("GET", f"/projects/{quote(project_id)}/files.json")
-        return data.get("files", []) if isinstance(data, dict) else []
+        files: list[dict[str, Any]] = []
+        offset = 0
+        limit = 100
+        while True:
+            data = self._request(
+                "GET",
+                f"/projects/{quote(project_id)}/files.json?limit={limit}&offset={offset}",
+            )
+            if not isinstance(data, dict):
+                return files
+            batch = data.get("files", [])
+            files.extend(batch)
+            total = data.get("total_count")
+            if total is None:
+                break
+            offset += limit
+            if offset >= int(total or 0):
+                break
+        return files
 
     def create_project_file(
         self,
