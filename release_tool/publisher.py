@@ -7,7 +7,6 @@ from collections import defaultdict
 from urllib.parse import quote, urlparse
 
 from .attachment_policy import sha256_hex, validate_attachment_batch
-from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
 from .release_page import (
     ReleaseForm,
@@ -16,6 +15,7 @@ from .release_page import (
     parse_release_files,
     parse_release_page,
 )
+from .release_structure_guard import ensure_release_structure_ready
 
 _RELEASE_LOCKS: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 
@@ -36,9 +36,8 @@ class ReleasePublisher:
             return self._publish_locked(form, logs)
 
     def _publish_locked(self, form: ReleaseForm, logs: list[str] | None = None) -> str:
-        index_sync = IndexSync(self.client, form.project_id)
-        self._log(logs, "读取项目 Release_Tool_Config 配置")
-        profile = index_sync.discover_profile()
+        self._log(logs, "检查项目 Wiki 发布结构")
+        index_sync, profile = ensure_release_structure_ready(self.client, form.project_id, logs)
         self._log(logs, f"项目发布结构：{profile.mode}")
         self._validate_category(form, index_sync, profile, logs)
         generated_title = self._configured_release_title(form, index_sync, profile)
@@ -100,7 +99,7 @@ class ReleasePublisher:
         form.files = files
         self._log(logs, "发布预检查完成：附件校验通过，已生成 SHA256")
 
-    def _validate_category(self, form: ReleaseForm, index_sync: IndexSync, profile, logs: list[str] | None = None) -> None:
+    def _validate_category(self, form: ReleaseForm, index_sync, profile, logs: list[str] | None = None) -> None:
         if profile.mode != "multi_list":
             self._log(logs, "项目不是 multi_list，版本分类允许为空")
             return
@@ -126,7 +125,7 @@ class ReleasePublisher:
             f"版本分类“{form.product_line}”未匹配当前项目 Release_Tool_Config 中的分类：{category_names}"
         )
 
-    def _configured_release_title(self, form: ReleaseForm, index_sync: IndexSync, profile) -> str:
+    def _configured_release_title(self, form: ReleaseForm, index_sync, profile) -> str:
         prefix = (getattr(profile, "release_page_prefix", "") or "").strip()
         if not prefix:
             return ""
@@ -147,7 +146,7 @@ class ReleasePublisher:
         )
         return f"{prefix}{form.wiki_suffix}"
 
-    def _configured_version_name(self, form: ReleaseForm, index_sync: IndexSync, profile) -> str:
+    def _configured_version_name(self, form: ReleaseForm, index_sync, profile) -> str:
         return form.version_name.strip()
 
     def list_releases(self, project_id: str) -> list[dict]:
