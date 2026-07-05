@@ -28,6 +28,9 @@
       <el-tab-pane label="版本编辑" name="edit">
         <ReleaseEditView :projects="session.projects" :meta="meta" :mail-version="mailVersion" />
       </el-tab-pane>
+      <el-tab-pane label="发布记录" name="history">
+        <PublishHistoryView :projects="session.projects" />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -38,6 +41,7 @@ import { ElMessage } from 'element-plus'
 import LoginView from './views/LoginView.vue'
 import LegacyMigrationView from './views/LegacyMigrationView.vue'
 import MailSettingsView from './views/MailSettingsView.vue'
+import PublishHistoryView from './views/PublishHistoryView.vue'
 import ReleaseEditView from './views/ReleaseEditView.vue'
 import ReleasePublishView from './views/ReleasePublishView.vue'
 import WikiConfigView from './views/WikiConfigView.vue'
