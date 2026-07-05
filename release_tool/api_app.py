@@ -1,7 +1,7 @@
 """FastAPI 应用共享入口。
 
-本模块只保留全局 app、公共请求模型、依赖和通用 helper。
-具体业务接口由 app_factory 统一注册到独立 *_api 模块，避免旧路由和新路由同时存在。
+本模块只保留全局 app、公共导出、邮件/发布 helper 和前端挂载。
+具体业务接口由 app_factory 统一注册到独立 *_api 模块。
 """
 
 from __future__ import annotations
@@ -12,11 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
@@ -26,18 +25,38 @@ from .config_store import (
     get_user_external_email_settings,
     get_user_internal_email_settings,
 )
+from .dependencies import (
+    SESSION_COOKIE,
+    SESSION_STORE,
+    SESSIONS,
+    _client_from_session,
+    _current_client,
+    _current_session,
+    _json_error,
+    _public_session,
+    _require_admin,
+    _user_key,
+    _visible_projects_for_user,
+)
 from .email_sender import EmailSendError, EmailSettings, send_release_email, split_emails
 from .legacy_job_store import append_legacy_job_log, legacy_job_snapshot, update_legacy_job
 from .mail_history import record_mail_send
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient, RedmineError
 from .release_page import parse_inline_ref
-from .session_store import InMemorySessionStore
+from .schemas import (
+    AdminMailSettingsRequest,
+    ContactConfig,
+    ContactPersonConfig,
+    ContactTemplateConfig,
+    LoginRequest,
+    LoginResponse,
+    SmtpServerConfig,
+    UserExternalMailRequest,
+    UserInternalMailRequest,
+)
 
-SESSION_COOKIE = "release_tool_session"
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
-SESSIONS: Dict[str, Dict[str, Any]] = {}
-SESSION_STORE = InMemorySessionStore(SESSIONS)
 RECENT_RELEASE_LIMIT = 50
 
 app = FastAPI(title="Redmine Firmware Release API")
@@ -50,152 +69,11 @@ app.add_middleware(
 )
 
 
-class LoginRequest(BaseModel):
-    auth_mode: str = "password"
-    username: str = ""
-    password: str = ""
-    api_key: str = ""
-    remember: bool = False
-
-
-class LoginResponse(BaseModel):
-    connected: bool
-    user_login: str
-    is_admin: bool
-    projects: List[Dict[str, Any]]
-
-
-class SmtpServerConfig(BaseModel):
-    smtp_host: str = ""
-    smtp_port: int = 25
-    smtp_from: str = ""
-    use_tls: bool = False
-
-
-class ContactConfig(BaseModel):
-    contacts: List[str] = Field(default_factory=list)
-    contacts_to: List[str] = Field(default_factory=list)
-    contacts_cc: List[str] = Field(default_factory=list)
-
-
-class ContactPersonConfig(BaseModel):
-    name: str = ""
-    email: str = ""
-
-
-class ContactTemplateConfig(BaseModel):
-    name: str = ""
-    contacts_to: List[ContactPersonConfig] = Field(default_factory=list)
-    contacts_cc: List[ContactPersonConfig] = Field(default_factory=list)
-
-
-class AdminMailSettingsRequest(BaseModel):
-    internal_server: SmtpServerConfig
-    external_server: SmtpServerConfig
-    internal_contacts: ContactConfig
-
-
-class UserExternalMailRequest(BaseModel):
-    smtp_user: str = ""
-    smtp_password: str = ""
-    smtp_from: str = ""
-    contacts_to: List[str] = Field(default_factory=list)
-    contacts_cc: List[str] = Field(default_factory=list)
-    contact_templates: List[ContactTemplateConfig] = Field(default_factory=list)
-
-
-class UserInternalMailRequest(BaseModel):
-    smtp_user: str = ""
-    smtp_password: str = ""
-    smtp_from: str = ""
-    contacts_to: List[str] = Field(default_factory=list)
-    contacts_cc: List[str] = Field(default_factory=list)
-    contact_templates: List[ContactTemplateConfig] = Field(default_factory=list)
-
-
-def _user_key(base_url: str, login: str) -> str:
-    return f"{base_url.rstrip('/')}|{login}"
-
-
-def _json_error(message: str, status_code: int = 400) -> HTTPException:
-    return HTTPException(status_code=status_code, detail=message)
-
-
-def _normalize_mail_scope(scope: Optional[str]) -> str:
-    value = (scope or MAIL_SCOPE_INTERNAL).strip().lower()
-    if value not in MAIL_SCOPES:
-        raise _json_error("邮件类型只能是 internal 或 external")
-    return value
-
-
-def _mail_scope_label(scope: str) -> str:
-    return "外网" if scope == MAIL_SCOPE_EXTERNAL else "内网"
-
-
-def _current_session(request: Request) -> Dict[str, Any]:
-    sid = request.cookies.get(SESSION_COOKIE, "")
-    session = SESSION_STORE.get(sid)
-    if not session or not session.get("connected"):
-        raise _json_error("请先登录 Redmine", 401)
-    return session
-
-
-def _current_client(session: Dict[str, Any] = Depends(_current_session)) -> RedmineClient:
-    return RedmineClient(
-        session.get("base_url", ""),
-        session.get("username", ""),
-        session.get("password", ""),
-        api_key=session.get("api_key", ""),
-        auth_mode=session.get("auth_mode", "password"),
-    )
-
-
-def _client_from_session(session: Dict[str, Any]) -> RedmineClient:
-    return RedmineClient(
-        session.get("base_url", ""),
-        session.get("username", ""),
-        session.get("password", ""),
-        api_key=session.get("api_key", ""),
-        auth_mode=session.get("auth_mode", "password"),
-    )
-
-
-def _require_admin(session: Dict[str, Any]) -> None:
-    if not session.get("is_admin"):
-        raise _json_error("只有 Redmine 管理员可以修改该配置", 403)
-
-
-def _public_session(session: Dict[str, Any]) -> LoginResponse:
-    return LoginResponse(
-        connected=True,
-        user_login=session.get("user_login", ""),
-        is_admin=bool(session.get("is_admin")),
-        projects=session.get("projects", []),
-    )
-
-
 def _list_release_rows(client: RedmineClient, project_id: str, product_line: str = "") -> List[Dict[str, Any]]:
     releases = ReleasePublisher(client).list_releases(project_id)
     if product_line:
         releases = [item for item in releases if item.get("product_line") == product_line]
     return releases[:RECENT_RELEASE_LIMIT]
-
-
-def _visible_projects_for_user(client: RedmineClient, projects: List[Dict[str, Any]], is_admin: bool) -> List[Dict[str, Any]]:
-    if is_admin:
-        return projects
-    candidates = client.list_projects(membership=True)
-    visible: List[Dict[str, Any]] = []
-    for project in candidates:
-        identifier = str(project.get("identifier") or "")
-        if not identifier:
-            continue
-        try:
-            client.get_wiki_index(identifier)
-        except RedmineError:
-            continue
-        visible.append(project)
-    return visible
 
 
 def _contact_people(emails: List[str]) -> List[Dict[str, str]]:
@@ -258,6 +136,17 @@ def _set_legacy_job_state(job_id: str, **fields: Any) -> None:
         result=fields.get("result") if "result" in fields else None,
         error=fields.get("error") if "error" in fields else None,
     )
+
+
+def _normalize_mail_scope(scope: Optional[str]) -> str:
+    value = (scope or MAIL_SCOPE_INTERNAL).strip().lower()
+    if value not in MAIL_SCOPES:
+        raise _json_error("邮件类型只能是 internal 或 external")
+    return value
+
+
+def _mail_scope_label(scope: str) -> str:
+    return "外网" if scope == MAIL_SCOPE_EXTERNAL else "内网"
 
 
 def _build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSettings, List[str], List[str]]:
@@ -452,7 +341,7 @@ def main() -> None:
 
     host = os.environ.get("RELEASE_TOOL_HOST", "127.0.0.1")
     port = int(os.environ.get("RELEASE_TOOL_PORT", "7860"))
-    uvicorn.run("release_tool.api_app:app", host=host, port=port, reload=False)
+    uvicorn.run("release_tool.app_factory:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":
