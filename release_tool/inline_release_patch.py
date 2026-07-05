@@ -36,6 +36,23 @@ def is_inline_profile(profile: Any) -> bool:
     return getattr(profile, "release_detail_mode", "inline") == "inline"
 
 
+def normalize_migration_detail_mode(value: str | None) -> str:
+    mode = (value or "auto").strip().lower()
+    return mode if mode in {"auto", "inline", "page"} else "auto"
+
+
+def selected_migration_detail_mode(migrator: LegacyChangelogMigrator) -> str:
+    selected = normalize_migration_detail_mode(getattr(migrator, "release_detail_mode", "auto"))
+    if selected in {"inline", "page"}:
+        return selected
+    page = migrator.client.get_wiki_page(migrator.project_id, CONFIG_PAGE_TITLE)
+    if page:
+        config = parse_release_wiki_config(page.get("text", ""))
+        if config and config.release_detail_mode in {"inline", "page"}:
+            return config.release_detail_mode
+    return "inline"
+
+
 def apply_inline_release_patches() -> None:
     global _PATCHED
     if _PATCHED:
@@ -294,7 +311,9 @@ def _execute_legacy_inline_aware(self: LegacyChangelogMigrator) -> Dict[str, Any
 
     categories = self._release_categories(releases)
     single_list = len(categories) == 1
-    detail_mode = _existing_detail_mode(self) or "inline"
+    detail_mode = selected_migration_detail_mode(self)
+    preview["release_detail_mode"] = detail_mode
+    preview["release_detail_mode_label"] = _detail_mode_label(detail_mode)
     self._log(f"写入 Release_Tool_Config，结构：{'single_list' if single_list else 'multi_list'}，版本模式：{detail_mode}")
     _save_legacy_config(self, categories, single_list=single_list, detail_mode=detail_mode)
     _create_legacy_structure(self, categories, single_list=single_list, detail_mode=detail_mode)
@@ -360,7 +379,8 @@ def _execute_legacy_inline_aware(self: LegacyChangelogMigrator) -> Dict[str, Any
         updated_pages += 1
 
     refreshed = IndexSync(self.client, self.project_id).refresh_all()
-    message = f"迁移完成：创建版本 {created_versions} 个，上传项目文件 {uploaded_files} 个，更新 Release Wiki {updated_pages} 处，重建索引 {refreshed} 个 Release。"
+    target_word = "处" if detail_mode == "inline" else "页"
+    message = f"迁移完成：创建版本 {created_versions} 个，上传项目文件 {uploaded_files} 个，更新 Release Wiki {updated_pages} {target_word}，重建索引 {refreshed} 个 Release。"
     self._log(message)
     return {
         "ok": True,
@@ -370,16 +390,13 @@ def _execute_legacy_inline_aware(self: LegacyChangelogMigrator) -> Dict[str, Any
         "updated_release_pages": updated_pages,
         "refreshed_release_count": refreshed,
         "release_detail_mode": detail_mode,
+        "release_detail_mode_label": _detail_mode_label(detail_mode),
         "message": message,
     }
 
 
-def _existing_detail_mode(migrator: LegacyChangelogMigrator) -> str:
-    page = migrator.client.get_wiki_page(migrator.project_id, CONFIG_PAGE_TITLE)
-    if not page:
-        return ""
-    config = parse_release_wiki_config(page.get("text", ""))
-    return config.release_detail_mode if config else ""
+def _detail_mode_label(mode: str) -> str:
+    return "内联模式" if mode == "inline" else "一版本一页"
 
 
 def _save_legacy_config(migrator: LegacyChangelogMigrator, categories: List[Dict[str, str]], *, single_list: bool, detail_mode: str) -> None:
