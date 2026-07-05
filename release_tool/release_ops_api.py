@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse
 from .api_app import (
     _current_client,
     _current_session,
-    _json_error,
     _mail_scope_label,
     _send_release_notice,
     _validate_notice_preflight,
@@ -113,7 +112,6 @@ def register_release_ops_routes(app: FastAPI) -> None:
             _validate_release_preflight(project_id, version_name, release_date, commit, items)
             logs.append("基础字段预检查通过")
 
-            # 先检查 Wiki 结构；旧结构或无 Release_Tool_Config 时，禁止继续预览/发布/编辑。
             index_sync, profile = ensure_release_structure_ready(client, project_id, logs)
 
             if notice_enabled:
@@ -192,6 +190,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
     async def api_send_release_notice(
         project_id: str = Form(...),
         wiki_title: str = Form(...),
+        version_name: str = Form(""),
         mail_scope: str = Form("internal"),
         mail_to: str = Form(""),
         mail_cc: str = Form(""),
@@ -215,6 +214,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 client=client,
                 project_id=project_id,
                 wiki_title=wiki_title,
+                version_name=version_name.strip(),
                 file_rows=file_rows,
                 mail_scope=scope,
                 mail_to=to_addrs,
