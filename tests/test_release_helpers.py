@@ -93,6 +93,26 @@ class ReleaseHelpersTest(unittest.TestCase):
         self.assertEqual(second[0]["wiki_title"], "B")
         self.assertEqual(publisher.list_releases.call_count, 2)
 
+    def test_invalidate_release_rows_refreshes_project_cache(self):
+        client = Mock()
+        client.base_url = "http://redmine.local"
+        publisher = Mock()
+        publisher.list_releases.side_effect = [
+            [{"wiki_title": "A", "product_line": ""}],
+            [{"wiki_title": "B", "product_line": ""}],
+        ]
+
+        with patch("release_tool.release_helpers.ReleasePublisher", return_value=publisher), patch(
+            "release_tool.release_helpers.time.monotonic", side_effect=[100.0, 101.0]
+        ):
+            first = list_release_rows(client, "demo", use_cache=True)
+            invalidate_release_rows("demo")
+            second = list_release_rows(client, "demo", use_cache=True)
+
+        self.assertEqual(first[0]["wiki_title"], "A")
+        self.assertEqual(second[0]["wiki_title"], "B")
+        self.assertEqual(publisher.list_releases.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
