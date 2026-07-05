@@ -192,7 +192,8 @@ watch(
 )
 
 function statusLabel(row: PublishHistoryItem, field: 'release_status' | 'file_status' | 'wiki_status' | 'index_status' | 'mail_status'): string {
-  return String(row[`${field}_label`] || row[field] || '')
+  const record = row as unknown as Record<string, unknown>
+  return String(record[`${field}_label`] || record[field] || '')
 }
 
 function onFileChange(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
@@ -448,10 +449,12 @@ async function recoverHistory(row: PublishHistoryItem, action: 'rebuild_index' |
     if (action === 'continue') await loadReleases()
     ElMessage.success(result.message)
   } catch (error) {
+    if (error === 'cancel' || error === 'close') return
     const message = errorMessage(error)
+    if (message === 'cancel' || message === 'close') return
     const backendLogs = errorLogs(error)
-    if (message !== 'cancel') logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
-    if (message !== 'cancel') ElMessage.error(message)
+    logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
+    ElMessage.error(message)
   } finally {
     recoveringHistoryId.value = null
     recoveringAction.value = ''
