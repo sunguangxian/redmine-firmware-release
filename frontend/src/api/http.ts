@@ -7,6 +7,8 @@ export type PublishReleaseResult = { ok: boolean; title: string; notice_message:
 export type MailHistoryItem = { id: number; project_id: string; wiki_title: string; version_name: string; scope: string; subject: string; to_addrs: string[]; cc_addrs: string[]; attachment_count: number; sender_user: string; status: string; error_message: string; send_type: string; created_at: string }
 export type RecoverAction = { action: 'rebuild_index' | 'continue'; label: string }
 export type PublishHistoryItem = { id: number; project_id: string; wiki_title: string; version_name: string; action: string; release_status: string; file_status: string; wiki_status: string; index_status: string; mail_status: string; release_status_label?: string; file_status_label?: string; wiki_status_label?: string; index_status_label?: string; mail_status_label?: string; status_summary?: string; recover_actions?: RecoverAction[]; can_rebuild_index?: boolean; can_continue?: boolean; error_message: string; logs: string[]; created_at: string; updated_at: string }
+export type LegacyReleaseDetailMode = 'auto' | 'inline' | 'page'
+export type LegacyMigrationPayload = { project_id: string; entry_pages: string[]; release_detail_mode?: LegacyReleaseDetailMode }
 
 export function errorMessage(error: unknown): string { if (axios.isAxiosError(error)) { const detail = error.response?.data?.detail; if (typeof detail === 'string') return detail; return error.message } return error instanceof Error ? error.message : String(error) }
 export function errorLogs(error: unknown): string[] { if (!axios.isAxiosError(error)) return []; const logs = error.response?.data?.logs; return Array.isArray(logs) ? logs.filter((item) => typeof item === 'string') : [] }
@@ -37,7 +39,7 @@ export async function saveWikiConfig(projectId: string, text: string): Promise<{
 export async function getWikiTemplates(): Promise<Array<[string, string]>> { const { data } = await http.get('/api/wiki-config/templates'); return data }
 export async function previewWikiRefresh(projectId: string): Promise<WikiRefreshPreview> { const { data } = await http.get(`/api/wiki-config/${encodeURIComponent(projectId)}/refresh-preview`); return data }
 export async function refreshWikiIndex(projectId: string): Promise<WikiRefreshResult> { const { data } = await http.post(`/api/wiki-config/${encodeURIComponent(projectId)}/refresh`); return data }
-export async function previewLegacyMigration(payload: { project_id: string; entry_pages: string[] }): Promise<LegacyMigrationPreview> { const { data } = await http.post('/api/legacy-migration/preview', payload); return data }
-export async function executeLegacyMigration(payload: { project_id: string; entry_pages: string[] }): Promise<LegacyMigrationResult> { const { data } = await http.post('/api/legacy-migration/execute', payload); return data }
-export async function startLegacyMigrationJob(payload: { project_id: string; entry_pages: string[] }): Promise<LegacyMigrationJob> { const { data } = await http.post('/api/legacy-migration/execute-job', payload); return data }
+export async function previewLegacyMigration(payload: LegacyMigrationPayload): Promise<LegacyMigrationPreview> { const { data } = await http.post('/api/legacy-migration/preview', payload); return data }
+export async function executeLegacyMigration(payload: LegacyMigrationPayload): Promise<LegacyMigrationResult> { const { data } = await http.post('/api/legacy-migration/execute', payload); return data }
+export async function startLegacyMigrationJob(payload: LegacyMigrationPayload): Promise<LegacyMigrationJob> { const { data } = await http.post('/api/legacy-migration/execute-job', payload); return data }
 export async function getLegacyMigrationJob(jobId: string): Promise<LegacyMigrationJob> { const { data } = await http.get(`/api/legacy-migration/jobs/${encodeURIComponent(jobId)}`); return data }
