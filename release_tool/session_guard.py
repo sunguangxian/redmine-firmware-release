@@ -8,7 +8,7 @@ from typing import Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from .api_app import SESSION_COOKIE, SESSION_STORE
+from .dependencies import SESSION_COOKIE, SESSION_STORE
 from .session_config import SESSION_IDLE_SECONDS, SESSION_TTL_SECONDS
 
 
