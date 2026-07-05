@@ -33,7 +33,7 @@
         <el-input v-model="form.changelog" class="full-row" type="textarea" :rows="6" placeholder="每行一条变更说明" />
         <el-upload class="full-row" drag multiple :auto-upload="false" :on-change="onFileChange" :on-remove="onFileRemove">
           <el-icon><UploadFilled /></el-icon>
-          <div class="el-upload__text">拖入 .bin 固件文件，或点击选择</div>
+          <div class="el-upload__text">拖入固件文件，或点击选择</div>
         </el-upload>
       </div>
 
@@ -64,23 +64,28 @@
       </div>
 
       <div class="toolbar" style="margin-top: 16px">
-        <el-button type="primary" :loading="publishing" @click="publish">发布到 Redmine</el-button>
+        <el-button type="primary" :loading="publishing" @click="publish">预览并发布到 Redmine</el-button>
+        <el-button v-if="canRetryNotice" :loading="retryingNotice" type="warning" @click="retryNotice">重发邮件</el-button>
+        <el-button v-if="logs.length" @click="logDialogVisible = true">查看日志</el-button>
       </div>
       <el-alert v-if="status" class="card status-text" type="success" :closable="false" show-icon>
         <template #title>{{ status }}</template>
       </el-alert>
-      <div v-if="logs.length" class="release-log">
+    </el-card>
+
+    <el-dialog v-model="logDialogVisible" title="执行日志" width="820px" destroy-on-close>
+      <div class="release-log">
         <div v-for="(item, index) in logs" :key="index">{{ index + 1 }}. {{ item }}</div>
       </div>
-    </el-card>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, type UploadFile, type UploadFiles } from 'element-plus'
+import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { errorLogs, errorMessage, getContacts, getProjectReleaseCategories, listReleases, publishRelease } from '../api/http'
+import { errorLogs, errorMessage, getContacts, getProjectReleaseCategories, listReleases, previewRelease, publishRelease, sendReleaseNotice } from '../api/http'
 import type { ContactTemplateConfig, MetaInfo, Project, ReleaseSummary } from '../types'
 
 const props = defineProps<{ projects: Project[]; meta: MetaInfo; mailVersion: number }>()
@@ -90,8 +95,12 @@ const releases = ref<ReleaseSummary[]>([])
 const projectCategories = ref<Array<{ key: string; title: string }>>([])
 const loadingReleases = ref(false)
 const publishing = ref(false)
+const retryingNotice = ref(false)
 const status = ref('')
 const logs = ref<string[]>([])
+const logDialogVisible = ref(false)
+const canRetryNotice = ref(false)
+const lastPublishedTitle = ref('')
 const noticeEnabled = ref(false)
 const mailScope = ref('internal')
 const contactsTo = ref<string[]>([])
@@ -331,31 +340,74 @@ function resetMailContent() {
   generateMailContent()
 }
 
+function buildReleaseFormData(): FormData {
+  const data = new FormData()
+  data.append('project_id', projectId.value)
+  data.append('version_name', form.version_name)
+  data.append('release_date', form.release_date)
+  data.append('commit', form.commit)
+  data.append('product_line', form.product_line)
+  data.append('changelog', form.changelog)
+  data.append('replace_attachments', 'false')
+  data.append('edit_title', '')
+  data.append('notice_enabled', String(noticeEnabled.value))
+  data.append('mail_scope', mailScope.value)
+  data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(','))
+  data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(','))
+  data.append('mail_subject', mailSubject.value)
+  data.append('mail_body', mailBody.value)
+  selectedFiles.value.forEach((file) => data.append('files', file))
+  return data
+}
+
+function buildNoticeFormData(): FormData {
+  const data = new FormData()
+  data.append('project_id', projectId.value)
+  data.append('wiki_title', lastPublishedTitle.value)
+  data.append('mail_scope', mailScope.value)
+  data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(','))
+  data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(','))
+  data.append('mail_subject', mailSubject.value)
+  data.append('mail_body', mailBody.value)
+  selectedFiles.value.forEach((file) => data.append('files', file))
+  return data
+}
+
+async function confirmPreview(): Promise<boolean> {
+  const preview = await previewRelease(buildReleaseFormData())
+  logs.value = preview.logs || []
+  try {
+    await ElMessageBox.confirm(preview.summary || '确认发布？', '发布前预览', {
+      confirmButtonText: '确认发布',
+      cancelButtonText: '取消',
+      type: 'warning',
+      customStyle: { whiteSpace: 'pre-line', maxWidth: '760px' }
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function publish() {
   if (!projectId.value) return ElMessage.warning('请选择项目')
   publishing.value = true
   status.value = ''
-  logs.value = ['已提交发布请求，等待后端执行']
+  canRetryNotice.value = false
+  logs.value = ['正在生成发布前预览']
+  logDialogVisible.value = true
   try {
-    const data = new FormData()
-    data.append('project_id', projectId.value)
-    data.append('version_name', form.version_name)
-    data.append('release_date', form.release_date)
-    data.append('commit', form.commit)
-    data.append('product_line', form.product_line)
-    data.append('changelog', form.changelog)
-    data.append('replace_attachments', 'false')
-    data.append('edit_title', '')
-    data.append('notice_enabled', String(noticeEnabled.value))
-    data.append('mail_scope', mailScope.value)
-    data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(','))
-    data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(','))
-    data.append('mail_subject', mailSubject.value)
-    data.append('mail_body', mailBody.value)
-    selectedFiles.value.forEach((file) => data.append('files', file))
-    const result = await publishRelease(data)
+    const confirmed = await confirmPreview()
+    if (!confirmed) {
+      logs.value = ['已取消发布']
+      return
+    }
+    logs.value = ['已确认发布，等待后端执行']
+    const result = await publishRelease(buildReleaseFormData())
     releases.value = result.releases
     logs.value = result.logs || []
+    lastPublishedTitle.value = result.title
+    canRetryNotice.value = noticeEnabled.value && Boolean(result.notice_message?.startsWith('邮件发送失败'))
     status.value = `发布成功：${result.title}${result.notice_message ? '\n' + result.notice_message : ''}`
     ElMessage.success('发布成功')
   } catch (error) {
@@ -365,6 +417,29 @@ async function publish() {
     ElMessage.error(errorMessage(error))
   } finally {
     publishing.value = false
+    logDialogVisible.value = true
+  }
+}
+
+async function retryNotice() {
+  if (!lastPublishedTitle.value) return ElMessage.warning('没有可重发邮件的版本')
+  retryingNotice.value = true
+  logs.value = ['正在重发邮件']
+  logDialogVisible.value = true
+  try {
+    const result = await sendReleaseNotice(buildNoticeFormData())
+    logs.value = result.logs || []
+    status.value = `${status.value}\n${result.message}`
+    canRetryNotice.value = false
+    ElMessage.success('邮件重发成功')
+  } catch (error) {
+    const message = errorMessage(error)
+    const backendLogs = errorLogs(error)
+    logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
+    ElMessage.error(message)
+  } finally {
+    retryingNotice.value = false
+    logDialogVisible.value = true
   }
 }
 
