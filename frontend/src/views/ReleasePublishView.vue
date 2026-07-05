@@ -68,7 +68,7 @@
         <el-button v-if="canRetryNotice" :loading="retryingNotice" type="warning" @click="retryNotice">重发邮件</el-button>
         <el-button v-if="logs.length" @click="logDialogVisible = true">查看日志</el-button>
       </div>
-      <el-alert v-if="status" class="card status-text" type="success" :closable="false" show-icon>
+      <el-alert v-if="status" class="card status-text" :type="canRetryNotice ? 'warning' : 'success'" :closable="false" show-icon>
         <template #title>{{ status }}</template>
       </el-alert>
     </el-card>
@@ -124,59 +124,21 @@ const form = reactive({
   changelog: ''
 })
 
-watch(
-  () => props.meta,
-  (value) => {
-    if (!form.release_date && value.today) form.release_date = value.today
-  },
-  { immediate: true }
-)
-
-watch(
-  () => props.projects,
-  (value) => {
-    if (!projectId.value && value.length) projectId.value = value[0].identifier
-  },
-  { immediate: true }
-)
-
+watch(() => props.meta, (value) => { if (!form.release_date && value.today) form.release_date = value.today }, { immediate: true })
+watch(() => props.projects, (value) => { if (!projectId.value && value.length) projectId.value = value[0].identifier }, { immediate: true })
 watch(() => props.mailVersion, loadContacts)
-
 watch(
-  () => [
-    noticeEnabled.value,
-    projectId.value,
-    mailScope.value,
-    form.version_name,
-    form.release_date,
-    form.commit,
-    form.product_line,
-    form.changelog,
-    selectedFiles.value.map((file) => file.name).join('|')
-  ],
-  () => {
-    if (noticeEnabled.value && !mailContentEdited.value) generateMailContent()
-  }
+  () => [noticeEnabled.value, projectId.value, mailScope.value, form.version_name, form.release_date, form.commit, form.product_line, form.changelog, selectedFiles.value.map((file) => file.name).join('|')],
+  () => { if (noticeEnabled.value && !mailContentEdited.value) generateMailContent() }
 )
 
-function onFileChange(_file: UploadFile, files: UploadFiles) {
-  selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[]
-}
-
-function onFileRemove(_file: UploadFile, files: UploadFiles) {
-  selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[]
-}
+function onFileChange(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
+function onFileRemove(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
 
 async function loadReleases() {
   if (!projectId.value) return
   loadingReleases.value = true
-  try {
-    releases.value = await listReleases(projectId.value, filterProductLine.value)
-  } catch (error) {
-    ElMessage.error(errorMessage(error))
-  } finally {
-    loadingReleases.value = false
-  }
+  try { releases.value = await listReleases(projectId.value, filterProductLine.value) } catch (error) { ElMessage.error(errorMessage(error)) } finally { loadingReleases.value = false }
 }
 
 async function loadCategories() {
@@ -193,10 +155,7 @@ async function loadCategories() {
   }
 }
 
-async function reloadProject() {
-  await loadCategories()
-  await loadReleases()
-}
+async function reloadProject() { await loadCategories(); await loadReleases() }
 
 async function loadContacts() {
   try {
@@ -207,9 +166,7 @@ async function loadContacts() {
     selectedTemplateNames.value = []
     mailTo.value = []
     mailCc.value = []
-  } catch (error) {
-    ElMessage.error(errorMessage(error))
-  }
+  } catch (error) { ElMessage.error(errorMessage(error)) }
 }
 
 function mergeEmails(groups: string[][]): string[] {
@@ -218,10 +175,7 @@ function mergeEmails(groups: string[][]): string[] {
   groups.flat().forEach((email) => {
     const value = email.trim()
     const key = value.toLowerCase()
-    if (value && !seen.has(key)) {
-      seen.add(key)
-      result.push(value)
-    }
+    if (value && !seen.has(key)) { seen.add(key); result.push(value) }
   })
   return result
 }
@@ -241,25 +195,12 @@ function applyContactTemplates() {
   mailCc.value = mergeEmails(selected.map((item) => item.contacts_cc.map((contact) => contact.email)))
 }
 
-function changelogLines(): string[] {
-  return form.changelog.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
-}
-
-function attachmentNames(): string[] {
-  return selectedFiles.value.map((file) => file.name).filter(Boolean)
-}
-
+function changelogLines(): string[] { return form.changelog.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }
+function attachmentNames(): string[] { return selectedFiles.value.map((file) => file.name).filter(Boolean) }
 function uniqueItems(items: string[]): string[] {
   const seen = new Set<string>()
   const result: string[] = []
-  items.forEach((item) => {
-    const value = item.trim()
-    const key = value.toLowerCase()
-    if (value && !seen.has(key)) {
-      seen.add(key)
-      result.push(value)
-    }
-  })
+  items.forEach((item) => { const value = item.trim(); const key = value.toLowerCase(); if (value && !seen.has(key)) { seen.add(key); result.push(value) } })
   return result
 }
 
@@ -277,9 +218,7 @@ function releaseNameFromAttachments(names: string[]): string {
       if (model) models.push(model)
       if (!parsedVersion) parsedVersion = parts[versionIndex]
       if (dateIndex > versionIndex && !parsedDate) parsedDate = parts[dateIndex]
-    } else if (stem) {
-      models.push(stem)
-    }
+    } else if (stem) models.push(stem)
   })
   const cleanModels = uniqueItems(models)
   const modelText = cleanModels.length > 4 ? `${cleanModels.slice(0, 4).join('/')} 等${cleanModels.length}个机型` : cleanModels.join('/')
@@ -288,57 +227,21 @@ function releaseNameFromAttachments(names: string[]): string {
 
 function generatedMailSubject(): string {
   const releaseName = releaseNameFromAttachments(attachmentNames())
-  if (mailScope.value === 'external') {
-    return `Firmware Release ${releaseName}`
-  }
-  return `固件版本发布 ${releaseName}`
+  return mailScope.value === 'external' ? `Firmware Release ${releaseName}` : `固件版本发布 ${releaseName}`
 }
 
 function generatedMailBody(): string {
   const releaseName = releaseNameFromAttachments(attachmentNames())
   const changelog = changelogLines().map((item, index) => `${index + 1}. ${item}`).join('\n') || '（无）'
-  const attachments = attachmentNames()
-    .map((name) => `- ${name}`)
-    .join('\n') || (mailScope.value === 'external' ? '（本次邮件未附加文件，请联系相关人员获取固件文件）' : '（本次邮件未附加文件，请查看 Redmine 项目文件）')
+  const attachments = attachmentNames().map((name) => `- ${name}`).join('\n') || (mailScope.value === 'external' ? '（本次邮件未附加文件，请联系相关人员获取固件文件）' : '（本次邮件未附加文件，请查看 Redmine 项目文件）')
   if (mailScope.value === 'external') {
-    return [
-      '您好，',
-      '',
-      '固件版本已发布，请查收。',
-      '',
-      `版本：${releaseName}`,
-      `发布日期：${form.release_date}`,
-      '',
-      `变更说明：\n${changelog}`,
-      '',
-      `附件：\n${attachments}`
-    ].join('\n')
+    return ['您好，', '', '固件版本已发布，请查收。', '', `版本：${releaseName}`, `发布日期：${form.release_date}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`].join('\n')
   }
-  return [
-    '固件版本已发布。',
-    '',
-    `版本：${releaseName}`,
-    `发布日期：${form.release_date}`,
-    `Commit：${form.commit}`,
-    '',
-    `变更说明：\n${changelog}`,
-    '',
-    `附件：\n${attachments}`,
-    '',
-    'Wiki：{{wiki_url}}',
-    '项目文件：{{files_url}}'
-  ].join('\n')
+  return ['固件版本已发布。', '', `版本：${releaseName}`, `发布日期：${form.release_date}`, `Commit：${form.commit}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`, '', 'Wiki：{{wiki_url}}', '项目文件：{{files_url}}'].join('\n')
 }
 
-function generateMailContent() {
-  mailSubject.value = generatedMailSubject()
-  mailBody.value = generatedMailBody()
-}
-
-function resetMailContent() {
-  mailContentEdited.value = false
-  generateMailContent()
-}
+function generateMailContent() { mailSubject.value = generatedMailSubject(); mailBody.value = generatedMailBody() }
+function resetMailContent() { mailContentEdited.value = false; generateMailContent() }
 
 function buildReleaseFormData(): FormData {
   const data = new FormData()
@@ -364,6 +267,7 @@ function buildNoticeFormData(): FormData {
   const data = new FormData()
   data.append('project_id', projectId.value)
   data.append('wiki_title', lastPublishedTitle.value)
+  data.append('version_name', form.version_name)
   data.append('mail_scope', mailScope.value)
   data.append('mail_to', [mailTo.value.join(','), manualMailTo.value].filter(Boolean).join(','))
   data.append('mail_cc', [mailCc.value.join(','), manualMailCc.value].filter(Boolean).join(','))
@@ -377,16 +281,9 @@ async function confirmPreview(): Promise<boolean> {
   const preview = await previewRelease(buildReleaseFormData())
   logs.value = preview.logs || []
   try {
-    await ElMessageBox.confirm(preview.summary || '确认发布？', '发布前预览', {
-      confirmButtonText: '确认发布',
-      cancelButtonText: '取消',
-      type: 'warning',
-      customStyle: { whiteSpace: 'pre-line', maxWidth: '760px' }
-    })
+    await ElMessageBox.confirm(preview.summary || '确认发布？', '发布前预览', { confirmButtonText: '确认发布', cancelButtonText: '取消', type: 'warning', customStyle: { whiteSpace: 'pre-line', maxWidth: '760px' } })
     return true
-  } catch {
-    return false
-  }
+  } catch { return false }
 }
 
 async function publish() {
@@ -398,27 +295,21 @@ async function publish() {
   logDialogVisible.value = true
   try {
     const confirmed = await confirmPreview()
-    if (!confirmed) {
-      logs.value = ['已取消发布']
-      return
-    }
+    if (!confirmed) { logs.value = ['已取消发布']; return }
     logs.value = ['已确认发布，等待后端执行']
     const result = await publishRelease(buildReleaseFormData())
     releases.value = result.releases
     logs.value = result.logs || []
     lastPublishedTitle.value = result.title
-    canRetryNotice.value = noticeEnabled.value && Boolean(result.notice_message?.startsWith('邮件发送失败'))
-    status.value = `发布成功：${result.title}${result.notice_message ? '\n' + result.notice_message : ''}`
-    ElMessage.success('发布成功')
+    canRetryNotice.value = noticeEnabled.value && result.mail_status === 'failed'
+    status.value = [`发布完成：${result.title}`, result.result_summary, result.notice_message].filter(Boolean).join('\n')
+    ElMessage.success('发布流程完成')
   } catch (error) {
     const message = errorMessage(error)
     const backendLogs = errorLogs(error)
     logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
-    ElMessage.error(errorMessage(error))
-  } finally {
-    publishing.value = false
-    logDialogVisible.value = true
-  }
+    ElMessage.error(message)
+  } finally { publishing.value = false; logDialogVisible.value = true }
 }
 
 async function retryNotice() {
@@ -429,7 +320,7 @@ async function retryNotice() {
   try {
     const result = await sendReleaseNotice(buildNoticeFormData())
     logs.value = result.logs || []
-    status.value = `${status.value}\n${result.message}`
+    status.value = `${status.value}\n邮件重发：成功，${result.message}`
     canRetryNotice.value = false
     ElMessage.success('邮件重发成功')
   } catch (error) {
@@ -437,15 +328,8 @@ async function retryNotice() {
     const backendLogs = errorLogs(error)
     logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]
     ElMessage.error(message)
-  } finally {
-    retryingNotice.value = false
-    logDialogVisible.value = true
-  }
+  } finally { retryingNotice.value = false; logDialogVisible.value = true }
 }
 
-onMounted(async () => {
-  await loadContacts()
-  await loadCategories()
-  await loadReleases()
-})
+onMounted(async () => { await loadContacts(); await loadCategories(); await loadReleases() })
 </script>
