@@ -8,19 +8,9 @@ from .email_sender import EmailSendError, split_emails
 from .mail_history import record_mail_send
 
 _APPLIED = False
-_ORIGINAL_SEND: Callable[..., str] | None = None
 
 
-def apply_mail_history_patch() -> None:
-    global _APPLIED, _ORIGINAL_SEND
-    if _APPLIED:
-        return
-    _APPLIED = True
-
-    from . import api_app
-
-    _ORIGINAL_SEND = api_app._send_release_notice
-
+def _wrap_send(original: Callable[..., str], *, send_type: str) -> Callable[..., str]:
     def wrapped_send_release_notice(**kwargs: Any) -> str:
         session = kwargs.get("session") or {}
         project_id = kwargs.get("project_id") or ""
@@ -32,7 +22,7 @@ def apply_mail_history_patch() -> None:
         file_rows = kwargs.get("file_rows") or []
         sender_user = session.get("user_login", "")
         try:
-            message = _ORIGINAL_SEND(**kwargs)  # type: ignore[misc]
+            message = original(**kwargs)
             record_mail_send(
                 project_id=project_id,
                 wiki_title=wiki_title,
@@ -43,7 +33,7 @@ def apply_mail_history_patch() -> None:
                 attachment_count=len(file_rows),
                 sender_user=sender_user,
                 status="success",
-                send_type="publish",
+                send_type=send_type,
             )
             return message
         except EmailSendError as exc:
@@ -58,8 +48,26 @@ def apply_mail_history_patch() -> None:
                 sender_user=sender_user,
                 status="failed",
                 error_message=str(exc),
-                send_type="publish",
+                send_type=send_type,
             )
             raise
 
-    api_app._send_release_notice = wrapped_send_release_notice
+    return wrapped_send_release_notice
+
+
+def apply_mail_history_patch() -> None:
+    global _APPLIED
+    if _APPLIED:
+        return
+    _APPLIED = True
+
+    from . import api_app
+
+    api_app._send_release_notice = _wrap_send(api_app._send_release_notice, send_type="publish")
+
+    try:
+        from . import release_ops_api
+
+        release_ops_api._send_release_notice = _wrap_send(release_ops_api._send_release_notice, send_type="retry")
+    except Exception:
+        pass
