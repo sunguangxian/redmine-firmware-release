@@ -13,6 +13,7 @@ from .mail_admin_test_api import register_admin_mail_test_routes
 from .mail_log_api import register_mail_log_routes
 from .mail_settings_api import register_mail_settings_routes
 from .mail_test_api import register_mail_test_routes
+from .project_api import register_project_routes
 from .release_catalog_api import register_release_catalog_routes
 from .release_ops_api import register_release_ops_routes
 from .release_publish_api import register_release_publish_routes
@@ -41,6 +42,7 @@ def create_app():
     register_auth_routes(app)
     register_audit_routes(app)
     register_session_guard(app)
+    register_project_routes(app)
     register_mail_test_routes(app)
     register_admin_mail_test_routes(app)
     register_mail_settings_routes(app)
