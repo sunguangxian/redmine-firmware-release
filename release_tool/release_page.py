@@ -90,8 +90,15 @@ def release_anchor(version_name: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", (version_name or "").strip().lower()).strip("-") or "release"
 
 
-def inline_block_id(version_name: str) -> str:
-    return (version_name or "").strip()
+def project_path(project_id: str, suffix: str = "") -> str:
+    normalized_suffix = suffix if suffix.startswith("/") or not suffix else f"/{suffix}"
+    return f"/projects/{quote(project_id or '', safe='')}{normalized_suffix}"
+
+
+def version_or_roadmap_link(project_id: str, version_id: int | None) -> str:
+    if version_id:
+        return f"/versions/{version_id}"
+    return project_path(project_id, "/roadmap")
 
 
 def build_release_markdown(
@@ -129,6 +136,10 @@ def build_inline_release_block(
         f"{source}\n"
         f"{INLINE_END_PREFIX}{marker} -->"
     )
+
+
+def inline_block_id(version_name: str) -> str:
+    return (version_name or "").strip()
 
 
 def _inline_block_pattern(block_id: str, capture_body: bool = False) -> re.Pattern[str]:
@@ -201,8 +212,8 @@ def _release_body_markdown(
     linked_files: list[dict[str, str | None]],
 ) -> str:
     changes = "\n".join(f"1. {item}" for item in form.changelog_items) or "（见历史 changelog）"
-    ver_link = f"/versions/{version_id}" if version_id else f"/projects/{form.project_id}/roadmap"
-    files_link = f"/projects/{form.project_id}/files"
+    ver_link = version_or_roadmap_link(form.project_id, version_id)
+    files_link = project_path(form.project_id, "/files")
     product_line_block = f"**产品线:** {form.product_line}\n\n" if form.product_line.strip() else ""
     rows = []
     for item in linked_files:
