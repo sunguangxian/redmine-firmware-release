@@ -43,6 +43,10 @@ npm run build
 9. 发布历史接口应返回中文状态标签，例如 `release_status_label`、`status_summary`、`recover_actions`。
 10. 登录响应 Cookie 应包含 `HttpOnly`、`Max-Age`、`SameSite`，HTTPS 部署时可通过环境变量启用 `Secure`。
 11. 版本操作记录页面应显示中文状态，并在可恢复记录上显示“重建索引 / 继续发布”按钮。
+12. 默认 `Release_Tool_Config` 模板应生成 `release_detail_mode: inline`。
+13. 缺少 `release_detail_mode` 的旧配置应按 `inline` 处理。
+14. 内联模式发布后，版本内容应写入 `Release_Notes` 或分类 `list_page`，不应新建单独 Release 页面。
+15. 旧 Changelog 迁移默认应生成内联结构；若已有配置显式为 `release_detail_mode: page`，迁移应保留一版本一页模式。
 
 ## 发布状态字段含义
 
@@ -60,6 +64,19 @@ npm run build
 - `status_summary`：把各阶段状态合并成一行摘要。
 - `recover_actions`：可执行的恢复动作列表，目前包括 `rebuild_index` 和 `continue`。
 - `can_rebuild_index` / `can_continue`：方便旧前端或简单按钮判断。
+
+## 内联版本模式
+
+`release_detail_mode: inline` 是默认模式。该模式下每个版本用如下标记包住，便于后端定位和编辑：
+
+```text
+<!-- RELEASE_INLINE_BEGIN:V1.0.0 -->
+## V1.0.0 (2026-07-05)
+...
+<!-- RELEASE_INLINE_END:V1.0.0 -->
+```
+
+工具内部会用 `INLINE::<页面>::<版本>` 作为编辑标识；邮件和 Wiki 链接会自动转换为实际承载页面。
 
 ## 会话 Cookie 配置
 
