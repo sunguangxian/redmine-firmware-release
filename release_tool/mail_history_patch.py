@@ -15,6 +15,7 @@ def _wrap_send(original: Callable[..., str], *, send_type: str) -> Callable[...,
         session = kwargs.get("session") or {}
         project_id = kwargs.get("project_id") or ""
         wiki_title = kwargs.get("wiki_title") or ""
+        version_name = kwargs.get("version_name") or ""
         mail_scope = kwargs.get("mail_scope") or ""
         mail_to = split_emails(kwargs.get("mail_to") or [])
         mail_cc = split_emails(kwargs.get("mail_cc") or [])
@@ -26,6 +27,7 @@ def _wrap_send(original: Callable[..., str], *, send_type: str) -> Callable[...,
             record_mail_send(
                 project_id=project_id,
                 wiki_title=wiki_title,
+                version_name=version_name,
                 scope=mail_scope,
                 subject=mail_subject,
                 to_addrs=mail_to,
@@ -40,6 +42,7 @@ def _wrap_send(original: Callable[..., str], *, send_type: str) -> Callable[...,
             record_mail_send(
                 project_id=project_id,
                 wiki_title=wiki_title,
+                version_name=version_name,
                 scope=mail_scope,
                 subject=mail_subject,
                 to_addrs=mail_to,
