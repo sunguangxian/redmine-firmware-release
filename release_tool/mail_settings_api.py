@@ -84,6 +84,8 @@ def register_mail_settings_routes(app: FastAPI) -> None:
                 "smtp_from": user_external["smtp_from"],
                 "contacts_to": user_external["contacts_to"],
                 "contacts_cc": user_external["contacts_cc"],
+                "contacts_to_people": user_external.get("contacts_to_people", []),
+                "contacts_cc_people": user_external.get("contacts_cc_people", []),
                 "contact_templates": user_external["contact_templates"],
             },
         }
@@ -172,6 +174,8 @@ def register_mail_settings_routes(app: FastAPI) -> None:
             smtp_from=payload.smtp_from,
             contacts_to=payload.contacts_to,
             contacts_cc=payload.contacts_cc,
+            contacts_to_people=[item.dict() for item in payload.contacts_to_people],
+            contacts_cc_people=[item.dict() for item in payload.contacts_cc_people],
             contact_templates=[item.dict() for item in payload.contact_templates],
         )
         record_audit(
