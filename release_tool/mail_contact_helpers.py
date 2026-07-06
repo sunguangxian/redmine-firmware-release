@@ -64,11 +64,12 @@ def contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
             user_contacts.get("contacts_cc", []),
         )
         if not contacts_cc:
-            # 兼容旧配置：管理员只维护了一份“内网联系人”时，发布页抄送下拉也应可选这些联系人。
             contacts_cc = list(contacts_to)
         return {
             "contacts_to": contacts_to,
             "contacts_cc": contacts_cc,
+            "contacts_to_people": contact_people(contacts_to),
+            "contacts_cc_people": contact_people(contacts_cc),
             "contact_templates": user_contacts.get("contact_templates", []),
         }
 
@@ -76,5 +77,7 @@ def contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
     return {
         "contacts_to": contacts.get("contacts_to", []),
         "contacts_cc": contacts.get("contacts_cc", []),
+        "contacts_to_people": contacts.get("contacts_to_people", contact_people(contacts.get("contacts_to", []))),
+        "contacts_cc_people": contacts.get("contacts_cc_people", contact_people(contacts.get("contacts_cc", []))),
         "contact_templates": contacts.get("contact_templates", []),
     }
