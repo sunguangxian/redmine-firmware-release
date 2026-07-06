@@ -55,9 +55,20 @@ def contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
     if scope == MAIL_SCOPE_INTERNAL:
         global_contacts = get_internal_contact_settings()
         user_contacts = get_user_internal_email_settings(session.get("user_key", ""))
+        contacts_to = merge_contact_lists(
+            global_contacts.get("contacts_to", []),
+            user_contacts.get("contacts_to", []),
+        )
+        contacts_cc = merge_contact_lists(
+            global_contacts.get("contacts_cc", []),
+            user_contacts.get("contacts_cc", []),
+        )
+        if not contacts_cc:
+            # 兼容旧配置：管理员只维护了一份“内网联系人”时，发布页抄送下拉也应可选这些联系人。
+            contacts_cc = list(contacts_to)
         return {
-            "contacts_to": merge_contact_lists(global_contacts.get("contacts_to", []), user_contacts.get("contacts_to", [])),
-            "contacts_cc": merge_contact_lists(global_contacts.get("contacts_cc", []), user_contacts.get("contacts_cc", [])),
+            "contacts_to": contacts_to,
+            "contacts_cc": contacts_cc,
             "contact_templates": user_contacts.get("contact_templates", []),
         }
 
