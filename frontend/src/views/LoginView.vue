@@ -3,7 +3,7 @@
     <el-card>
       <template #header>
         <div>
-          <h2 style="margin: 0">Redmine 固件版本发布工具</h2>
+          <h2 style="margin: 0">Redmine 固件版本发布工具 <span class="muted">v{{ version || '-' }}</span></h2>
           <div class="muted">Vue + FastAPI 开发版</div>
         </div>
       </template>
@@ -45,6 +45,7 @@ import { ElMessage } from 'element-plus'
 import { errorMessage, login } from '../api/http'
 import type { SessionInfo } from '../types'
 
+defineProps<{ version: string }>()
 const emit = defineEmits<{ 'logged-in': [value: SessionInfo] }>()
 const loading = ref(false)
 const form = reactive({
