@@ -84,6 +84,7 @@ export interface MailSettings {
 }
 
 export interface MetaInfo {
+  app_version: string
   product_lines: string[]
   mail_scopes: Array<{ label: string; value: string }>
   today: string
@@ -198,7 +199,12 @@ export interface LegacyMigrationResult {
 export interface LegacyMigrationJob {
   job_id: string
   status: 'running' | 'succeeded' | 'failed'
+  project_id: string
+  entry_pages: string[]
+  release_detail_mode?: 'auto' | 'inline' | 'page'
+  result: Partial<LegacyMigrationResult>
+  error: string
   logs: string[]
-  result?: LegacyMigrationResult | null
-  error?: string
+  created_at: string
+  updated_at: string
 }
