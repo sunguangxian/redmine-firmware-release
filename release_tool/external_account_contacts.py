@@ -29,16 +29,6 @@ def _empty_contact_settings() -> dict[str, Any]:
     return {"contacts_to": [], "contacts_cc": [], "contact_templates": []}
 
 
-def _contact_settings_part(settings: dict[str, Any] | None) -> dict[str, Any]:
-    if not settings:
-        return _empty_contact_settings()
-    return {
-        "contacts_to": settings.get("contacts_to", []) or [],
-        "contacts_cc": settings.get("contacts_cc", []) or [],
-        "contact_templates": settings.get("contact_templates", []) or [],
-    }
-
-
 def _init_external_account_contact_tables(conn: Any) -> None:
     conn.execute(
         """
@@ -49,15 +39,6 @@ def _init_external_account_contact_tables(conn: Any) -> None:
         )
         """
     )
-
-
-def _external_account_contact_set_exists(conn: Any, account_key: str) -> bool:
-    _init_external_account_contact_tables(conn)
-    row = conn.execute(
-        "SELECT account_key FROM external_account_contact_sets WHERE account_key = ?",
-        (account_key,),
-    ).fetchone()
-    return row is not None
 
 
 def _replace_external_account_contact_settings(
@@ -107,20 +88,10 @@ def _replace_external_account_contact_settings(
     )
 
 
-def get_external_account_contact_settings(
-    smtp_user: str,
-    *,
-    fallback: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+def get_external_account_contact_settings(smtp_user: str) -> dict[str, Any]:
     account_key = external_account_key(smtp_user)
-    default = _contact_settings_part(fallback)
     if not account_key:
-        return default
-
-    with db() as conn:
-        exists = _external_account_contact_set_exists(conn, account_key)
-    if not exists:
-        return default
+        return _empty_contact_settings()
 
     contacts_to = _get_contacts(EXTERNAL_ACCOUNT_OWNER, account_key, MAIL_SCOPE_EXTERNAL, CONTACT_TO)
     contacts_cc = _get_contacts(EXTERNAL_ACCOUNT_OWNER, account_key, MAIL_SCOPE_EXTERNAL, CONTACT_CC)
@@ -133,16 +104,12 @@ def get_external_account_contact_settings(
 
 
 def get_external_account_contacts_for_user(user_key: str, smtp_user: str) -> dict[str, Any]:
-    saved = get_user_external_email_settings(user_key)
-    saved_account_key = external_account_key(saved.get("smtp_user", ""))
-    account_key = external_account_key(smtp_user)
-    fallback = _contact_settings_part(saved) if account_key and account_key == saved_account_key else _empty_contact_settings()
-    return get_external_account_contact_settings(smtp_user, fallback=fallback)
+    return get_external_account_contact_settings(smtp_user)
 
 
 def get_user_external_email_account_settings(user_key: str) -> dict[str, Any]:
     settings = get_user_external_email_settings(user_key)
-    contacts = get_external_account_contact_settings(settings.get("smtp_user", ""), fallback=_contact_settings_part(settings))
+    contacts = get_external_account_contact_settings(settings.get("smtp_user", ""))
     return {**settings, **contacts}
 
 
