@@ -37,6 +37,9 @@ class FakeRedmineClient:
             "parent": {"title": parent_title} if parent_title else (self.pages.get(title, {}).get("parent") or {}),
         }
 
+    def delete_wiki_page(self, project_id: str, title: str) -> None:
+        self.pages.pop(title, None)
+
     def list_versions(self, project_id: str) -> list[dict[str, Any]]:
         return [dict(item) for item in self.versions]
 

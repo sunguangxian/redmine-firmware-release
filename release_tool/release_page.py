@@ -108,7 +108,7 @@ def build_release_markdown(
     main_page: str = "Release_Notes",
 ) -> str:
     return (
-        f"# {_version_heading_markdown(form.project_id, form.version_name, version_id)}\n\n"
+        f"# {_version_heading_markdown(form.project_id, form.version_name, version_id, form.release_date)}\n\n"
         f"{_release_body_markdown(form, version_id, linked_files)}\n\n"
         f"[[{(main_page or 'Release_Notes').strip() or 'Release_Notes'}|← 返回 Release Notes]]"
     )
@@ -125,19 +125,39 @@ def build_inline_release_block(
 ) -> str:
     marker = inline_block_id(block_id or form.version_name)
     version = (display_version or form.version_name).strip()
-    source = f"\n\n**迁移来源**\n\n- [[{source_page}]]" if source_page else ""
+    version_link = _inline_version_link_markdown(form.project_id, version, version_id)
     return (
         f"{INLINE_BEGIN_PREFIX}{marker} -->\n"
-        f"## {_version_heading_markdown(form.project_id, version, version_id)}\n\n"
+        f"## {_version_heading_text(version, form.release_date)}\n\n"
+        f"{version_link}\n\n"
         f"{_release_body_markdown(form, version_id, linked_files, heading_level=0)}"
-        f"{source}\n"
+        f"\n"
         f"{INLINE_END_PREFIX}{marker} -->"
     )
 
 
-def _version_heading_markdown(project_id: str, version_name: str, version_id: int | None) -> str:
+def _version_heading_markdown(
+    project_id: str,
+    version_name: str,
+    version_id: int | None,
+    release_date: str = "",
+) -> str:
     version = (version_name or "").strip()
-    return f"[{version}]({version_or_roadmap_link(project_id, version_id)})" if version else ""
+    date = (release_date or "").strip()
+    suffix = f" ({date})" if date else ""
+    return f"[{version}]({version_or_roadmap_link(project_id, version_id)}){suffix}" if version else ""
+
+
+def _version_heading_text(version_name: str, release_date: str = "") -> str:
+    version = (version_name or "").strip()
+    date = (release_date or "").strip()
+    suffix = f" ({date})" if date else ""
+    return f"{version}{suffix}" if version else ""
+
+
+def _inline_version_link_markdown(project_id: str, version_name: str, version_id: int | None) -> str:
+    version = (version_name or "").strip()
+    return f"[版本 {version}]({version_or_roadmap_link(project_id, version_id)})" if version else ""
 
 
 def inline_block_id(version_name: str) -> str:
@@ -154,7 +174,7 @@ def _inline_block_pattern(block_id: str, capture_body: bool = False) -> re.Patte
 
 
 def replace_inline_release_block(page_text: str, block_id: str, block: str) -> str:
-    text = _remove_version_list_heading(_normalize_inline_block_headings(_ensure_inline_toc(page_text or "")))
+    text = normalize_inline_release_page(page_text or "")
     pattern = _inline_block_pattern(block_id)
     if pattern.search(text):
         return pattern.sub(block, text, count=1)
@@ -162,6 +182,24 @@ def replace_inline_release_block(page_text: str, block_id: str, block: str) -> s
     if not base:
         base = _ensure_inline_toc("# Release Notes\n\n固件版本发布记录。")
     return base.rstrip() + "\n\n" + block + "\n"
+
+
+def normalize_inline_release_page(page_text: str) -> str:
+    text = _normalize_inline_toc(_ensure_inline_toc(page_text or ""))
+    return _remove_version_list_heading(_normalize_inline_block_headings(text))
+
+
+def _normalize_inline_toc(page_text: str) -> str:
+    seen = False
+
+    def repl(match: re.Match[str]) -> str:
+        nonlocal seen
+        if seen:
+            return ""
+        seen = True
+        return "\n{{>toc}}\n"
+
+    return re.sub(r"(?m)^\s*\{\{>toc\}\}\s*$", repl, page_text or "")
 
 
 def _ensure_inline_toc(page_text: str) -> str:
@@ -185,8 +223,9 @@ def _normalize_inline_block_headings(page_text: str) -> str:
     def repl(match: re.Match[str]) -> str:
         body = match.group("body")
         body = _link_inline_release_heading(body)
+        body = _remove_inline_migration_source(body)
         body = re.sub(r"^#{2,6}\s+(变更说明|固件文件|迁移来源)\s*$", r"**\1**", body, flags=re.M)
-        return f"{match.group(1)}{body}{match.group(3)}"
+        return f"{match.group(1)}\n{body.strip()}\n{match.group(3)}"
 
     return pattern.sub(repl, page_text or "")
 
@@ -195,7 +234,31 @@ def _remove_version_list_heading(page_text: str) -> str:
     return re.sub(r"(?m)^\s*#{2,6}\s+版本列表\s*\r?\n+", "", page_text or "")
 
 
+def _remove_inline_migration_source(block_body: str) -> str:
+    cleaned = re.sub(
+        r"\n{0,2}(?:\*\*[^\r\n]*(?:迁移来源|Migration Source|杩佺Щ)[^\r\n]*\*\*|#{2,6}\s+[^\r\n]*(?:迁移来源|Migration Source|杩佺Щ)[^\r\n]*)\s*\n+(?:-\s+\[\[[^\]]+\]\]\s*\n?)+",
+        "\n",
+        block_body or "",
+    )
+    return cleaned.strip()
+
+
 def _link_inline_release_heading(block_body: str) -> str:
+    linked_plain_heading = re.search(
+        r"^##\s+\[([^\]\r\n]+)\]\(([^)]+)\)\s*(?P<date>\(\d{4}-\d{2}-\d{2}\))?\s*$",
+        block_body,
+        re.I | re.M,
+    )
+    if linked_plain_heading:
+        version = linked_plain_heading.group(1).strip()
+        release_name = re.match(r"Release\s+\S+(?:\s+NP500)?\s+FW\s+(.+)", version, re.I)
+        if release_name:
+            version = release_name.group(1).strip()
+        url = linked_plain_heading.group(2).strip()
+        date = f" {linked_plain_heading.group('date')}" if linked_plain_heading.group("date") else ""
+        replacement = f"## {version}{date}\n\n[版本 {version}]({url})"
+        return block_body[: linked_plain_heading.start()] + replacement + block_body[linked_plain_heading.end() :]
+
     linked_heading = re.search(
         r"^##\s+\[Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\]\r\n]+)\]\(([^)]+)\)\s*$",
         block_body,
@@ -204,7 +267,7 @@ def _link_inline_release_heading(block_body: str) -> str:
     if linked_heading:
         version = linked_heading.group(1).strip()
         url = linked_heading.group(2).strip()
-        return block_body[: linked_heading.start()] + f"## [{version}]({url})" + block_body[linked_heading.end() :]
+        return block_body[: linked_heading.start()] + f"## {version}\n\n[版本 {version}]({url})" + block_body[linked_heading.end() :]
 
     heading = re.search(r"^##\s+(?!\[)(Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\r\n]+))\s*$", block_body, re.I | re.M)
     if not heading:
@@ -213,7 +276,7 @@ def _link_inline_release_heading(block_body: str) -> str:
     link = re.search(rf"\[版本\s+{re.escape(version)}\]\(([^)]+)\)", block_body)
     if not link:
         return block_body
-    return block_body[: heading.start()] + f"## [{version}]({link.group(1)})" + block_body[heading.end() :]
+    return block_body[: heading.start()] + f"## {version}\n\n[版本 {version}]({link.group(1)})" + block_body[heading.end() :]
 
 
 def delete_inline_release_block(page_text: str, block_id: str) -> str:

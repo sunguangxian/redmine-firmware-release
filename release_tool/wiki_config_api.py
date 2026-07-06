@@ -12,6 +12,7 @@ from .dependencies import _current_client, _current_session, _json_error, _requi
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient
 from .release_helpers import invalidate_release_rows
+from .release_mode_converter import ReleaseModeConverter
 from .wiki_config import CONFIG_PAGE_TITLE
 from .wiki_templates import TEMPLATE_CHOICES, build_config_template, validate_config_text
 
@@ -29,6 +30,10 @@ class WikiConfigGenerateRequest(BaseModel):
     template_key: str = "single_list"
 
 
+class WikiModeConvertRequest(BaseModel):
+    target_mode: str
+
+
 def _route_has_method(route: Any, method: str) -> bool:
     return method.upper() in set(getattr(route, "methods", set()) or set())
 
@@ -40,6 +45,8 @@ def _remove_existing_wiki_config_routes(app: FastAPI) -> None:
         ("/api/wiki-config/check", "POST"),
         ("/api/wiki-config/{project_id}/refresh-preview", "GET"),
         ("/api/wiki-config/{project_id}/refresh", "POST"),
+        ("/api/wiki-config/{project_id}/convert-preview", "POST"),
+        ("/api/wiki-config/{project_id}/convert", "POST"),
         ("/api/wiki-config/{project_id}", "GET"),
         ("/api/wiki-config/{project_id}", "PUT"),
     ]
@@ -107,6 +114,39 @@ def register_wiki_config_routes(app: FastAPI) -> None:
             "preview": preview,
             "message": f"已按当前 Release_Tool_Config 重建索引，处理 Release {updated_count} 个。",
         }
+
+    @app.post("/api/wiki-config/{project_id}/convert-preview")
+    def api_preview_release_mode_convert(
+        project_id: str,
+        payload: WikiModeConvertRequest,
+        session: Dict[str, Any] = Depends(_current_session),
+        client: RedmineClient = Depends(_current_client),
+    ) -> Dict[str, Any]:
+        _require_admin(session)
+        return ReleaseModeConverter(client, project_id).preview(payload.target_mode)
+
+    @app.post("/api/wiki-config/{project_id}/convert")
+    def api_release_mode_convert(
+        project_id: str,
+        payload: WikiModeConvertRequest,
+        session: Dict[str, Any] = Depends(_current_session),
+        client: RedmineClient = Depends(_current_client),
+    ) -> Dict[str, Any]:
+        _require_admin(session)
+        result = ReleaseModeConverter(client, project_id).convert(payload.target_mode)
+        invalidate_release_rows(project_id)
+        record_audit(
+            actor=session.get("user_login", ""),
+            action="wiki_release_mode_converted",
+            target_type="wiki_config",
+            target_id=project_id,
+            details={
+                "current_mode": result.get("current_mode"),
+                "target_mode": result.get("target_mode"),
+                "converted_count": result.get("converted_count"),
+            },
+        )
+        return result
 
     @app.get("/api/wiki-config/{project_id}")
     def api_get_wiki_config(

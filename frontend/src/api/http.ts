@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { ContactTemplateConfig, LegacyMigrationJob, LegacyMigrationPreview, LegacyMigrationResult, MailSettings, MetaInfo, ProjectReleaseCategories, ReleaseDetail, ReleaseSummary, SessionInfo, WikiRefreshPreview, WikiRefreshResult } from '../types'
+import type { ContactTemplateConfig, LegacyMigrationJob, LegacyMigrationPreview, LegacyMigrationResult, MailSettings, MetaInfo, ProjectReleaseCategories, ReleaseDetail, ReleaseSummary, SessionInfo, WikiModeConvertPreview, WikiModeConvertResult, WikiRefreshPreview, WikiRefreshResult } from '../types'
 
 const http = axios.create({ baseURL: '', withCredentials: true })
 
@@ -42,6 +42,8 @@ export async function saveWikiConfig(projectId: string, text: string): Promise<{
 export async function getWikiTemplates(): Promise<Array<[string, string]>> { const { data } = await http.get('/api/wiki-config/templates'); return data }
 export async function previewWikiRefresh(projectId: string): Promise<WikiRefreshPreview> { const { data } = await http.get(`/api/wiki-config/${encodeURIComponent(projectId)}/refresh-preview`); return data }
 export async function refreshWikiIndex(projectId: string): Promise<WikiRefreshResult> { const { data } = await http.post(`/api/wiki-config/${encodeURIComponent(projectId)}/refresh`); return data }
+export async function previewWikiModeConvert(projectId: string, targetMode: 'inline' | 'page'): Promise<WikiModeConvertPreview> { const { data } = await http.post(`/api/wiki-config/${encodeURIComponent(projectId)}/convert-preview`, { target_mode: targetMode }); return data }
+export async function convertWikiMode(projectId: string, targetMode: 'inline' | 'page'): Promise<WikiModeConvertResult> { const { data } = await http.post(`/api/wiki-config/${encodeURIComponent(projectId)}/convert`, { target_mode: targetMode }); return data }
 export async function previewLegacyMigration(payload: LegacyMigrationPayload): Promise<LegacyMigrationPreview> { const { data } = await http.post('/api/legacy-migration/preview', payload); return data }
 export async function executeLegacyMigration(payload: LegacyMigrationPayload): Promise<LegacyMigrationResult> { const { data } = await http.post('/api/legacy-migration/execute', payload); return data }
 export async function startLegacyMigrationJob(payload: LegacyMigrationPayload): Promise<LegacyMigrationJob> { const { data } = await http.post('/api/legacy-migration/execute-job', payload); return data }

@@ -100,6 +100,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         mail_cc: str = Form(""),
         mail_subject: str = Form(""),
         mail_body: str = Form(""),
+        send_type: str = Form("manual"),
         files: Optional[List[UploadFile]] = File(None),
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
@@ -244,7 +245,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 mail_cc=cc_addrs,
                 mail_subject=mail_subject,
                 mail_body=mail_body,
-                send_type="retry",
+                send_type=send_type if send_type in {"manual", "retry"} else "manual",
             )
             logs.append(message)
             return {"ok": True, "message": message, "logs": logs}

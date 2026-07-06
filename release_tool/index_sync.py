@@ -536,7 +536,7 @@ class IndexSync:
             f"# Release Notes\n\n"
             f"{tag} firmware release index. Firmware binaries are stored in "
             f"[project files](/projects/{self.project_id}/files); this Wiki keeps release notes and category indexes.\n\n"
-            f"> Version lists are maintained by the release tool in the `*_List` pages.\n\n"
+            f"> Version lists are maintained by the release tool.\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
             f"{generated}"
@@ -547,9 +547,31 @@ class IndexSync:
         fallback = self._build_main_fallback(profile, items, generated)
         page = self._get_page(profile.main_page)
         current = (page or {}).get("text", "")
+        if self._is_inline_profile(profile):
+            current = self._clean_inline_main_text(current)
         new_text = self._replace_generated_region(current, generated, "Product Lines") if current else fallback
         self.client.put_wiki_page(self.project_id, profile.main_page, new_text, comment="auto sync main counts")
         self._page_cache[profile.main_page] = {"title": profile.main_page, "text": new_text}
+
+    def _clean_inline_main_text(self, text: str) -> str:
+        cleaned = re.sub(r"(?m)^>\s*Version lists are maintained by the release tool in the `\*_List` pages\.\s*\r?\n?", "", text or "")
+        if SYNC_BEGIN in cleaned:
+            before, after = cleaned.split(SYNC_BEGIN, 1)
+            before = re.sub(r"(?ms)^## Product Lines\s*$.*\Z", "", before).rstrip()
+            cleaned = f"{before}\n\n{SYNC_BEGIN}{after}" if before else f"{SYNC_BEGIN}{after}"
+        return self._dedupe_toc(cleaned)
+
+    def _dedupe_toc(self, text: str) -> str:
+        seen = False
+
+        def repl(match: re.Match[str]) -> str:
+            nonlocal seen
+            if seen:
+                return ""
+            seen = True
+            return match.group(0).strip()
+
+        return re.sub(r"(?m)^\s*\{\{>toc\}\}\s*$", repl, text or "")
 
     def _category_by_key(self, profile: WikiProfile, key: str) -> CategoryProfile | None:
         for category in profile.categories:

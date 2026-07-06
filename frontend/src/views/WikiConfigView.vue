@@ -21,6 +21,40 @@
       </el-alert>
     </el-card>
 
+    <el-card class="card">
+      <template #header>Release page / inline 互转</template>
+      <div class="toolbar">
+        <el-select v-model="targetMode" placeholder="目标版本模式" style="width: 180px">
+          <el-option label="Inline 内联模式" value="inline" />
+          <el-option label="Page 独立页面模式" value="page" />
+        </el-select>
+        <el-button :loading="previewingConvert" @click="previewConvert">预览转换</el-button>
+        <el-button type="warning" :loading="converting" @click="convertMode">确认转换</el-button>
+      </div>
+
+      <div v-if="convertPreview" class="release-log">
+        <div>配置模式：{{ convertPreview.current_mode }}；实际源模式：{{ convertPreview.source_mode }} -> 目标模式：{{ convertPreview.target_mode }}</div>
+        <div>识别 Release：{{ convertPreview.release_count }} 个</div>
+        <div>将写入页面：</div>
+        <div v-for="page in convertPreview.pages_to_write" :key="page">- {{ page }}</div>
+        <div v-if="!convertPreview.pages_to_write.length">- 无</div>
+        <div>将删除旧列表页：</div>
+        <div v-for="page in convertPreview.pages_to_delete" :key="page">- {{ page }}</div>
+        <div v-if="!convertPreview.pages_to_delete.length">- 无</div>
+      </div>
+
+      <el-alert
+        v-for="item in convertPreview?.warnings || []"
+        :key="item"
+        class="card"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #title>{{ item }}</template>
+      </el-alert>
+    </el-card>
+
     <el-card v-if="refreshPreview" class="card">
       <template #header>索引重建预览</template>
       <div class="toolbar">
@@ -72,8 +106,8 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { checkWikiConfig, errorMessage, generateWikiConfig, getWikiConfig, getWikiTemplates, previewWikiRefresh, refreshWikiIndex, saveWikiConfig } from '../api/http'
-import type { Project, WikiRefreshPreview } from '../types'
+import { checkWikiConfig, convertWikiMode, errorMessage, generateWikiConfig, getWikiConfig, getWikiTemplates, previewWikiModeConvert, previewWikiRefresh, refreshWikiIndex, saveWikiConfig } from '../api/http'
+import type { Project, WikiModeConvertPreview, WikiRefreshPreview } from '../types'
 
 const props = defineProps<{ projects: Project[] }>()
 const projectId = ref(props.projects[0]?.identifier || '')
@@ -83,8 +117,12 @@ const text = ref('')
 const message = ref('')
 const ok = ref(true)
 const refreshPreview = ref<WikiRefreshPreview | null>(null)
+const convertPreview = ref<WikiModeConvertPreview | null>(null)
+const targetMode = ref<'inline' | 'page'>('inline')
 const previewing = ref(false)
 const refreshing = ref(false)
+const previewingConvert = ref(false)
+const converting = ref(false)
 
 watch(
   () => props.projects,
@@ -96,6 +134,7 @@ watch(
 
 watch(projectId, () => {
   refreshPreview.value = null
+  convertPreview.value = null
 })
 
 async function generate() {
@@ -184,6 +223,51 @@ async function refreshIndex() {
     ElMessage.error(errorMessage(error))
   } finally {
     refreshing.value = false
+  }
+}
+
+async function previewConvert() {
+  if (!projectId.value) return ElMessage.warning('请选择项目')
+  previewingConvert.value = true
+  try {
+    convertPreview.value = await previewWikiModeConvert(projectId.value, targetMode.value)
+    message.value = convertPreview.value.message
+    ok.value = !convertPreview.value.warnings.length
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    previewingConvert.value = false
+  }
+}
+
+async function convertMode() {
+  if (!projectId.value) return ElMessage.warning('请选择项目')
+  if (!convertPreview.value || convertPreview.value.target_mode !== targetMode.value) {
+    await previewConvert()
+    if (!convertPreview.value) return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '将把当前 Release 内容复制为目标版本模式、切换 Release_Tool_Config 并重建索引；page 转 inline 会删除旧列表页，但不会删除原有 Release 详情页或 inline 块。是否继续？',
+      '确认 Release 模式转换',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  converting.value = true
+  try {
+    const data = await convertWikiMode(projectId.value, targetMode.value)
+    convertPreview.value = data
+    refreshPreview.value = null
+    message.value = data.message
+    ok.value = true
+    ElMessage.success(data.message)
+    await load()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    converting.value = false
   }
 }
 

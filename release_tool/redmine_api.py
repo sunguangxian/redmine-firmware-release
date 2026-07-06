@@ -185,6 +185,17 @@ class RedmineClient:
             json=payload,
         )
 
+    def delete_wiki_page(self, project_id: str, title: str) -> None:
+        try:
+            self._request(
+                "DELETE",
+                f"/projects/{quote(project_id)}/wiki/{quote(title, safe='')}.json",
+            )
+        except RedmineError as exc:
+            if "404" in str(exc) or "资源不存在" in str(exc):
+                return
+            raise
+
     def list_versions(self, project_id: str) -> list[dict[str, Any]]:
         versions: list[dict[str, Any]] = []
         offset = 0

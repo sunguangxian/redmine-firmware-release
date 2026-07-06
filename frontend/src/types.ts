@@ -126,6 +126,28 @@ export interface WikiRefreshResult {
   message: string
 }
 
+export interface WikiModeConvertPreview {
+  ok: boolean
+  project_id: string
+  current_mode: 'inline' | 'page'
+  source_mode: 'inline' | 'page'
+  target_mode: 'inline' | 'page'
+  release_count: number
+  pages_to_write: string[]
+  pages_to_delete: string[]
+  existing_pages: string[]
+  config_will_change: boolean
+  warnings: string[]
+  message: string
+}
+
+export interface WikiModeConvertResult extends WikiModeConvertPreview {
+  converted_count: number
+  deleted_pages: string[]
+  config_updated: boolean
+  refreshed_release_count: number
+}
+
 export interface LegacyMigrationPreview {
   project_id: string
   entry_pages: string[]

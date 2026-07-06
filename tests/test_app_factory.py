@@ -21,6 +21,8 @@ class AppFactoryTest(unittest.TestCase):
             "/api/releases/plan",
             "/api/mail/settings",
             "/api/wiki-config/{project_id}",
+            "/api/wiki-config/{project_id}/convert-preview",
+            "/api/wiki-config/{project_id}/convert",
             "/api/legacy-migration/preview",
         }
 

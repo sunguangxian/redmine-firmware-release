@@ -50,16 +50,17 @@ main_page: Release_Notes
         text = replace_inline_release_block("# Release Notes\n", "V1.2.3", block)
         self.assertIn("{{>toc}}", text)
         self.assertIn("RELEASE_INLINE_BEGIN:V1.2.3", text)
-        self.assertIn("## [V1.2.3](/versions/12)", text)
+        self.assertIn("## V1.2.3 (2026-07-05)", text)
+        self.assertIn("[版本 V1.2.3](/versions/12)", text)
         self.assertNotIn("Release DP580 FW V1.2.3", text)
         self.assertIn("**变更说明**", text)
         self.assertIn("**固件文件**", text)
-        self.assertIn("**迁移来源**", text)
+        self.assertNotIn("迁移来源", text)
         self.assertNotIn("### 变更说明", text)
         self.assertNotIn("### 固件文件", text)
         self.assertNotIn("**产品线:**", text)
         self.assertNotIn("## 版本列表", text)
-        self.assertIn("[[Changelog]]", text)
+        self.assertNotIn("[[Changelog]]", text)
         self.assertIn("修复问题", extract_inline_release_block(text, "V1.2.3"))
         rows = parse_inline_releases(text, "Release_Notes")
         self.assertEqual(len(rows), 1)
@@ -79,9 +80,24 @@ main_page: Release_Notes
         block = build_inline_release_block(form, 12, [], container_page="Release_Notes")
         text = replace_inline_release_block("# Release Notes\n", "V1.2.3", block)
         self.assertIn("{{>toc}}", text)
-        self.assertIn("## [V1.2.3](/versions/12)", text)
+        self.assertIn("## V1.2.3 (2026-07-05)", text)
         self.assertIn("[版本 V1.2.3](/versions/12)", text)
         self.assertNotIn("## 版本列表", text)
+
+    def test_existing_toc_is_split_from_previous_paragraph(self):
+        form = ReleaseForm(
+            project_id="dp580",
+            proj_tag="DP580",
+            version_name="V1.2.3",
+            release_date="2026-07-05",
+            commit="abc123",
+            product_line="甯歌鐗堟湰 (5X)",
+            changelog_items=["淇闂"],
+        )
+        block = build_inline_release_block(form, 12, [], container_page="Release_Notes")
+        text = replace_inline_release_block("# Release Notes\n\nsummary\n{{>toc}}\n", "V1.2.3", block)
+
+        self.assertIn("summary\n\n{{>toc}}\n\n<!-- RELEASE_INLINE_BEGIN:V1.2.3 -->", text)
 
     def test_existing_inline_blocks_are_normalized_for_toc(self):
         old_block = """# Release Notes
@@ -120,11 +136,12 @@ main_page: Release_Notes
         block = build_inline_release_block(form, 12, [])
         text = replace_inline_release_block(old_block, "V1.2.3", block)
 
-        self.assertIn("## [V1.0.0](/versions/10)", text)
+        self.assertIn("## V1.0.0", text)
+        self.assertIn("[版本 V1.0.0](/versions/10)", text)
         self.assertNotIn("## Release DP580 FW V1.0.0", text)
         self.assertIn("**变更说明**", text)
         self.assertIn("**固件文件**", text)
-        self.assertIn("**迁移来源**", text)
+        self.assertNotIn("迁移来源", text)
         self.assertNotIn("### 变更说明", text)
         self.assertNotIn("### 固件文件", text)
         self.assertNotIn("### 迁移来源", text)
@@ -162,7 +179,8 @@ main_page: Release_Notes
         block = build_inline_release_block(form, 12, [])
         text = replace_inline_release_block(old_block, "V1.2.3", block)
 
-        self.assertIn("## [V1.0.0](/versions/10)", text)
+        self.assertIn("## V1.0.0", text)
+        self.assertIn("[版本 V1.0.0](/versions/10)", text)
         self.assertNotIn("Release DP580 FW V1.0.0", text)
 
 
