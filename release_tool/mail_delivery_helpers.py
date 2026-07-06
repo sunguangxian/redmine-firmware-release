@@ -10,10 +10,10 @@ from .config_store import (
     MAIL_SCOPE_INTERNAL,
     get_email_server_settings,
     get_internal_contact_settings,
-    get_user_external_email_settings,
     get_user_internal_email_settings,
 )
 from .email_sender import EmailSendError, EmailSettings, send_release_email, split_emails
+from .external_account_contacts import get_user_external_email_account_settings
 from .mail_contact_helpers import mail_scope_label, merge_contact_lists
 from .mail_history import record_mail_send
 from .mail_notice_helpers import validate_notice_fields
@@ -65,7 +65,7 @@ def build_email_settings(session: Dict[str, Any], scope: str) -> Tuple[EmailSett
         )
 
     server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
-    user_cfg = get_user_external_email_settings(session.get("user_key", ""))
+    user_cfg = get_user_external_email_account_settings(session.get("user_key", ""))
     if not user_cfg[_USER_FIELD] or not user_cfg[_CREDENTIAL_FIELD]:
         raise EmailSendError("外网邮件请先配置个人 SMTP 用户名和密码")
     return (
