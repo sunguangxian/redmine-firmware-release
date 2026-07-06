@@ -11,6 +11,7 @@ from .config_store import MAIL_SCOPE_EXTERNAL, MAIL_SCOPE_INTERNAL
 from .dependencies import _current_client, _current_session, _visible_projects_for_user
 from .redmine_api import RedmineClient
 from .release_page import PRODUCT_LINES
+from .version import APP_VERSION
 
 
 def _route_has_method(route: Any, method: str) -> bool:
@@ -39,6 +40,7 @@ def register_project_routes(app: FastAPI) -> None:
     @app.get("/api/meta")
     def api_meta() -> Dict[str, Any]:
         return {
+            "app_version": APP_VERSION,
             "product_lines": list(PRODUCT_LINES.keys()),
             "mail_scopes": [
                 {"label": "内网邮件", "value": MAIL_SCOPE_INTERNAL},
