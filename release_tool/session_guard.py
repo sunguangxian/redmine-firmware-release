@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .dependencies import SESSION_COOKIE, SESSION_STORE
-from .session_config import SESSION_IDLE_SECONDS, SESSION_TTL_SECONDS
+from .session_config import SESSION_COOKIE_SAMESITE, SESSION_COOKIE_SECURE, SESSION_IDLE_SECONDS, SESSION_TTL_SECONDS, session_cookie_max_age
 
 
 def _expired(session: dict, now: float) -> bool:
@@ -25,6 +25,7 @@ def register_session_guard(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def session_expiration_guard(request: Request, call_next: Callable):
+        sid_to_refresh = ""
         if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/auth/login"):
             sid = request.cookies.get(SESSION_COOKIE, "")
             session = SESSION_STORE.get(sid)
@@ -36,4 +37,15 @@ def register_session_guard(app: FastAPI) -> None:
                     response.delete_cookie(SESSION_COOKIE)
                     return response
                 session["last_seen_at"] = now
-        return await call_next(request)
+                sid_to_refresh = sid
+        response = await call_next(request)
+        if sid_to_refresh:
+            response.set_cookie(
+                SESSION_COOKIE,
+                sid_to_refresh,
+                httponly=True,
+                samesite=SESSION_COOKIE_SAMESITE,
+                secure=SESSION_COOKIE_SECURE,
+                max_age=session_cookie_max_age(),
+            )
+        return response
