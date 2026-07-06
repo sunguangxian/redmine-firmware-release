@@ -8,10 +8,10 @@ from .config_store import (
     MAIL_SCOPE_EXTERNAL,
     MAIL_SCOPE_INTERNAL,
     get_internal_contact_settings,
-    get_user_external_email_settings,
     get_user_internal_email_settings,
 )
 from .dependencies import _json_error
+from .external_account_contacts import get_user_external_email_account_settings
 
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
 
@@ -72,7 +72,7 @@ def contacts_for_scope(session: Dict[str, Any], scope: str) -> Dict[str, Any]:
             "contact_templates": user_contacts.get("contact_templates", []),
         }
 
-    contacts = get_user_external_email_settings(session.get("user_key", ""))
+    contacts = get_user_external_email_account_settings(session.get("user_key", ""))
     return {
         "contacts_to": contacts.get("contacts_to", []),
         "contacts_cc": contacts.get("contacts_cc", []),
