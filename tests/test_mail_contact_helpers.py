@@ -66,9 +66,9 @@ class MailContactHelpersTest(unittest.TestCase):
         self.assertEqual(contacts["contacts_cc"], ["lead@example.com", "qa@example.com"])
         self.assertEqual(contacts["contact_templates"], [{"name": "default"}])
 
-    @patch("release_tool.mail_contact_helpers.get_user_external_email_settings")
-    def test_contacts_for_external_scope_uses_user_contacts(self, user_contacts):
-        user_contacts.return_value = {
+    @patch("release_tool.mail_contact_helpers.get_user_external_email_account_settings")
+    def test_contacts_for_external_scope_uses_external_account_contacts(self, account_contacts):
+        account_contacts.return_value = {
             "contacts_to": ["customer@example.com"],
             "contacts_cc": ["support@example.com"],
             "contact_templates": [],
@@ -76,6 +76,7 @@ class MailContactHelpersTest(unittest.TestCase):
 
         contacts = contacts_for_scope({"user_key": "u1"}, MAIL_SCOPE_EXTERNAL)
 
+        account_contacts.assert_called_once_with("u1")
         self.assertEqual(contacts["contacts_to"], ["customer@example.com"])
         self.assertEqual(contacts["contacts_cc"], ["support@example.com"])
 
