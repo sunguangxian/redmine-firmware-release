@@ -23,6 +23,7 @@ from .external_account_contacts import (
     get_user_external_email_account_settings,
     store_user_external_email_account_settings,
 )
+from .internal_contact_people import clean_people, get_internal_contact_people, store_internal_contact_people
 from .mail_contact_helpers import contacts_for_scope, normalize_mail_scope
 from .schemas import AdminMailSettingsRequest, UserExternalMailRequest, UserInternalMailRequest
 
@@ -59,6 +60,7 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         internal_server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
         external_server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
         internal_contacts = get_internal_contact_settings()
+        internal_people = get_internal_contact_people() or clean_people(None, internal_contacts.get("contacts_to", []))
         user_internal = get_user_internal_email_settings(session.get("user_key", ""))
         user_external = get_user_external_email_account_settings(session.get("user_key", ""))
         return {
@@ -66,7 +68,7 @@ def register_mail_settings_routes(app: FastAPI) -> None:
             "admin": {
                 "internal_server": internal_server,
                 "external_server": external_server,
-                "internal_contacts": internal_contacts,
+                "internal_contacts": {**internal_contacts, "contacts_people": internal_people},
             },
             "user_internal": {
                 "smtp_user": user_internal["smtp_user"],
@@ -111,8 +113,10 @@ def register_mail_settings_routes(app: FastAPI) -> None:
             use_tls=payload.external_server.use_tls,
         )
 
-        contacts_to = payload.internal_contacts.contacts_to or payload.internal_contacts.contacts
+        internal_people = clean_people([item.dict() for item in payload.internal_contacts.contacts_people])
+        contacts_to = [item["email"] for item in internal_people] or payload.internal_contacts.contacts_to or payload.internal_contacts.contacts
         contacts_cc = payload.internal_contacts.contacts_cc
+        store_internal_contact_people(internal_people or clean_people(None, contacts_to))
         store_internal_contact_settings(contacts_to=contacts_to, contacts_cc=contacts_cc)
         record_audit(
             actor=session.get("user_login", ""),
