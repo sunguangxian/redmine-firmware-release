@@ -49,7 +49,9 @@ class MailContactHelpersTest(unittest.TestCase):
 
     @patch("release_tool.mail_contact_helpers.get_user_internal_email_settings")
     @patch("release_tool.mail_contact_helpers.get_internal_contact_settings")
-    def test_contacts_for_internal_scope_merges_global_and_user_contacts(self, global_contacts, user_contacts):
+    @patch("release_tool.mail_contact_helpers.get_internal_contact_people")
+    def test_contacts_for_internal_scope_merges_global_and_user_contacts(self, internal_people, global_contacts, user_contacts):
+        internal_people.return_value = [{"name": "Team", "email": "team@example.com"}]
         global_contacts.return_value = {
             "contacts_to": ["team@example.com"],
             "contacts_cc": ["lead@example.com"],
@@ -64,6 +66,7 @@ class MailContactHelpersTest(unittest.TestCase):
 
         self.assertEqual(contacts["contacts_to"], ["team@example.com", "dev@example.com"])
         self.assertEqual(contacts["contacts_cc"], ["lead@example.com", "qa@example.com"])
+        self.assertEqual(contacts["contacts_to_people"][0], {"name": "Team", "email": "team@example.com"})
         self.assertEqual(contacts["contact_templates"], [{"name": "default"}])
 
     @patch("release_tool.mail_contact_helpers.get_user_external_email_account_settings")
@@ -71,6 +74,8 @@ class MailContactHelpersTest(unittest.TestCase):
         account_contacts.return_value = {
             "contacts_to": ["customer@example.com"],
             "contacts_cc": ["support@example.com"],
+            "contacts_to_people": [{"name": "Customer", "email": "customer@example.com"}],
+            "contacts_cc_people": [{"name": "Support", "email": "support@example.com"}],
             "contact_templates": [],
         }
 
@@ -79,6 +84,22 @@ class MailContactHelpersTest(unittest.TestCase):
         account_contacts.assert_called_once_with("u1")
         self.assertEqual(contacts["contacts_to"], ["customer@example.com"])
         self.assertEqual(contacts["contacts_cc"], ["support@example.com"])
+        self.assertEqual(contacts["contacts_to_people"], [{"name": "Customer", "email": "customer@example.com"}])
+
+    @patch("release_tool.mail_contact_helpers.get_user_external_email_account_settings")
+    def test_external_contacts_reuse_to_as_cc_when_no_cc_list(self, account_contacts):
+        account_contacts.return_value = {
+            "contacts_to": ["customer@example.com"],
+            "contacts_cc": [],
+            "contacts_to_people": [{"name": "Customer", "email": "customer@example.com"}],
+            "contacts_cc_people": [],
+            "contact_templates": [],
+        }
+
+        contacts = contacts_for_scope({"user_key": "u1"}, MAIL_SCOPE_EXTERNAL)
+
+        self.assertEqual(contacts["contacts_cc"], ["customer@example.com"])
+        self.assertEqual(contacts["contacts_cc_people"], [{"name": "Customer", "email": "customer@example.com"}])
 
 
 if __name__ == "__main__":
