@@ -79,6 +79,8 @@ export interface MailSettings {
     smtp_from: string
     contacts_to: string[]
     contacts_cc: string[]
+    contacts_to_people?: ContactPersonConfig[]
+    contacts_cc_people?: ContactPersonConfig[]
     contact_templates: ContactTemplateConfig[]
   }
 }
