@@ -90,7 +90,7 @@
     <el-card class="card">
       <template #header>个人外网邮件账号和联系人</template>
       <div v-if="settings" class="form-grid">
-        <el-input v-model="settings.user_external.smtp_user" placeholder="user@example.com">
+        <el-input v-model="settings.user_external.smtp_user" placeholder="user@example.com" @change="handleExternalSmtpUserChange">
           <template #prepend>SMTP 用户名</template>
         </el-input>
         <el-input v-model="settings.user_external.smtp_password" type="password" show-password placeholder="不填写则保留旧密码">
@@ -134,6 +134,7 @@
       </div>
       <div class="toolbar" style="margin-top: 16px">
         <el-button :loading="testingUser" @click="testUser">测试外网账号</el-button>
+        <el-button :loading="loadingExternalContacts" @click="loadExternalAccountContacts()">读取当前外网账号联系人</el-button>
         <el-button type="primary" :loading="savingUser" @click="saveUser">保存个人外网设置</el-button>
         <el-button :loading="loading" @click="load">重新读取</el-button>
       </div>
@@ -144,7 +145,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { errorMessage, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testAdminMailServer, testMailConnection } from '../api/http'
+import { errorMessage, getExternalAccountContacts, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testAdminMailServer, testMailConnection } from '../api/http'
 import type { ContactTemplateConfig, MailSettings, SessionInfo } from '../types'
 
 function splitText(text: string): string[] {
@@ -162,6 +163,7 @@ const testingAdminInternal = ref(false)
 const testingAdminExternal = ref(false)
 const testingInternal = ref(false)
 const testingUser = ref(false)
+const loadingExternalContacts = ref(false)
 const internalContactText = ref('')
 type MailScope = 'internal' | 'external'
 type EditableContact = { name: string; email: string }
@@ -330,6 +332,30 @@ async function testUser() {
   } finally {
     testingUser.value = false
   }
+}
+
+async function loadExternalAccountContacts(showMessage = true) {
+  if (!settings.value) return
+  const smtpUser = settings.value.user_external.smtp_user.trim()
+  if (!smtpUser) {
+    userExternalTemplates.value = []
+    if (showMessage) ElMessage.warning('请先填写外网 SMTP 用户名')
+    return
+  }
+  loadingExternalContacts.value = true
+  try {
+    const data = await getExternalAccountContacts(smtpUser)
+    userExternalTemplates.value = editableTemplates(data.contact_templates)
+    if (showMessage) ElMessage.success('已读取当前外网账号联系人')
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    loadingExternalContacts.value = false
+  }
+}
+
+async function handleExternalSmtpUserChange() {
+  await loadExternalAccountContacts(false)
 }
 
 async function load() {
