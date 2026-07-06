@@ -1,10 +1,10 @@
 <template>
-  <LoginView v-if="!session" @logged-in="handleLoggedIn" />
+  <LoginView v-if="!session" :version="meta.app_version" @logged-in="handleLoggedIn" />
   <div v-else class="page">
     <el-card class="card">
       <div class="toolbar">
         <div>
-          <h2 style="margin: 0">Redmine 固件版本发布工具</h2>
+          <h2 style="margin: 0">Redmine 固件版本发布工具 <span class="muted">v{{ meta.app_version || '-' }}</span></h2>
           <div class="muted">当前用户：{{ session.user_login }} / {{ session.is_admin ? '管理员' : '普通用户' }}</div>
         </div>
         <div style="flex: 1"></div>
@@ -52,7 +52,7 @@ import type { MetaInfo, SessionInfo } from './types'
 const session = ref<SessionInfo | null>(null)
 const activeTab = ref('publish')
 const mailVersion = ref(0)
-const meta = ref<MetaInfo>({ product_lines: [], mail_scopes: [], today: '' })
+const meta = ref<MetaInfo>({ app_version: '', product_lines: [], mail_scopes: [], today: '' })
 
 function handleLoggedIn(info: SessionInfo) {
   session.value = info
