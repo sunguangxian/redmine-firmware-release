@@ -59,7 +59,7 @@ class ReleaseModeConverterTest(unittest.TestCase):
         self.assertNotIn("Release_Notes_Regular_List", client.pages)
         container_text = client.pages["Release_Notes_Regular"]["text"]
         self.assertIn("<!-- RELEASE_INLINE_BEGIN:Release_Regular_FW_V1_0_0 -->", container_text)
-        self.assertIn("## V1.0.0 (2026-07-05)", container_text)
+        self.assertIn("## version:V1.0.0 (2026-07-05)", container_text)
         self.assertIn("fw.bin", container_text)
         self.assertNotIn("[[Release_Notes|back to Release Notes]]", container_text)
         self.assertNotIn("[[Release_Regular_FW_V1_0_0|V1.0.0 (2026-07-05)]] - old summary", container_text)
@@ -209,7 +209,7 @@ class ReleaseModeConverterTest(unittest.TestCase):
 
         self.assertEqual(result["deleted_pages"], ["Release_PT7200D_FW_V5_3_8_10"])
         self.assertNotIn("Release_PT7200D_FW_V5_3_8_10", client.pages)
-        self.assertIn("## V5.3.8.10 (2026-07-05)", client.pages["Release_Notes"]["text"])
+        self.assertIn("## version:V5.3.8.10 (2026-07-05)", client.pages["Release_Notes"]["text"])
 
     def test_inline_with_legacy_list_page_moves_blocks_to_hub(self):
         client = FakeRedmineClient()
