@@ -29,15 +29,16 @@ class SmtpServerConfig(BaseModel):
     use_tls: bool = False
 
 
+class ContactPersonConfig(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
 class ContactConfig(BaseModel):
     contacts: List[str] = Field(default_factory=list)
     contacts_to: List[str] = Field(default_factory=list)
     contacts_cc: List[str] = Field(default_factory=list)
-
-
-class ContactPersonConfig(BaseModel):
-    name: str = ""
-    email: str = ""
+    contacts_people: List[ContactPersonConfig] = Field(default_factory=list)
 
 
 class ContactTemplateConfig(BaseModel):
