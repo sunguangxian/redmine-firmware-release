@@ -92,6 +92,7 @@ import { errorLogs, errorMessage, getContacts, getProjectReleaseCategories, list
 import type { ContactTemplateConfig, MetaInfo, Project, ReleaseSummary } from '../types'
 import { buildMailBody, buildMailSubject, friendlyReleaseError, hasReleaseDraft, mergeEmails, validateReleaseInput } from '../utils/releaseUi.js'
 
+type ContactPerson = { name: string; email: string }
 const props = defineProps<{ projects: Project[]; meta: MetaInfo; mailVersion: number }>()
 const emit = defineEmits<{ (event: 'dirty-change', value: boolean): void }>()
 const projectId = ref(props.projects[0]?.identifier || '')
@@ -113,6 +114,7 @@ const noticeEnabled = ref(false)
 const mailScope = ref('internal')
 const contactsTo = ref<string[]>([])
 const contactsCc = ref<string[]>([])
+const contactPeople = ref<ContactPerson[]>([])
 const contactTemplates = ref<ContactTemplateConfig[]>([])
 const selectedTemplateNames = ref<string[]>([])
 const mailTo = ref<string[]>([])
@@ -138,34 +140,15 @@ watch(() => props.mailVersion, loadContacts)
 watch(() => [noticeEnabled.value, projectId.value, mailScope.value, form.version_name, form.release_date, form.commit, form.product_line, form.changelog, selectedFiles.value.map((file) => file.name).join('|')], () => { if (noticeEnabled.value && !mailContentEdited.value) generateMailContent() })
 watch(status, (value) => { if (lastPublishedTitle.value && value.includes(lastPublishedTitle.value)) markClean() })
 
-function onBeforeUnload(event: BeforeUnloadEvent) {
-  if (!isDirty.value && !publishing.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
-
-function onDocumentClick(event: MouseEvent) {
-  const target = event.target instanceof HTMLElement ? event.target : null
-  const tab = target?.closest('.el-tabs__item')
-  if (!tab || tab.classList.contains('is-active')) return
-  if (!isDirty.value && !publishing.value) return
-  if (!window.confirm('当前页面有未保存的发布内容，确认切换页面吗？')) {
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-  } else {
-    markClean()
-    emit('dirty-change', false)
-  }
-}
-
+function onBeforeUnload(event: BeforeUnloadEvent) { if (!isDirty.value && !publishing.value) return; event.preventDefault(); event.returnValue = '' }
+function onDocumentClick(event: MouseEvent) { const target = event.target instanceof HTMLElement ? event.target : null; const tab = target?.closest('.el-tabs__item'); if (!tab || tab.classList.contains('is-active')) return; if (!isDirty.value && !publishing.value) return; if (!window.confirm('当前页面有未保存的发布内容，确认切换页面吗？')) { event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation() } else { markClean(); emit('dirty-change', false) } }
 function onFileChange(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
 function onFileRemove(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
 async function loadReleases() { if (!projectId.value || busy.value) return; loadingReleases.value = true; try { releases.value = await listReleases(projectId.value, filterProductLine.value) } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } finally { loadingReleases.value = false } }
 async function loadCategories() { if (!projectId.value) return; try { const data = await getProjectReleaseCategories(projectId.value); projectCategories.value = data.categories; const values = new Set(projectCategories.value.map((item) => item.title || item.key)); if (filterProductLine.value && !values.has(filterProductLine.value)) filterProductLine.value = ''; if (form.product_line && !values.has(form.product_line)) form.product_line = '' } catch (error) { projectCategories.value = []; ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
 async function reloadProject() { if (!busy.value) { await loadCategories(); await loadReleases() } }
-async function loadContacts() { try { const data = await getContacts(mailScope.value); contactsTo.value = data.contacts_to; contactsCc.value = data.contacts_cc; contactTemplates.value = data.contact_templates || []; selectedTemplateNames.value = []; mailTo.value = []; mailCc.value = [] } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
-function contactLabel(email: string): string { const key = email.trim().toLowerCase(); for (const template of contactTemplates.value) { const contact = [...template.contacts_to, ...template.contacts_cc].find((item) => item.email.trim().toLowerCase() === key); if (contact) return `${contact.name || contact.email.split('@')[0]} <${contact.email}>` } return email }
+async function loadContacts() { try { const data = await getContacts(mailScope.value); const named = data as typeof data & { contacts_to_people?: ContactPerson[]; contacts_cc_people?: ContactPerson[] }; contactsTo.value = data.contacts_to; contactsCc.value = data.contacts_cc; contactPeople.value = [...(named.contacts_to_people || []), ...(named.contacts_cc_people || [])]; contactTemplates.value = data.contact_templates || []; selectedTemplateNames.value = []; mailTo.value = []; mailCc.value = [] } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
+function contactLabel(email: string): string { const key = email.trim().toLowerCase(); const named = contactPeople.value.find((item) => item.email.trim().toLowerCase() === key); if (named) return `${named.name || named.email.split('@')[0]} <${named.email}>`; for (const template of contactTemplates.value) { const contact = [...template.contacts_to, ...template.contacts_cc].find((item) => item.email.trim().toLowerCase() === key); if (contact) return `${contact.name || contact.email.split('@')[0]} <${contact.email}>` } return email }
 function applyContactTemplates() { const selected = contactTemplates.value.filter((item) => selectedTemplateNames.value.includes(item.name)); mailTo.value = mergeEmails(selected.map((item) => item.contacts_to.map((contact) => contact.email))); mailCc.value = mergeEmails(selected.map((item) => item.contacts_cc.map((contact) => contact.email))) }
 function attachmentNames(): string[] { return selectedFiles.value.map((file) => file.name).filter(Boolean) }
 function generateMailContent() { mailSubject.value = buildMailSubject(mailScope.value, attachmentNames(), form.version_name, form.release_date); mailBody.value = buildMailBody(mailScope.value, attachmentNames(), form.version_name, form.release_date, form.commit, form.changelog) }
