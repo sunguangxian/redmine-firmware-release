@@ -21,6 +21,7 @@ VERSION_HEADING_RE = re.compile(
 )
 CHANGELOG_TITLE_RE = re.compile(r"(?im)^(?:#|h1\.)\s*Changelog\s+for\s+(?P<model>[^\r\n]+?)\s*$")
 SECTION_HEADING_RE = re.compile(r"(?m)^(?:#(?!#)|h1\.)\s*(?P<title>[^\r\n]+?)\s*$")
+NON_VERSION_HEADING_RE = re.compile(r"(?im)^(?:#{1,2}|h[12]\.)\s*(?!version\b)[^\r\n]+?\s*$")
 ATTACHMENT_RE = re.compile(r"attachment:([^\s;,，；]+)", re.I)
 
 
@@ -448,6 +449,9 @@ class LegacyChangelogMigrator:
         for idx, match in enumerate(matches):
             start = match.end()
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+            section_match = NON_VERSION_HEADING_RE.search(text, start, end)
+            if section_match:
+                end = section_match.start()
             body = text[start:end].strip()
             attachment_names = self._attachment_names(body)
             category_key, category_title = self._category_for_position(text, match.start(), model)

@@ -159,7 +159,7 @@ class ReleaseModeConverterTest(unittest.TestCase):
         self.assertNotIn("[[Release_Regular_FW_V1_0_0|V1.0.0 (2026-07-05)]] - old summary", text)
         self.assertEqual(text.count("{{>toc}}"), 1)
         self.assertIn("<!-- RELEASE_INLINE_BEGIN:Release_Regular_FW_V1_0_0 -->", text)
-        self.assertIn("--------------", text)
+        self.assertNotIn("**Commit:** abc123\n\n--------------", text)
 
     def test_inline_cleanup_deletes_stale_list_page(self):
         client = FakeRedmineClient()

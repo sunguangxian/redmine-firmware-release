@@ -177,11 +177,12 @@ def replace_inline_release_block(page_text: str, block_id: str, block: str) -> s
     text = normalize_inline_release_page(page_text or "")
     pattern = _inline_block_pattern(block_id)
     if pattern.search(text):
-        return normalize_inline_release_page(pattern.sub(block, text, count=1))
+        base = pattern.sub("", text, count=1)
+        return normalize_inline_release_page(_append_inline_release_block(base, block))
     base = text.rstrip()
     if not base:
         base = _ensure_inline_toc("# Release Notes\n\n固件版本发布记录。")
-    return normalize_inline_release_page(base.rstrip() + "\n\n" + block + "\n")
+    return normalize_inline_release_page(_append_inline_release_block(base, block))
 
 
 def normalize_inline_release_page(page_text: str) -> str:
@@ -224,6 +225,7 @@ def _normalize_inline_block_headings(page_text: str) -> str:
         body = match.group("body")
         body = _link_inline_release_heading(body)
         body = _remove_inline_heading_version_link(body)
+        body = _remove_inline_internal_separator(body)
         body = _remove_inline_migration_source(body)
         body = re.sub(r"^#{2,6}\s+(变更说明|固件文件|迁移来源)\s*$", r"**\1**", body, flags=re.M)
         return f"{match.group(1)}\n{body.strip()}\n{match.group(3)}"
@@ -236,6 +238,17 @@ def _remove_version_list_heading(page_text: str) -> str:
 
 
 def _sort_inline_release_blocks(page_text: str) -> str:
+    category_matches = list(re.finditer(r"(?m)^##\s+(?!version:)[^\r\n]+\s*$", page_text or "", re.I))
+    if category_matches:
+        parts: list[str] = []
+        boundaries = [0] + [match.start() for match in category_matches] + [len(page_text or "")]
+        for idx in range(len(boundaries) - 1):
+            parts.append(_sort_inline_release_blocks_segment((page_text or "")[boundaries[idx] : boundaries[idx + 1]]))
+        return "".join(parts).rstrip() + "\n"
+    return _sort_inline_release_blocks_segment(page_text)
+
+
+def _sort_inline_release_blocks_segment(page_text: str) -> str:
     pattern = re.compile(
         rf"{re.escape(INLINE_BEGIN_PREFIX)}(?P<block_id>.*?)\s*-->.*?{re.escape(INLINE_END_PREFIX)}(?P=block_id)\s*-->",
         re.S,
@@ -248,10 +261,32 @@ def _sort_inline_release_blocks(page_text: str) -> str:
     suffix = page_text[matches[-1].end() :].strip()
     blocks = [match.group(0).strip() for match in matches]
     ordered = sorted(blocks, key=_inline_block_sort_key, reverse=True)
-    result = prefix + "\n\n" + "\n\n".join(ordered)
+    result = prefix + "\n\n" + "\n\n--------------\n\n".join(ordered)
     if suffix:
         result += "\n\n" + suffix
     return result.rstrip() + "\n"
+
+
+def _append_inline_release_block(page_text: str, block: str) -> str:
+    base = (page_text or "").rstrip()
+    insert_at = _matching_inline_category_insert_position(base, block)
+    if insert_at is None:
+        return base + "\n\n" + block + "\n"
+    return base[:insert_at].rstrip() + "\n\n" + block + "\n\n" + base[insert_at:].lstrip()
+
+
+def _matching_inline_category_insert_position(page_text: str, block: str) -> int | None:
+    parsed = parse_release_page("", block)
+    version = parsed.get("version_name") or ""
+    if not version:
+        return None
+    category_matches = list(re.finditer(r"(?m)^##\s+(?P<title>(?!version:)[^\r\n]*V(?P<prefix>\d+(?:\.\d+)*)\.X[^\r\n]*)$", page_text or "", re.I))
+    for idx, match in enumerate(category_matches):
+        prefix = "V" + match.group("prefix") + "."
+        if not version.upper().startswith(prefix.upper()):
+            continue
+        return category_matches[idx + 1].start() if idx + 1 < len(category_matches) else len(page_text or "")
+    return None
 
 
 def _inline_block_sort_key(block: str) -> tuple[str, tuple[int, ...], str]:
@@ -273,9 +308,22 @@ def _remove_inline_migration_source(block_body: str) -> str:
     return cleaned.strip()
 
 
-def _remove_inline_heading_version_link(block_body: str) -> str:
+def _remove_inline_internal_separator(block_body: str) -> str:
     return re.sub(
-        r"(?m)^(##\s+(?:version:)?V[^\r\n]+)\s*\n\n\[版本\s+[^\]\r\n]+\]\([^)]+\)\s*\n+",
+        r"(?m)(^\*\*Commit:\*\*[^\r\n]*(?:\r?\n)+)(?:[ \t]*\r?\n)*-{3,}[ \t]*(?:\r?\n)+",
+        r"\1\n",
+        block_body or "",
+    )
+
+
+def _remove_inline_heading_version_link(block_body: str) -> str:
+    block_body = re.sub(
+        r"(?m)^((?:##|###)\s+(?:version:)?V[^\r\n]+)[ \t]*\r?\n(?:[ \t]*\r?\n)*\[[^\]\r\n]*V[^\]\r\n]*\]\([^)]+\)[ \t]*(?:\r?\n)+",
+        r"\1\n\n",
+        block_body or "",
+    )
+    return re.sub(
+        r"(?m)^(##\s+(?:version:)?V[^\r\n]+)[ \t]*\r?\n(?:[ \t]*\r?\n)*\[版本\s+[^\]\r\n]+\]\([^)]+\)[ \t]*(?:\r?\n)+",
         r"\1\n\n",
         block_body or "",
     )
@@ -283,55 +331,55 @@ def _remove_inline_heading_version_link(block_body: str) -> str:
 
 def _link_inline_release_heading(block_body: str) -> str:
     version_macro_heading = re.search(
-        r"^##\s+version:(V[^\s\r\n]+)(?P<date>\s+\(\d{4}-\d{2}-\d{2}\))?\s*$",
+        r"^(?P<level>#{2,3})\s+version:(V[^\s\r\n]+)(?P<date>\s+\(\d{4}-\d{2}-\d{2}\))?\s*$",
         block_body,
         re.I | re.M,
     )
     if version_macro_heading:
-        version = version_macro_heading.group(1).strip()
+        version = version_macro_heading.group(2).strip()
         date = version_macro_heading.group("date") or ""
-        replacement = f"## version:{version}{date}"
+        replacement = f"{version_macro_heading.group('level')} version:{version}{date}"
         return block_body[: version_macro_heading.start()] + replacement + block_body[version_macro_heading.end() :]
 
     plain_version_heading = re.search(
-        r"^##\s+(V[^\s\r\n]+)(?P<date>\s+\(\d{4}-\d{2}-\d{2}\))?\s*$",
+        r"^(?P<level>#{2,3})\s+(V[^\s\r\n]+)(?P<date>\s+\(\d{4}-\d{2}-\d{2}\))?\s*$",
         block_body,
         re.I | re.M,
     )
     if plain_version_heading:
-        version = plain_version_heading.group(1).strip()
+        version = plain_version_heading.group(2).strip()
         date = plain_version_heading.group("date") or ""
-        replacement = f"## version:{version}{date}"
+        replacement = f"{plain_version_heading.group('level')} version:{version}{date}"
         return block_body[: plain_version_heading.start()] + replacement + block_body[plain_version_heading.end() :]
 
     linked_plain_heading = re.search(
-        r"^##\s+\[([^\]\r\n]+)\]\(([^)]+)\)\s*(?P<date>\(\d{4}-\d{2}-\d{2}\))?\s*$",
+        r"^(?P<level>#{2,3})\s+\[([^\]\r\n]+)\]\(([^)]+)\)\s*(?P<date>\(\d{4}-\d{2}-\d{2}\))?\s*$",
         block_body,
         re.I | re.M,
     )
     if linked_plain_heading:
-        version = linked_plain_heading.group(1).strip()
+        version = linked_plain_heading.group(2).strip()
         release_name = re.match(r"Release\s+\S+(?:\s+NP500)?\s+FW\s+(.+)", version, re.I)
         if release_name:
             version = release_name.group(1).strip()
         date = f" {linked_plain_heading.group('date')}" if linked_plain_heading.group("date") else ""
-        replacement = f"## version:{version}{date}"
+        replacement = f"{linked_plain_heading.group('level')} version:{version}{date}"
         return block_body[: linked_plain_heading.start()] + replacement + block_body[linked_plain_heading.end() :]
 
     linked_heading = re.search(
-        r"^##\s+\[Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\]\r\n]+)\]\(([^)]+)\)\s*$",
+        r"^(?P<level>#{2,3})\s+\[Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\]\r\n]+)\]\(([^)]+)\)\s*$",
         block_body,
         re.I | re.M,
     )
     if linked_heading:
-        version = linked_heading.group(1).strip()
-        return block_body[: linked_heading.start()] + f"## version:{version}" + block_body[linked_heading.end() :]
+        version = linked_heading.group(2).strip()
+        return block_body[: linked_heading.start()] + f"{linked_heading.group('level')} version:{version}" + block_body[linked_heading.end() :]
 
-    heading = re.search(r"^##\s+(?!\[)(Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\r\n]+))\s*$", block_body, re.I | re.M)
+    heading = re.search(r"^(?P<level>#{2,3})\s+(?!\[)(Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\r\n]+))\s*$", block_body, re.I | re.M)
     if not heading:
         return block_body
-    version = heading.group(2).strip()
-    return block_body[: heading.start()] + f"## version:{version}" + block_body[heading.end() :]
+    version = heading.group(3).strip()
+    return block_body[: heading.start()] + f"{heading.group('level')} version:{version}" + block_body[heading.end() :]
 
 
 def delete_inline_release_block(page_text: str, block_id: str) -> str:
@@ -399,10 +447,11 @@ def _release_body_markdown(
         rows.append(f"| {cell} | {desc} |")
     if not rows:
         rows.append("| （无） | |")
+    internal_separator = "" if not heading else "\n--------------\n"
     return (
         f"**日期:** {form.release_date}\n"
         f"**Commit:** {form.commit}\n\n"
-        f"--------------\n\n"
+        f"{internal_separator}\n"
         f"{changes_title}\n\n"
         f"{changes}\n\n"
         f"{files_title}\n\n"
@@ -484,17 +533,17 @@ def format_release_files(files: list[dict[str, str | None]]) -> str:
 
 
 def parse_release_page(title: str, text: str) -> dict:
-    version_match = re.search(r"^#{1,2}\s+version:\s*(V[^\s\r\n]+)", text, re.I | re.M)
+    version_match = re.search(r"^#{1,3}\s+version:\s*(V[^\s\r\n]+)", text, re.I | re.M)
     if not version_match:
-        version_match = re.search(r"^#{1,2}\s+Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\r\n]+)", text, re.I | re.M)
+        version_match = re.search(r"^#{1,3}\s+Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\r\n]+)", text, re.I | re.M)
     if not version_match:
-        version_match = re.search(r"^#{1,2}\s+\[Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\]\r\n]+)\]\([^)]+\)", text, re.I | re.M)
+        version_match = re.search(r"^#{1,3}\s+\[Release\s+\S+(?:\s+NP500)?\s+FW\s+([^\]\r\n]+)\]\([^)]+\)", text, re.I | re.M)
     if not version_match:
-        version_match = re.search(r"^#{1,2}\s+\[([^\]\r\n]+)\]\([^)]+\)", text, re.I | re.M)
+        version_match = re.search(r"^#{1,3}\s+\[([^\]\r\n]+)\]\([^)]+\)", text, re.I | re.M)
     if not version_match:
-        version_match = re.search(r"^#{1,2}\s+(V[^\s\r\n]+)", text, re.I | re.M)
+        version_match = re.search(r"^#{1,3}\s+(V[^\s\r\n]+)", text, re.I | re.M)
     if not version_match:
-        version_match = re.search(r"^##\s+([^\s(]+)\s*\((\d{4}-\d{2}-\d{2})\)", text, re.I | re.M)
+        version_match = re.search(r"^#{2,3}\s+([^\s(]+)\s*\((\d{4}-\d{2}-\d{2})\)", text, re.I | re.M)
     version_name = version_match.group(1).strip() if version_match else ""
     inline = parse_inline_ref(title)
     if not version_name and inline:
@@ -505,7 +554,7 @@ def parse_release_page(title: str, text: str) -> dict:
 
     date_match = re.search(r"\*\*日期:\*\*\s*(\d{4}-\d{2}-\d{2})", text)
     if not date_match:
-        date_match = re.search(r"^##\s+(?:version:)?[^\s(]+\s*\((\d{4}-\d{2}-\d{2})\)", text, re.I | re.M)
+        date_match = re.search(r"^#{2,3}\s+(?:version:)?[^\s(]+\s*\((\d{4}-\d{2}-\d{2})\)", text, re.I | re.M)
     release_date = date_match.group(1) if date_match else ""
 
     commit_match = re.search(r"\*\*Commit:\*\*\s*([^\r\n]+)", text)

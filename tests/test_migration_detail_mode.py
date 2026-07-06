@@ -48,6 +48,32 @@ release_page_prefix: Release_DP580_FW_
     def test_auto_defaults_to_inline_without_config(self):
         self.assertEqual(FakeMigrator("auto")._selected_detail_mode(), "inline")
 
+    def test_non_version_section_heading_stops_previous_release_body(self):
+        migrator = LegacyChangelogMigrator(FakeClient(), "dp580")
+        text = """# Changelog for Model
+
+## Series A
+
+## version:V1.0.0 (2024-01-02)
+
+- commit: abc123
+
+1. first change
+
+## Series B
+
+## version:V2.0.0 (2024-02-03)
+
+- commit: def456
+
+1. second change
+"""
+        releases = migrator._parse_releases("Changelog_for_Model", "Model", text, {})
+
+        self.assertEqual([release.version for release in releases], ["V1.0.0", "V2.0.0"])
+        self.assertEqual(releases[0].changelog_items, ["first change"])
+        self.assertNotIn("Series B", "\n".join(releases[0].changelog_items))
+
 
 if __name__ == "__main__":
     unittest.main()
