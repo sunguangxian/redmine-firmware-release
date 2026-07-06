@@ -40,6 +40,22 @@ categories:
 <!-- RELEASE_CONFIG_END -->
 """
 
+F103E_INLINE_CONFIG = """# Release Tool Config
+
+<!-- RELEASE_CONFIG_BEGIN -->
+```yaml
+mode: multi_list
+main_page: Release_Notes
+release_detail_mode: inline
+categories:
+  - key: FM100B_V12
+    title: FM100B_V12
+    hub_page: Release_Notes_FM100B_V12
+    list_page: Release_Notes_FM100B_V12
+```
+<!-- RELEASE_CONFIG_END -->
+"""
+
 
 def form(version="V1.0.0", *, wiki_title=None, files=None, replace=False):
     return ReleaseForm(
@@ -148,6 +164,24 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         client = self.seed_inline()
         ReleasePublisher(client).publish(form())
         self.assertEqual(IndexSync(client, "dp5x").refresh_all(), 1)
+
+    def test_inline_list_uses_configured_category_for_underscored_models(self):
+        client = FakeRedmineClient()
+        client.seed_page("Release_Tool_Config", F103E_INLINE_CONFIG)
+        client.seed_page("Release_Notes", "# Release Notes\n")
+        block = build_inline_release_block(
+            form("V1.2.5.3"),
+            1,
+            [],
+            block_id="Release_FM100B_V12_FW_V1_2_5_3",
+            container_page="Release_Notes_FM100B_V12",
+        )
+        client.seed_page("Release_Notes_FM100B_V12", "# FM100B_V12\n\n" + block)
+
+        rows = ReleasePublisher(client).list_releases("dp5x")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["product_line"], "FM100B_V12")
 
 
 if __name__ == "__main__":

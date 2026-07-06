@@ -414,7 +414,7 @@ class ReleasePublisher:
                         "block_id": item.get("block_id", ""),
                         "version": item["ver"],
                         "date": item["date"],
-                        "product_line": item.get("product_line", "") or category_titles.get(item.get("cat", ""), ""),
+                        "product_line": category_titles.get(item.get("cat", ""), "") or item.get("product_line", ""),
                         "summary": item.get("summary", ""),
                     }
                 )

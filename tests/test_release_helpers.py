@@ -49,6 +49,19 @@ class ReleaseHelpersTest(unittest.TestCase):
         self.assertEqual([item["wiki_title"] for item in rows], ["A", "C"])
         publisher.list_releases.assert_called_once_with("demo")
 
+    def test_list_release_rows_does_not_limit_filtered_category(self):
+        releases = [
+            {"wiki_title": str(index), "product_line": "FM100B_V12"}
+            for index in range(RECENT_RELEASE_LIMIT + 10)
+        ]
+        publisher = Mock()
+        publisher.list_releases.return_value = releases
+
+        with patch("release_tool.release_helpers.ReleasePublisher", return_value=publisher):
+            rows = list_release_rows(Mock(), "demo", "FM100B_V12")
+
+        self.assertEqual(len(rows), RECENT_RELEASE_LIMIT + 10)
+
     def test_list_release_rows_limits_recent_count(self):
         releases = [{"wiki_title": str(index), "product_line": ""} for index in range(RECENT_RELEASE_LIMIT + 5)]
         publisher = Mock()

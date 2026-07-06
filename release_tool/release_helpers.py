@@ -61,6 +61,7 @@ def list_release_rows(
 
     if product_line:
         releases = [item for item in releases if item.get("product_line") == product_line]
+        return releases
     return releases[:RECENT_RELEASE_LIMIT]
 
 
