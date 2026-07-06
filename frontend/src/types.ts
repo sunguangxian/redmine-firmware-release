@@ -39,15 +39,16 @@ export interface SmtpServerConfig {
   use_tls: boolean
 }
 
+export interface ContactPersonConfig {
+  name: string
+  email: string
+}
+
 export interface ContactConfig {
   contacts: string[]
   contacts_to: string[]
   contacts_cc: string[]
-}
-
-export interface ContactPersonConfig {
-  name: string
-  email: string
+  contacts_people?: ContactPersonConfig[]
 }
 
 export interface ContactTemplateConfig {
