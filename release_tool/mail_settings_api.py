@@ -12,14 +12,17 @@ from .config_store import (
     MAIL_SCOPE_INTERNAL,
     get_email_server_settings,
     get_internal_contact_settings,
-    get_user_external_email_settings,
     get_user_internal_email_settings,
     store_email_server_settings,
     store_internal_contact_settings,
-    store_user_external_email_settings,
     store_user_internal_email_settings,
 )
 from .dependencies import _current_session, _require_admin
+from .external_account_contacts import (
+    get_external_account_contacts_for_user,
+    get_user_external_email_account_settings,
+    store_user_external_email_account_settings,
+)
 from .mail_contact_helpers import contacts_for_scope, normalize_mail_scope
 from .schemas import AdminMailSettingsRequest, UserExternalMailRequest, UserInternalMailRequest
 
@@ -35,6 +38,7 @@ def _remove_existing_mail_settings_routes(app: FastAPI) -> None:
         ("/api/mail/user-internal-settings", "PUT"),
         ("/api/mail/user-external-settings", "PUT"),
         ("/api/mail/contacts", "GET"),
+        ("/api/mail/external-account-contacts", "GET"),
     ]
 
     def should_remove(route: Any) -> bool:
@@ -56,7 +60,7 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         external_server = get_email_server_settings(MAIL_SCOPE_EXTERNAL)
         internal_contacts = get_internal_contact_settings()
         user_internal = get_user_internal_email_settings(session.get("user_key", ""))
-        user_external = get_user_external_email_settings(session.get("user_key", ""))
+        user_external = get_user_external_email_account_settings(session.get("user_key", ""))
         return {
             "is_admin": bool(session.get("is_admin")),
             "admin": {
@@ -159,9 +163,9 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         session: Dict[str, Any] = Depends(_current_session),
     ) -> Dict[str, bool]:
         user_key = session.get("user_key", "")
-        old = get_user_external_email_settings(user_key)
+        old = get_user_external_email_account_settings(user_key)
         smtp_password = payload.smtp_password or old.get("smtp_password", "")
-        store_user_external_email_settings(
+        store_user_external_email_account_settings(
             user_key,
             smtp_user=payload.smtp_user,
             smtp_password=smtp_password,
@@ -181,6 +185,7 @@ def register_mail_settings_routes(app: FastAPI) -> None:
                 "contacts_to_count": len(payload.contacts_to),
                 "contacts_cc_count": len(payload.contacts_cc),
                 "contact_template_count": len(payload.contact_templates),
+                "external_account": payload.smtp_user,
             },
         )
         return {"ok": True}
@@ -191,3 +196,10 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         session: Dict[str, Any] = Depends(_current_session),
     ) -> Dict[str, Any]:
         return contacts_for_scope(session, normalize_mail_scope(scope))
+
+    @app.get("/api/mail/external-account-contacts")
+    def api_external_account_contacts(
+        smtp_user: str = Query(""),
+        session: Dict[str, Any] = Depends(_current_session),
+    ) -> Dict[str, Any]:
+        return get_external_account_contacts_for_user(session.get("user_key", ""), smtp_user)
