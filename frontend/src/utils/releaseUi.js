@@ -101,7 +101,7 @@ export function buildMailBody(scope, names, versionName, releaseDate, commit, ch
   const changelog = changelogLines(changelogText).map((item, index) => `${index + 1}. ${item}`).join('\n') || '（无）'
   const attachments = (names || []).map((name) => `- ${name}`).join('\n') || (scope === 'external' ? '（本次邮件未附加文件，请联系相关人员获取固件文件）' : '（本次邮件未附加文件，请查看 Redmine 项目文件）')
   if (scope === 'external') {
-    return ['您好，', '', '固件版本已发布，请查收。', '', `版本：${releaseName}`, `发布日期：${releaseDate}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`, '', '如有问题，请联系技术支持人员。'].join('\n')
+    return ['固件版本已发布，请查收。', '', `版本：${releaseName}`, `发布日期：${releaseDate}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`].join('\n')
   }
   return ['固件版本已发布。', '', `版本：${releaseName}`, `发布日期：${releaseDate}`, `Commit：${commit}`, '', `变更说明：\n${changelog}`, '', `附件：\n${attachments}`, '', 'Wiki：{{wiki_url}}', '项目文件：{{files_url}}'].join('\n')
 }
