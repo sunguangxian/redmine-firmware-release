@@ -49,7 +49,6 @@ copy scripts\production.env.example scripts\production.env
 RELEASE_TOOL_HOST=0.0.0.0
 RELEASE_TOOL_PORT=7860
 REDMINE_BASE_URL=http://192.168.1.208:3000
-RELEASE_TOOL_SAVE_LOGIN_SECRETS=0
 RELEASE_TOOL_SESSION_TTL_SECONDS=28800
 RELEASE_TOOL_SESSION_IDLE_SECONDS=7200
 RELEASE_TOOL_SESSION_COOKIE_SECURE=0
@@ -61,11 +60,12 @@ RELEASE_TOOL_SESSION_COOKIE_SAMESITE=lax
 - `RELEASE_TOOL_HOST=0.0.0.0` 表示允许局域网访问。
 - `RELEASE_TOOL_PORT` 是工具端口。
 - `REDMINE_BASE_URL` 是工具连接的 Redmine 地址。
-- `RELEASE_TOOL_SAVE_LOGIN_SECRETS=0` 表示不在服务器保存 Redmine 登录密码；确实需要保存时再改为 `1`。
 - `RELEASE_TOOL_SESSION_TTL_SECONDS` 是登录会话最长有效时间，默认 8 小时。
 - `RELEASE_TOOL_SESSION_IDLE_SECONDS` 是空闲超时时间，默认 2 小时。
 - `RELEASE_TOOL_SESSION_COOKIE_SECURE=1` 只适合 HTTPS 访问；纯 HTTP 内网访问时保持 `0`，否则浏览器不会发送 Cookie。
 - `RELEASE_TOOL_SESSION_COOKIE_SAMESITE` 默认 `lax`，一般不需要修改。
+
+登录页的“在本机浏览器中保持登录”只会延长当前浏览器的会话 Cookie；Redmine 密码和 API Key 不会保存到服务器磁盘，也不会被其他客户端自动复用。
 
 ## 4. 首次安装和构建
 

@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 from fastapi import FastAPI, Request, Response
 
-from .config_store import clear_local_credentials, default_base_url, get_saved_login, store_login
+from .config_store import clear_local_credentials, default_base_url
 from .dependencies import (
     SESSION_COOKIE,
     SESSION_STORE,
@@ -41,14 +41,14 @@ def _remove_existing_auth_routes(app: FastAPI) -> None:
     app.router.routes[:] = [route for route in app.router.routes if not should_remove(route)]
 
 
-def _set_session_cookie(response: Response, sid: str) -> None:
+def _set_session_cookie(response: Response, sid: str, *, remember: bool = False) -> None:
     response.set_cookie(
         SESSION_COOKIE,
         sid,
         httponly=True,
         samesite=SESSION_COOKIE_SAMESITE,
         secure=SESSION_COOKIE_SECURE,
-        max_age=session_cookie_max_age(),
+        max_age=session_cookie_max_age() if remember else None,
     )
 
 
@@ -74,7 +74,7 @@ def _validate_login_payload(payload: LoginRequest) -> tuple[str, str, str, str]:
     return default_base_url(), auth_mode, username, api_key
 
 
-def _create_session_from_login(payload: LoginRequest, response: Response, *, save_login: bool) -> LoginResponse:
+def _create_session_from_login(payload: LoginRequest, response: Response) -> LoginResponse:
     base_url, auth_mode, username, api_key = _validate_login_payload(payload)
     client = RedmineClient(base_url, username, payload.password, api_key=api_key, auth_mode=auth_mode)
     account = client.test_login()
@@ -95,33 +95,14 @@ def _create_session_from_login(payload: LoginRequest, response: Response, *, sav
         "user_key": _user_key(base_url, str(user_login)),
         "is_admin": is_admin,
         "projects": projects,
+        "remember": bool(payload.remember),
         "created_at": now,
         "last_seen_at": now,
     }
     sid = uuid.uuid4().hex
     SESSION_STORE.set(sid, session)
-    _set_session_cookie(response, sid)
-    if save_login:
-        store_login(base_url, username, payload.password, payload.remember, auth_mode=auth_mode, api_key=api_key)
+    _set_session_cookie(response, sid, remember=bool(payload.remember))
     return _public_session(session)
-
-
-def _restore_saved_login(response: Response) -> LoginResponse | None:
-    saved = get_saved_login()
-    if not saved.get("remember"):
-        return None
-    auth_mode = saved.get("auth_mode") or "password"
-    has_secret = bool(saved.get("api_key")) if auth_mode == "api_key" else bool(saved.get("username") and saved.get("password"))
-    if not has_secret:
-        return None
-    payload = LoginRequest(
-        auth_mode=auth_mode,
-        username=saved.get("username", ""),
-        password=saved.get("password", ""),
-        api_key=saved.get("api_key", ""),
-        remember=True,
-    )
-    return _create_session_from_login(payload, response, save_login=False)
 
 
 def register_auth_routes(app: FastAPI) -> None:
@@ -134,7 +115,7 @@ def register_auth_routes(app: FastAPI) -> None:
     def api_login(payload: LoginRequest, request: Request, response: Response) -> LoginResponse:
         # 重新登录前先清理旧 session，避免新账号登录失败后页面继续使用旧 cookie 展示旧用户。
         _clear_request_session(request, response)
-        return _create_session_from_login(payload, response, save_login=True)
+        return _create_session_from_login(payload, response)
 
     @app.get("/api/auth/me", response_model=LoginResponse)
     def api_me(request: Request, response: Response) -> LoginResponse:
@@ -159,13 +140,6 @@ def register_auth_routes(app: FastAPI) -> None:
                 session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
             return _public_session(session)
 
-        try:
-            restored = _restore_saved_login(response)
-        except RedmineError as exc:
-            _delete_session_cookie(response)
-            raise _json_error(f"自动恢复登录失败，请重新登录：{exc}", 401) from exc
-        if restored is not None:
-            return restored
         _delete_session_cookie(response)
         raise _json_error("请先登录 Redmine", 401)
 

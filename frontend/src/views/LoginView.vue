@@ -30,7 +30,7 @@
         </el-form-item>
 
         <el-form-item>
-          <el-checkbox v-model="form.remember">记住登录，下次打开自动恢复</el-checkbox>
+          <el-checkbox v-model="form.remember">在本机浏览器中保持登录</el-checkbox>
         </el-form-item>
 
         <el-button type="primary" :loading="loading" style="width: 100%" @click="submit">登录</el-button>

@@ -46,6 +46,6 @@ def register_session_guard(app: FastAPI) -> None:
                 httponly=True,
                 samesite=SESSION_COOKIE_SAMESITE,
                 secure=SESSION_COOKIE_SECURE,
-                max_age=session_cookie_max_age(),
+                max_age=session_cookie_max_age() if session.get("remember") else None,
             )
         return response

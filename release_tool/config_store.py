@@ -15,8 +15,6 @@ DEFAULT_REDMINE_BASE_URL = "http://192.168.1.208:3000"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DATA_DIR = ".redmine-release-tool"
 DB_FILENAME = "release_tool.db"
-SAVE_LOGIN_SECRETS_ENV = "RELEASE_TOOL_SAVE_LOGIN_SECRETS"
-
 MAIL_SCOPE_INTERNAL = "internal"
 MAIL_SCOPE_EXTERNAL = "external"
 MAIL_SCOPES = {MAIL_SCOPE_INTERNAL, MAIL_SCOPE_EXTERNAL}
@@ -153,14 +151,12 @@ def _init_db(conn: sqlite3.Connection) -> None:
             ON audit_logs(created_at DESC, id DESC);
         """
     )
+    # 旧版本曾把“记住登录”凭据保存为服务器全局配置；升级后立即清除，避免跨客户端复用。
+    _delete_settings(conn, ("auth_mode", "username", "password", "api_key", "remember"))
 
 
 def default_base_url() -> str:
     return os.environ.get("REDMINE_BASE_URL", DEFAULT_REDMINE_BASE_URL).rstrip("/")
-
-
-def allow_login_secret_storage() -> bool:
-    return os.environ.get(SAVE_LOGIN_SECRETS_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_scope(scope: str) -> str:
@@ -270,53 +266,9 @@ def _delete_settings(conn: sqlite3.Connection, keys: tuple[str, ...]) -> None:
     conn.executemany("DELETE FROM app_settings WHERE key = ?", [(key,) for key in keys])
 
 
-def get_saved_login() -> dict[str, Any]:
-    allow_secrets = allow_login_secret_storage()
-    with db() as conn:
-        return {
-            "base_url": _get_setting(conn, "base_url", default_base_url()) or default_base_url(),
-            "auth_mode": _get_setting(conn, "auth_mode", "password") or "password",
-            "username": _get_setting(conn, "username") if allow_secrets else "",
-            "password": unprotect_secret(_get_setting(conn, "password")) if allow_secrets else "",
-            "api_key": unprotect_secret(_get_setting(conn, "api_key")) if allow_secrets else "",
-            "remember": (_get_setting(conn, "remember") == "1") if allow_secrets else False,
-        }
-
-
-def store_login(
-    base_url: str,
-    username: str,
-    password: str,
-    remember: bool,
-    *,
-    auth_mode: str = "password",
-    api_key: str = "",
-) -> None:
-    with db() as conn:
-        _set_setting(conn, "base_url", (base_url or default_base_url()).rstrip("/"))
-        _set_setting(conn, "auth_mode", auth_mode or "password")
-        if not allow_login_secret_storage():
-            _set_setting(conn, "remember", "0")
-            _delete_settings(conn, ("username", "password", "api_key"))
-            return
-
-        _set_setting(conn, "username", username or "")
-        _set_setting(conn, "remember", "1" if remember else "0")
-        if remember:
-            if auth_mode == "api_key":
-                _set_setting(conn, "api_key", protect_secret(api_key or ""))
-                _delete_settings(conn, ("password",))
-            else:
-                _set_setting(conn, "password", protect_secret(password or ""))
-                _delete_settings(conn, ("api_key",))
-        else:
-            _delete_settings(conn, ("password", "api_key"))
-
-
 def clear_local_credentials() -> None:
     with db() as conn:
-        _set_setting(conn, "remember", "0")
-        _delete_settings(conn, ("username", "password", "api_key"))
+        _delete_settings(conn, ("auth_mode", "username", "password", "api_key", "remember"))
         conn.execute("UPDATE user_internal_email SET smtp_password = '', updated_at = CURRENT_TIMESTAMP")
         conn.execute("UPDATE user_external_email SET smtp_password = '', updated_at = CURRENT_TIMESTAMP")
 
