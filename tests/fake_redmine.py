@@ -13,6 +13,7 @@ class FakeRedmineClient:
         self.uploads: dict[str, bytes] = {}
         self.next_version_id = 1
         self.next_file_id = 1
+        self.wiki_start_page = "Wiki"
 
     def seed_page(self, title: str, text: str, parent_title: str = "") -> None:
         self.pages[title] = {"title": title, "text": text, "parent": {"title": parent_title} if parent_title else {}}
@@ -30,12 +31,22 @@ class FakeRedmineClient:
         page = self.pages.get(title)
         return dict(page) if page else None
 
-    def put_wiki_page(self, project_id: str, title: str, text: str, comment: str = "", parent_title: str | None = None) -> None:
+    def put_wiki_page(
+        self,
+        project_id: str,
+        title: str,
+        text: str,
+        comment: str = "",
+        parent_title: str | None = None,
+        is_start_page: bool = False,
+    ) -> None:
         self.pages[title] = {
             "title": title,
             "text": text,
             "parent": {"title": parent_title} if parent_title else (self.pages.get(title, {}).get("parent") or {}),
         }
+        if is_start_page:
+            self.wiki_start_page = title
 
     def delete_wiki_page(self, project_id: str, title: str) -> None:
         self.pages.pop(title, None)

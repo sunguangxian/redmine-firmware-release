@@ -23,6 +23,17 @@ categories:
 <!-- RELEASE_CONFIG_END -->
 """
 
+SINGLE_INLINE_CONFIG = """# Release Tool Config
+
+<!-- RELEASE_CONFIG_BEGIN -->
+```yaml
+mode: single_list
+main_page: Release_Notes
+release_detail_mode: inline
+```
+<!-- RELEASE_CONFIG_END -->
+"""
+
 PAGE_CONFIG = """# Release Tool Config
 
 <!-- RELEASE_CONFIG_BEGIN -->
@@ -90,6 +101,17 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         client.seed_version("V1.0.0", 1)
         return client
 
+    def test_new_single_list_publish_sets_release_notes_as_wiki_start_page(self):
+        client = FakeRedmineClient()
+        client.seed_page("Release_Tool_Config", SINGLE_INLINE_CONFIG)
+        client.seed_version("V1.0.0", 1)
+
+        title = ReleasePublisher(client).publish(form())
+
+        self.assertEqual(title, inline_ref("Release_Notes", "V1.0.0"))
+        self.assertIn("Release_Notes", client.pages)
+        self.assertEqual(client.wiki_start_page, "Release_Notes")
+
     def test_inline_new_publish_writes_container_block(self):
         client = self.seed_inline()
         title = ReleasePublisher(client).publish(form())
@@ -99,6 +121,7 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         self.assertNotIn("## 版本列表", container_text)
         self.assertNotIn("**产品线:**", container_text)
         self.assertIn("[[Release_Notes_Regular|V1.0.0 (2026-07-05)]]", client.pages["Release_Notes"]["text"])
+        self.assertEqual(client.wiki_start_page, "Release_Notes")
 
         rows = ReleasePublisher(client).list_releases("dp5x")
         self.assertEqual(rows[0]["product_line"], "常规版本 (5X)")
@@ -121,6 +144,7 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         self.assertNotIn("**产品线:**", client.pages[title]["text"])
         self.assertIn("[[Release_Regular_FW_V1_0_0|V1.0.0 (2026-07-05)]]", client.pages["Release_Notes_Regular_List"]["text"])
         self.assertNotIn("## 版本列表", client.pages["Release_Notes_Regular_List"]["text"])
+        self.assertEqual(client.wiki_start_page, "Release_Notes")
 
         rows = ReleasePublisher(client).list_releases("dp5x")
         self.assertEqual(rows[0]["product_line"], "常规版本 (5X)")

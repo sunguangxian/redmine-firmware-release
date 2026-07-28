@@ -262,6 +262,7 @@ class ReleasePublisher:
                 new_text,
                 "release tool inline update",
                 parent_title=parent_title,
+                is_start_page=container_page == profile.main_page,
             )
             self._log(logs, f"内联版本写入完成：{container_page} / {form.version_name}")
             self._progress(progress, "wiki", "success")

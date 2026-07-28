@@ -408,7 +408,13 @@ class IndexSync:
         page = self._get_page(profile.main_page)
         current = (page or {}).get("text", "")
         new_text = self._replace_generated_region(current, lines, "版本列表") if current else fallback
-        self.client.put_wiki_page(self.project_id, profile.main_page, new_text, comment="Release Notes 索引")
+        self.client.put_wiki_page(
+            self.project_id,
+            profile.main_page,
+            new_text,
+            comment="Release Notes 索引",
+            is_start_page=True,
+        )
         self._page_cache[profile.main_page] = {"title": profile.main_page, "text": new_text}
         for item in sorted_items:
             page = self._get_page(item["page"])
@@ -550,7 +556,13 @@ class IndexSync:
         if self._is_inline_profile(profile):
             current = self._clean_inline_main_text(current)
         new_text = self._replace_generated_region(current, generated, "Product Lines") if current else fallback
-        self.client.put_wiki_page(self.project_id, profile.main_page, new_text, comment="auto sync main counts")
+        self.client.put_wiki_page(
+            self.project_id,
+            profile.main_page,
+            new_text,
+            comment="auto sync main counts",
+            is_start_page=True,
+        )
         self._page_cache[profile.main_page] = {"title": profile.main_page, "text": new_text}
 
     def _clean_inline_main_text(self, text: str) -> str:

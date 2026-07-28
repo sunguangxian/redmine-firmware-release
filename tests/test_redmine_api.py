@@ -78,6 +78,16 @@ class RedmineApiTest(unittest.TestCase):
         self.assertIn("limit=100&offset=0", client.paths[0])
         self.assertIn("limit=100&offset=100", client.paths[1])
 
+    def test_put_wiki_page_can_set_start_page(self):
+        session = FakeSession([FakeResponse(status_code=204, content=b"")])
+        client = self._client(session)
+
+        client.put_wiki_page("dp580", "Release_Notes", "# Release Notes", is_start_page=True)
+
+        payload = session.calls[0]["kwargs"]["json"]["wiki_page"]
+        self.assertEqual(payload["text"], "# Release Notes")
+        self.assertIs(payload["is_start_page"], True)
+
     def test_request_retries_transient_get_failure(self):
         session = FakeSession([requests.ConnectionError("reset"), FakeResponse(status_code=200, json_data={"ok": True})])
         client = self._client(session)

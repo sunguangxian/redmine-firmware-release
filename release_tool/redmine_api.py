@@ -175,10 +175,13 @@ class RedmineClient:
         text: str,
         comment: str = "",
         parent_title: str | None = None,
+        is_start_page: bool = False,
     ) -> None:
         payload: dict[str, Any] = {"wiki_page": {"text": text, "comments": comment}}
         if parent_title:
             payload["wiki_page"]["parent_title"] = parent_title
+        if is_start_page:
+            payload["wiki_page"]["is_start_page"] = True
         self._request(
             "PUT",
             f"/projects/{quote(project_id)}/wiki/{quote(title, safe='')}.json",
