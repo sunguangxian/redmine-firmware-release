@@ -31,7 +31,7 @@ def _route_has_method(route: Any, method: str) -> bool:
 def _remove_existing_auth_routes(app: FastAPI) -> None:
     specs = [
         ("/api/auth/login", "POST"),
-        ("/api/auth/login-form", "POST"),
+        ("/login", "POST"),
         ("/api/auth/me", "GET"),
         ("/api/auth/logout", "POST"),
         ("/api/auth/clear-local-credentials", "POST"),
@@ -120,7 +120,7 @@ def register_auth_routes(app: FastAPI) -> None:
         _clear_request_session(request, response)
         return _create_session_from_login(payload, response)
 
-    @app.post("/api/auth/login-form")
+    @app.post("/login")
     def api_login_form(
         request: Request,
         username: str = Form(""),

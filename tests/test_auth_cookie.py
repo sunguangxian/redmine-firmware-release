@@ -99,7 +99,7 @@ class AuthCookieTest(unittest.TestCase):
     def test_form_login_sets_cookie_and_redirects_to_frontend(self):
         app = FastAPI()
         register_auth_routes(app)
-        login_form = self._endpoint(app, "/api/auth/login-form", "POST")
+        login_form = self._endpoint(app, "/login", "POST")
 
         with patch("release_tool.auth_api.RedmineClient", FakeRedmineClient):
             response = login_form(
@@ -116,7 +116,7 @@ class AuthCookieTest(unittest.TestCase):
     def test_form_login_failure_redirects_with_error_and_without_session(self):
         app = FastAPI()
         register_auth_routes(app)
-        login_form = self._endpoint(app, "/api/auth/login-form", "POST")
+        login_form = self._endpoint(app, "/login", "POST")
 
         with patch("release_tool.auth_api.RedmineClient", FailingRedmineClient):
             response = login_form(

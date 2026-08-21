@@ -8,34 +8,35 @@
         </div>
       </template>
 
-      <el-form action="/api/auth/login-form" method="post" label-position="top" @submit="submit">
-        <input type="hidden" name="remember" :value="String(form.remember)" />
-        <el-form-item label="登录方式">
-          <el-radio-group v-model="form.auth_mode">
-            <el-radio-button label="password">用户名密码</el-radio-button>
-            <el-radio-button label="api_key">API Key</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
+      <div class="native-auth-mode">
+        <label><input v-model="form.auth_mode" type="radio" value="password" /> 用户名密码</label>
+        <label><input v-model="form.auth_mode" type="radio" value="api_key" /> API Key</label>
+      </div>
 
-        <template v-if="form.auth_mode === 'password'">
-          <el-form-item label="用户名">
-            <el-input v-model="form.username" name="username" autocomplete="username" required />
-          </el-form-item>
-          <el-form-item label="密码">
-            <el-input v-model="form.password" name="password" type="password" autocomplete="current-password" required show-password />
-          </el-form-item>
-        </template>
+      <form v-if="form.auth_mode === 'password'" action="/login" accept-charset="UTF-8" method="post" class="native-login-form">
+        <label for="username">登录名</label>
+        <input id="username" v-model="form.username" type="text" name="username" tabindex="1" autofocus />
 
-        <el-form-item v-else label="API Key">
-          <el-input v-model="form.api_key" type="password" show-password />
-        </el-form-item>
+        <label for="password">密码</label>
+        <input id="password" v-model="form.password" type="password" name="password" tabindex="2" />
 
-        <el-form-item>
-          <el-checkbox v-model="form.remember">保持登录会话（账号密码由浏览器管理）</el-checkbox>
-        </el-form-item>
+        <label class="native-login-checkbox" for="remember">
+          <input id="remember" v-model="form.remember" type="checkbox" name="remember" value="true" tabindex="4" />
+          保持登录状态
+        </label>
 
-        <el-button type="primary" native-type="submit" :loading="loading" style="width: 100%">登录</el-button>
-      </el-form>
+        <input id="login-submit" type="submit" name="login" value="登录" tabindex="5" />
+      </form>
+
+      <form v-else class="native-login-form" @submit.prevent="submitApiKey">
+        <label for="api-key">API Key</label>
+        <input id="api-key" v-model="form.api_key" type="password" autocomplete="off" />
+        <label class="native-login-checkbox" for="api-remember">
+          <input id="api-remember" v-model="form.remember" type="checkbox" />
+          保持登录状态
+        </label>
+        <button type="submit" :disabled="loading">{{ loading ? '登录中…' : '登录' }}</button>
+      </form>
     </el-card>
   </div>
 </template>
@@ -56,15 +57,6 @@ const form = reactive({
   api_key: '',
   remember: false
 })
-
-function submit(event: SubmitEvent) {
-  if (form.auth_mode === 'password') {
-    loading.value = true
-    return
-  }
-  event.preventDefault()
-  void submitApiKey()
-}
 
 async function submitApiKey() {
   loading.value = true
@@ -88,3 +80,61 @@ onMounted(() => {
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
 })
 </script>
+
+<style scoped>
+.native-auth-mode {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.native-auth-mode label,
+.native-login-checkbox {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.native-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.native-login-form > label:not(.native-login-checkbox) {
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+.native-login-form > input[type='text'],
+.native-login-form > input[type='password'] {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #c0c4cc;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.native-login-checkbox {
+  margin: 10px 0;
+}
+
+.native-login-form > input[type='submit'],
+.native-login-form > button[type='submit'] {
+  width: 100%;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 4px;
+  background: #409eff;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.native-login-form > button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+</style>

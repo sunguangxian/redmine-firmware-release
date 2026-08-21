@@ -1,5 +1,8 @@
 <template>
-  <LoginView v-if="!session" :version="meta.app_version" @logged-in="handleLoggedIn" />
+  <div v-if="checkingSession" class="page" style="max-width: 520px">
+    <el-card><el-skeleton :rows="3" animated /></el-card>
+  </div>
+  <LoginView v-else-if="!session" :version="meta.app_version" @logged-in="handleLoggedIn" />
   <div v-else class="page">
     <el-card class="card">
       <div class="toolbar">
@@ -50,6 +53,7 @@ import { clearLocalCredentials, errorMessage, getMe, getMeta, logout } from './a
 import type { MetaInfo, SessionInfo } from './types'
 
 const session = ref<SessionInfo | null>(null)
+const checkingSession = ref(true)
 const activeTab = ref('publish')
 const mailVersion = ref(0)
 const meta = ref<MetaInfo>({ app_version: '', product_lines: [], mail_scopes: [], today: '' })
@@ -78,6 +82,8 @@ onMounted(async () => {
     if (errorMessage(error) !== '请先登录 Redmine') {
       ElMessage.warning(errorMessage(error))
     }
+  } finally {
+    checkingSession.value = false
   }
 })
 </script>
