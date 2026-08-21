@@ -8,7 +8,8 @@
         </div>
       </template>
 
-      <el-form label-position="top" @submit.prevent="submit">
+      <el-form action="/api/auth/login-form" method="post" label-position="top" @submit="submit">
+        <input type="hidden" name="remember" :value="String(form.remember)" />
         <el-form-item label="登录方式">
           <el-radio-group v-model="form.auth_mode">
             <el-radio-button label="password">用户名密码</el-radio-button>
@@ -18,10 +19,10 @@
 
         <template v-if="form.auth_mode === 'password'">
           <el-form-item label="用户名">
-            <el-input v-model="form.username" name="username" autocomplete="username" />
+            <el-input v-model="form.username" name="username" autocomplete="username" required />
           </el-form-item>
           <el-form-item label="密码">
-            <el-input v-model="form.password" name="password" type="password" autocomplete="current-password" show-password />
+            <el-input v-model="form.password" name="password" type="password" autocomplete="current-password" required show-password />
           </el-form-item>
         </template>
 
@@ -40,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { errorMessage, login } from '../api/http'
 import type { SessionInfo } from '../types'
@@ -56,11 +57,19 @@ const form = reactive({
   remember: false
 })
 
-async function submit() {
+function submit(event: SubmitEvent) {
+  if (form.auth_mode === 'password') {
+    loading.value = true
+    return
+  }
+  event.preventDefault()
+  void submitApiKey()
+}
+
+async function submitApiKey() {
   loading.value = true
   try {
     const data = await login(form)
-    await storeBrowserCredential()
     emit('logged-in', data)
     ElMessage.success(`已连接：${data.user_login}`)
   } catch (error) {
@@ -70,20 +79,12 @@ async function submit() {
   }
 }
 
-async function storeBrowserCredential() {
-  if (form.auth_mode !== 'password' || !form.username || !form.password) return
-  const PasswordCredentialConstructor = (window as typeof window & {
-    PasswordCredential?: new (data: { id: string; name: string; password: string }) => Credential
-  }).PasswordCredential
-  if (!PasswordCredentialConstructor || !navigator.credentials?.store) return
-  try {
-    await navigator.credentials.store(new PasswordCredentialConstructor({
-      id: form.username,
-      name: form.username,
-      password: form.password,
-    }))
-  } catch {
-    // 浏览器可能因安全上下文或用户设置拒绝保存，登录流程不应因此失败。
-  }
-}
+onMounted(() => {
+  const url = new URL(window.location.href)
+  const loginError = url.searchParams.get('login_error')
+  if (!loginError) return
+  ElMessage.error(loginError)
+  url.searchParams.delete('login_error')
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+})
 </script>

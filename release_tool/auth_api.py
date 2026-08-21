@@ -5,8 +5,10 @@ from __future__ import annotations
 import time
 import uuid
 from typing import Any, Dict
+from urllib.parse import quote
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 from .config_store import clear_local_credentials, default_base_url
 from .dependencies import (
@@ -29,6 +31,7 @@ def _route_has_method(route: Any, method: str) -> bool:
 def _remove_existing_auth_routes(app: FastAPI) -> None:
     specs = [
         ("/api/auth/login", "POST"),
+        ("/api/auth/login-form", "POST"),
         ("/api/auth/me", "GET"),
         ("/api/auth/logout", "POST"),
         ("/api/auth/clear-local-credentials", "POST"),
@@ -116,6 +119,32 @@ def register_auth_routes(app: FastAPI) -> None:
         # 重新登录前先清理旧 session，避免新账号登录失败后页面继续使用旧 cookie 展示旧用户。
         _clear_request_session(request, response)
         return _create_session_from_login(payload, response)
+
+    @app.post("/api/auth/login-form")
+    def api_login_form(
+        request: Request,
+        username: str = Form(""),
+        password: str = Form(""),
+        remember: bool = Form(False),
+    ) -> RedirectResponse:
+        response = RedirectResponse(url="/", status_code=303)
+        _clear_request_session(request, response)
+        try:
+            _create_session_from_login(
+                LoginRequest(
+                    auth_mode="password",
+                    username=username,
+                    password=password,
+                    remember=remember,
+                ),
+                response,
+            )
+        except (HTTPException, RedmineError) as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            error_response = RedirectResponse(url=f"/?login_error={quote(str(detail), safe='')}", status_code=303)
+            _clear_request_session(request, error_response)
+            return error_response
+        return response
 
     @app.get("/api/auth/me", response_model=LoginResponse)
     def api_me(request: Request, response: Response) -> LoginResponse:

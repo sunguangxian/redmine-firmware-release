@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Response
 
 from release_tool.auth_api import _set_session_cookie, register_auth_routes
 from release_tool.dependencies import SESSION_COOKIE, SESSIONS
+from release_tool.redmine_api import RedmineError
 from release_tool.schemas import LoginRequest
 
 
@@ -17,6 +18,11 @@ class FakeRedmineClient:
 
     def list_projects(self):
         return []
+
+
+class FailingRedmineClient(FakeRedmineClient):
+    def test_login(self):
+        raise RedmineError("用户名或密码错误")
 
 
 class AuthCookieTest(unittest.TestCase):
@@ -89,6 +95,40 @@ class AuthCookieTest(unittest.TestCase):
             self.assertEqual(exc.exception.status_code, 401)
             legacy_saved_login_reader.assert_not_called()
             legacy_saved_login_writer.assert_not_called()
+
+    def test_form_login_sets_cookie_and_redirects_to_frontend(self):
+        app = FastAPI()
+        register_auth_routes(app)
+        login_form = self._endpoint(app, "/api/auth/login-form", "POST")
+
+        with patch("release_tool.auth_api.RedmineClient", FakeRedmineClient):
+            response = login_form(
+                request=Mock(cookies={}),
+                username="alice",
+                password="secret",
+                remember=True,
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/")
+        self.assertTrue(self._session_cookie_value(response))
+
+    def test_form_login_failure_redirects_with_error_and_without_session(self):
+        app = FastAPI()
+        register_auth_routes(app)
+        login_form = self._endpoint(app, "/api/auth/login-form", "POST")
+
+        with patch("release_tool.auth_api.RedmineClient", FailingRedmineClient):
+            response = login_form(
+                request=Mock(cookies={}),
+                username="alice",
+                password="bad",
+                remember=False,
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("login_error=", response.headers["location"])
+        self.assertEqual(SESSIONS, {})
 
 
 if __name__ == "__main__":
