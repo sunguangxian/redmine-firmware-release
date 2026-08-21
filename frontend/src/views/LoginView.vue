@@ -8,7 +8,7 @@
         </div>
       </template>
 
-      <el-form label-position="top" autocomplete="on" @submit.prevent="submit">
+      <el-form label-position="top" @submit.prevent="submit">
         <el-form-item label="登录方式">
           <el-radio-group v-model="form.auth_mode">
             <el-radio-button label="password">用户名密码</el-radio-button>
@@ -60,12 +60,30 @@ async function submit() {
   loading.value = true
   try {
     const data = await login(form)
+    await storeBrowserCredential()
     emit('logged-in', data)
     ElMessage.success(`已连接：${data.user_login}`)
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
     loading.value = false
+  }
+}
+
+async function storeBrowserCredential() {
+  if (form.auth_mode !== 'password' || !form.username || !form.password) return
+  const PasswordCredentialConstructor = (window as typeof window & {
+    PasswordCredential?: new (data: { id: string; name: string; password: string }) => Credential
+  }).PasswordCredential
+  if (!PasswordCredentialConstructor || !navigator.credentials?.store) return
+  try {
+    await navigator.credentials.store(new PasswordCredentialConstructor({
+      id: form.username,
+      name: form.username,
+      password: form.password,
+    }))
+  } catch {
+    // 浏览器可能因安全上下文或用户设置拒绝保存，登录流程不应因此失败。
   }
 }
 </script>
