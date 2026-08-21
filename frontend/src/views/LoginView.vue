@@ -13,12 +13,36 @@
         <label><input v-model="form.auth_mode" type="radio" value="api_key" /> API Key</label>
       </div>
 
-      <form v-if="form.auth_mode === 'password'" action="/login" accept-charset="UTF-8" method="post" class="native-login-form">
+      <form
+        v-if="form.auth_mode === 'password'"
+        action="/login"
+        accept-charset="UTF-8"
+        method="post"
+        autocomplete="on"
+        class="native-login-form"
+      >
         <label for="username">登录名</label>
-        <input id="username" v-model="form.username" type="text" name="username" tabindex="1" autofocus />
+        <input
+          id="username"
+          v-model="form.username"
+          type="text"
+          name="username"
+          autocomplete="username"
+          tabindex="1"
+          autofocus
+          required
+        />
 
         <label for="password">密码</label>
-        <input id="password" v-model="form.password" type="password" name="password" tabindex="2" />
+        <input
+          id="password"
+          v-model="form.password"
+          type="password"
+          name="password"
+          autocomplete="current-password"
+          tabindex="2"
+          required
+        />
 
         <label class="native-login-checkbox" for="remember">
           <input id="remember" v-model="form.remember" type="checkbox" name="remember" value="true" tabindex="4" />
