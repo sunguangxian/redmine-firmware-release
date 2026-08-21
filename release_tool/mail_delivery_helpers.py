@@ -14,7 +14,7 @@ from .config_store import (
 )
 from .email_sender import EmailSendError, EmailSettings, send_release_email, split_emails
 from .external_account_contacts import get_user_external_email_account_settings
-from .mail_contact_helpers import mail_scope_label, merge_contact_lists
+from .mail_contact_helpers import mail_scope_label, merge_contact_lists, save_new_contacts_for_scope
 from .mail_history import record_mail_send
 from .mail_notice_helpers import validate_notice_fields
 from .redmine_api import RedmineClient
@@ -150,6 +150,7 @@ def send_release_notice(
             status="success",
             send_type=send_type,
         )
+        save_new_contacts_for_scope(session, mail_scope, to_addrs, cc_addrs)
     except EmailSendError as exc:
         record_mail_send(
             project_id=project_id,

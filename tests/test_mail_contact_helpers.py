@@ -10,6 +10,7 @@ from release_tool.mail_contact_helpers import (
     mail_scope_label,
     merge_contact_lists,
     normalize_mail_scope,
+    save_new_contacts_for_scope,
 )
 
 
@@ -46,6 +47,61 @@ class MailContactHelpersTest(unittest.TestCase):
         )
 
         self.assertEqual(merged, ["alice@example.com", "bob@example.com", "carol@example.com"])
+
+    @patch("release_tool.mail_contact_helpers.store_user_internal_email_settings")
+    @patch("release_tool.mail_contact_helpers.get_user_internal_email_settings")
+    @patch("release_tool.mail_contact_helpers.get_internal_contact_settings")
+    def test_save_new_internal_contacts_merges_only_unknown_addresses(self, global_contacts, user_contacts, store):
+        global_contacts.return_value = {"contacts_to": ["global@example.com"], "contacts_cc": []}
+        user_contacts.return_value = {
+            "smtp_user": "user",
+            "smtp_password": "secret",
+            "smtp_from": "user@example.com",
+            "contacts_to": ["saved@example.com"],
+            "contacts_cc": [],
+            "contact_templates": [{"name": "常用"}],
+        }
+
+        save_new_contacts_for_scope(
+            {"user_key": "u1"},
+            MAIL_SCOPE_INTERNAL,
+            ["GLOBAL@example.com", "new@example.com"],
+            ["copy@example.com"],
+        )
+
+        self.assertEqual(store.call_args.kwargs["contacts_to"], ["saved@example.com", "new@example.com"])
+        self.assertEqual(store.call_args.kwargs["contacts_cc"], ["copy@example.com"])
+        self.assertEqual(store.call_args.kwargs["contact_templates"], [{"name": "常用"}])
+
+    @patch("release_tool.mail_contact_helpers.store_user_external_email_account_settings")
+    @patch("release_tool.mail_contact_helpers.get_user_external_email_account_settings")
+    def test_save_new_external_contacts_preserves_names_and_adds_default_name(self, account_contacts, store):
+        account_contacts.return_value = {
+            "smtp_user": "outside@example.com",
+            "smtp_password": "secret",
+            "smtp_from": "outside@example.com",
+            "contacts_to": ["customer@example.com"],
+            "contacts_cc": [],
+            "contacts_to_people": [{"name": "Customer", "email": "customer@example.com"}],
+            "contacts_cc_people": [],
+            "contact_templates": [],
+        }
+
+        save_new_contacts_for_scope(
+            {"user_key": "u1"},
+            MAIL_SCOPE_EXTERNAL,
+            ["customer@example.com", "new.person@example.com"],
+            [],
+        )
+
+        self.assertEqual(store.call_args.kwargs["contacts_to"], ["customer@example.com", "new.person@example.com"])
+        self.assertEqual(
+            store.call_args.kwargs["contacts_to_people"],
+            [
+                {"name": "Customer", "email": "customer@example.com"},
+                {"name": "new.person", "email": "new.person@example.com"},
+            ],
+        )
 
     @patch("release_tool.mail_contact_helpers.get_user_internal_email_settings")
     @patch("release_tool.mail_contact_helpers.get_internal_contact_settings")

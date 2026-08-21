@@ -51,7 +51,10 @@ const emit = defineEmits<{
 
 const visible = computed({
   get: () => props.modelValue,
-  set: (value: boolean) => emit('update:modelValue', value),
+  set: (value: boolean) => {
+    emit('update:modelValue', value)
+    if (!value) emit('cancel')
+  },
 })
 
 function emitConfirm() {
@@ -60,8 +63,7 @@ function emitConfirm() {
 }
 
 function emitCancel() {
-  emit('cancel')
-  emit('update:modelValue', false)
+  visible.value = false
 }
 </script>
 

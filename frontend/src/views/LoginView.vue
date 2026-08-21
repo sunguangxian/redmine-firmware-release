@@ -8,7 +8,7 @@
         </div>
       </template>
 
-      <el-form label-position="top" @submit.prevent="submit">
+      <el-form label-position="top" autocomplete="on" @submit.prevent="submit">
         <el-form-item label="登录方式">
           <el-radio-group v-model="form.auth_mode">
             <el-radio-button label="password">用户名密码</el-radio-button>
@@ -18,10 +18,10 @@
 
         <template v-if="form.auth_mode === 'password'">
           <el-form-item label="用户名">
-            <el-input v-model="form.username" />
+            <el-input v-model="form.username" name="username" autocomplete="username" />
           </el-form-item>
           <el-form-item label="密码">
-            <el-input v-model="form.password" type="password" show-password />
+            <el-input v-model="form.password" name="password" type="password" autocomplete="current-password" show-password />
           </el-form-item>
         </template>
 
@@ -30,10 +30,10 @@
         </el-form-item>
 
         <el-form-item>
-          <el-checkbox v-model="form.remember">在本机浏览器中保持登录</el-checkbox>
+          <el-checkbox v-model="form.remember">保持登录会话（账号密码由浏览器管理）</el-checkbox>
         </el-form-item>
 
-        <el-button type="primary" :loading="loading" style="width: 100%" @click="submit">登录</el-button>
+        <el-button type="primary" native-type="submit" :loading="loading" style="width: 100%">登录</el-button>
       </el-form>
     </el-card>
   </div>

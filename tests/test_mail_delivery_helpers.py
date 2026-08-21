@@ -87,11 +87,12 @@ class MailDeliveryHelpersTest(unittest.TestCase):
             )
 
     @patch("release_tool.mail_delivery_helpers.record_mail_send")
+    @patch("release_tool.mail_delivery_helpers.save_new_contacts_for_scope")
     @patch("release_tool.mail_delivery_helpers.send_release_email")
     @patch("release_tool.mail_delivery_helpers.get_internal_contact_settings")
     @patch("release_tool.mail_delivery_helpers.get_user_internal_email_settings")
     @patch("release_tool.mail_delivery_helpers.get_email_server_settings")
-    def test_send_release_notice_records_success(self, server, user_cfg, contacts, sender, history):
+    def test_send_release_notice_records_success(self, server, user_cfg, contacts, sender, save_contacts, history):
         server.return_value = _server()
         user_cfg.return_value = _user()
         contacts.return_value = {"contacts_to": [], "contacts_cc": []}
@@ -119,13 +120,20 @@ class MailDeliveryHelpersTest(unittest.TestCase):
         history.assert_called_once()
         self.assertEqual(history.call_args.kwargs["status"], "success")
         self.assertEqual(history.call_args.kwargs["wiki_title"], "Release_Notes")
+        save_contacts.assert_called_once_with(
+            {"user_key": "u1", "user_login": "admin"},
+            MAIL_SCOPE_INTERNAL,
+            ["a@example.com"],
+            ["b@example.com"],
+        )
 
     @patch("release_tool.mail_delivery_helpers.record_mail_send")
+    @patch("release_tool.mail_delivery_helpers.save_new_contacts_for_scope")
     @patch("release_tool.mail_delivery_helpers.send_release_email")
     @patch("release_tool.mail_delivery_helpers.get_internal_contact_settings")
     @patch("release_tool.mail_delivery_helpers.get_user_internal_email_settings")
     @patch("release_tool.mail_delivery_helpers.get_email_server_settings")
-    def test_send_release_notice_records_failure(self, server, user_cfg, contacts, sender, history):
+    def test_send_release_notice_records_failure(self, server, user_cfg, contacts, sender, save_contacts, history):
         server.return_value = _server()
         user_cfg.return_value = _user()
         contacts.return_value = {"contacts_to": [], "contacts_cc": []}
@@ -152,6 +160,7 @@ class MailDeliveryHelpersTest(unittest.TestCase):
 
         self.assertEqual(history.call_args.kwargs["status"], "failed")
         self.assertEqual(history.call_args.kwargs["error_message"], "failed")
+        save_contacts.assert_not_called()
 
 
 if __name__ == "__main__":
