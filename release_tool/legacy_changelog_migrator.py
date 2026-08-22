@@ -653,8 +653,7 @@ class LegacyChangelogMigrator:
 
     def _create_release_structure(self, categories: List[Dict[str, str]], *, single_list: bool, detail_mode: str = "page") -> None:
         if single_list:
-            self.client.put_wiki_page(
-                self.project_id,
+            self._put_current_page(
                 "Release_Notes",
                 self._single_list_placeholder(categories[0]["title"]),
                 "legacy changelog migration structure",
@@ -671,8 +670,7 @@ class LegacyChangelogMigrator:
         ]
         for category in categories:
             main_lines.append(f"- [[Release_Notes_{category['key']}|{category['title']}]]")
-        self.client.put_wiki_page(
-            self.project_id,
+        self._put_current_page(
             "Release_Notes",
             "\n".join(main_lines).rstrip() + "\n",
             "legacy changelog migration structure",
@@ -683,16 +681,14 @@ class LegacyChangelogMigrator:
             hub = f"Release_Notes_{key}"
             list_page = f"Release_Notes_{key}" if detail_mode == "inline" else f"Release_Notes_{key}_List"
             if detail_mode == "inline":
-                self.client.put_wiki_page(
-                    self.project_id,
+                self._put_current_page(
                     hub,
                     f"# {title}\n\n[[Release_Notes|返回 Release Notes]]\n\n## 版本列表\n\n",
                     "legacy changelog migration structure",
                     parent_title="Release_Notes",
                 )
                 continue
-            self.client.put_wiki_page(
-                self.project_id,
+            self._put_current_page(
                 hub,
                 (
                     f"# {title}\n\n"
@@ -703,8 +699,7 @@ class LegacyChangelogMigrator:
                 "legacy changelog migration structure",
                 parent_title="Release_Notes",
             )
-            self.client.put_wiki_page(
-                self.project_id,
+            self._put_current_page(
                 list_page,
                 f"# {title} 版本列表\n\n",
                 "legacy changelog migration structure",
@@ -732,12 +727,14 @@ class LegacyChangelogMigrator:
             if not page or not self._page_has_versions(page.get("text", "") or ""):
                 continue
             legacy_title = self._legacy_backup_title(title)
-            if not self._get_page(legacy_title):
+            legacy_page = self._get_page(legacy_title)
+            if not legacy_page:
                 self.client.put_wiki_page(
                     self.project_id,
                     legacy_title,
                     page.get("text", "") or "",
                     "legacy changelog backup",
+                    version=None,
                 )
                 self._log(f"已备份旧 Wiki 页面 {title} 到 {legacy_title}")
             self.client.put_wiki_page(
@@ -749,8 +746,27 @@ class LegacyChangelogMigrator:
                     f"The original Changelog content is preserved at [[{legacy_title}]].\n"
                 ),
                 "legacy changelog migration home",
+                version=page.get("version"),
             )
             self._log(f"已将旧入口页面 {title} 切换为新的 Release_Notes 入口")
+
+    def _put_current_page(
+        self,
+        title: str,
+        text: str,
+        comment: str,
+        *,
+        parent_title: str | None = None,
+    ) -> None:
+        current = self.client.get_wiki_page(self.project_id, title)
+        self.client.put_wiki_page(
+            self.project_id,
+            title,
+            text,
+            comment,
+            parent_title=parent_title,
+            version=(current or {}).get("version"),
+        )
 
     def _legacy_backup_title(self, title: str) -> str:
         if title == "Wiki":
