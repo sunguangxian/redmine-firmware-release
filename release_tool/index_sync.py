@@ -474,11 +474,8 @@ class IndexSync:
         generated_has_heading = bool(heading_re.match(first_generated_line))
         start = match.start() if generated_has_heading or section_title == "版本列表" else match.end()
 
-        if generated_has_heading:
-            end = len(text)
-        else:
-            next_heading = re.search(r"^(?:#+\s+|h[1-6]\.\s+).+$", text[match.end():], re.M)
-            end = match.end() + next_heading.start() if next_heading else len(text)
+        next_heading = re.search(r"^(?:#+\s+|h[1-6]\.\s+).+$", text[match.end():], re.M)
+        end = match.end() + next_heading.start() if next_heading else len(text)
 
         return text[:start].rstrip() + "\n\n" + generated.rstrip() + "\n" + text[end:].lstrip("\n")
 

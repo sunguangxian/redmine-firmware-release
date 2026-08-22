@@ -141,6 +141,32 @@ main_page: Release_Notes
         self.assertEqual(text.count("\n--------------\n"), 4)
         self.assertNotIn("**Commit:** abc123\n\n--------------", text)
 
+    def test_inline_sort_preserves_manual_content_between_block_runs(self):
+        def block(version: str, date: str) -> str:
+            form = ReleaseForm(
+                project_id="dp580",
+                proj_tag="DP580",
+                version_name=version,
+                release_date=date,
+                commit="abc123",
+                product_line="Series",
+                changelog_items=[f"change {version}"],
+            )
+            return build_inline_release_block(form, 12, [], block_id=version)
+
+        page = (
+            "# Release Notes\n\n{{>toc}}\n\n"
+            + block("V2.0.0", "2026-02-01")
+            + "\n\n人工维护说明：不要删除\n\n"
+            + block("V1.0.0", "2026-01-01")
+        )
+
+        text = normalize_inline_release_page(page)
+
+        self.assertIn("人工维护说明：不要删除", text)
+        self.assertLess(text.index("V2.0.0"), text.index("人工维护说明：不要删除"))
+        self.assertLess(text.index("人工维护说明：不要删除"), text.index("V1.0.0"))
+
     def test_inline_blocks_are_sorted_within_category_sections(self):
         def block(version: str, date: str) -> str:
             form = ReleaseForm(

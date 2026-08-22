@@ -259,13 +259,23 @@ def _sort_inline_release_blocks_segment(page_text: str) -> str:
     if len(matches) < 2:
         return page_text
 
-    prefix = page_text[: matches[0].start()].rstrip()
-    suffix = page_text[matches[-1].end() :].strip()
-    blocks = [match.group(0).strip() for match in matches]
-    ordered = sorted(blocks, key=_inline_block_sort_key, reverse=True)
-    result = prefix + "\n\n" + "\n\n--------------\n\n".join(ordered)
-    if suffix:
-        result += "\n\n" + suffix
+    result = page_text[: matches[0].start()]
+    run: list[str] = [matches[0].group(0).strip()]
+
+    def flush_run() -> str:
+        ordered = sorted(run, key=_inline_block_sort_key, reverse=True)
+        return "\n\n--------------\n\n".join(ordered)
+
+    for previous, current in zip(matches, matches[1:]):
+        gap = page_text[previous.end() : current.start()]
+        if re.fullmatch(r"\s*(?:-{3,}\s*)?", gap):
+            run.append(current.group(0).strip())
+            continue
+        result += flush_run() + gap
+        run = [current.group(0).strip()]
+
+    result += flush_run()
+    result += page_text[matches[-1].end() :]
     return result.rstrip() + "\n"
 
 
