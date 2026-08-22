@@ -110,3 +110,17 @@ def cleanup_legacy_jobs(days: int = 30) -> int:
         conn.executemany("DELETE FROM legacy_migration_job_logs WHERE job_id = ?", [(job_id,) for job_id in ids])
         conn.executemany("DELETE FROM legacy_migration_jobs WHERE id = ?", [(job_id,) for job_id in ids])
         return len(ids)
+
+
+def fail_interrupted_legacy_jobs() -> int:
+    with db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE legacy_migration_jobs
+            SET status = 'failed',
+                error = '服务重启导致后台任务中断，请重新提交迁移任务',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'running'
+            """
+        )
+        return int(cursor.rowcount or 0)

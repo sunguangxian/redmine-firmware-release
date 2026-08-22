@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -239,15 +240,28 @@ class RedmineClient:
             fields["description"] = _limit_version_description(str(fields.get("description") or ""))
         self._request("PUT", f"/versions/{version_id}.json", json={"version": fields})
 
-    def upload_file(self, filename: str, content: bytes) -> str:
+    def upload_file(self, filename: str, content: Any) -> str:
         upload_url = f"{self.base_url}/uploads.json?filename={quote(filename)}"
         try:
-            resp = self.session.post(
-                upload_url,
-                data=content,
-                headers={"Content-Type": "application/octet-stream"},
-                timeout=self._file_timeout(),
-            )
+            if isinstance(content, Path):
+                with content.open("rb") as stream:
+                    resp = self.session.post(
+                        upload_url,
+                        data=stream,
+                        headers={"Content-Type": "application/octet-stream"},
+                        timeout=self._file_timeout(),
+                    )
+            else:
+                if hasattr(content, "seek"):
+                    content.seek(0)
+                resp = self.session.post(
+                    upload_url,
+                    data=content,
+                    headers={"Content-Type": "application/octet-stream"},
+                    timeout=self._file_timeout(),
+                )
+                if hasattr(content, "seek"):
+                    content.seek(0)
         except requests.RequestException as exc:
             raise RedmineError(f"上传失败 {filename}: {exc}") from exc
         if resp.status_code >= 400:

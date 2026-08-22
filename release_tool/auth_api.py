@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Dict
+import os
+from typing import Dict
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
-from .config_store import clear_local_credentials, default_base_url
+from .config_store import db, default_base_url
 from .dependencies import (
     SESSION_COOKIE,
     SESSION_STORE,
@@ -21,27 +22,7 @@ from .dependencies import (
 )
 from .redmine_api import RedmineClient, RedmineError
 from .schemas import LoginRequest, LoginResponse
-from .session_config import SESSION_COOKIE_SAMESITE, SESSION_COOKIE_SECURE, session_cookie_max_age
-
-
-def _route_has_method(route: Any, method: str) -> bool:
-    return method.upper() in set(getattr(route, "methods", set()) or set())
-
-
-def _remove_existing_auth_routes(app: FastAPI) -> None:
-    specs = [
-        ("/api/auth/login", "POST"),
-        ("/login", "POST"),
-        ("/api/auth/me", "GET"),
-        ("/api/auth/logout", "POST"),
-        ("/api/auth/clear-local-credentials", "POST"),
-    ]
-
-    def should_remove(route: Any) -> bool:
-        path = getattr(route, "path", "")
-        return any(path == target and _route_has_method(route, method) for target, method in specs)
-
-    app.router.routes[:] = [route for route in app.router.routes if not should_remove(route)]
+from .session_config import SESSION_COOKIE_SAMESITE, session_cookie_max_age, session_cookie_secure
 
 
 def _set_session_cookie(response: Response, sid: str, *, remember: bool = False) -> None:
@@ -50,7 +31,7 @@ def _set_session_cookie(response: Response, sid: str, *, remember: bool = False)
         sid,
         httponly=True,
         samesite=SESSION_COOKIE_SAMESITE,
-        secure=SESSION_COOKIE_SECURE,
+        secure=session_cookie_secure(),
         max_age=session_cookie_max_age() if remember else None,
     )
 
@@ -77,6 +58,55 @@ def _validate_login_payload(payload: LoginRequest) -> tuple[str, str, str, str]:
     return default_base_url(), auth_mode, username, api_key
 
 
+def _login_client_key(request: Request) -> str:
+    value = request.client.host if request.client else "unknown"
+    return str(value or "unknown")
+
+
+def _positive_env_int(name: str, default: int, minimum: int) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _check_login_rate_limit(client_key: str) -> None:
+    now = time.time()
+    with db() as conn:
+        row = conn.execute("SELECT locked_until FROM login_attempts WHERE client_key = ?", (client_key,)).fetchone()
+    if row and float(row["locked_until"] or 0) > now:
+        wait_seconds = max(1, int(float(row["locked_until"]) - now))
+        raise _json_error(f"登录失败次数过多，请在 {wait_seconds} 秒后重试", 429)
+
+
+def _record_login_failure(client_key: str) -> None:
+    now = time.time()
+    window = _positive_env_int("RELEASE_TOOL_LOGIN_RATE_WINDOW_SECONDS", 300, 60)
+    limit = _positive_env_int("RELEASE_TOOL_LOGIN_RATE_LIMIT", 5, 2)
+    with db() as conn:
+        row = conn.execute("SELECT failed_count, window_started FROM login_attempts WHERE client_key = ?", (client_key,)).fetchone()
+        if not row or now - float(row["window_started"] or 0) > window:
+            failed_count = 1
+            window_started = now
+        else:
+            failed_count = int(row["failed_count"] or 0) + 1
+            window_started = float(row["window_started"] or now)
+        locked_until = now + window if failed_count >= limit else 0
+        conn.execute(
+            """
+            INSERT INTO login_attempts(client_key, failed_count, window_started, locked_until) VALUES(?, ?, ?, ?)
+            ON CONFLICT(client_key) DO UPDATE SET failed_count=excluded.failed_count,
+                window_started=excluded.window_started, locked_until=excluded.locked_until
+            """,
+            (client_key, failed_count, window_started, locked_until),
+        )
+
+
+def _clear_login_failures(client_key: str) -> None:
+    with db() as conn:
+        conn.execute("DELETE FROM login_attempts WHERE client_key = ?", (client_key,))
+
+
 def _create_session_from_login(payload: LoginRequest, response: Response) -> LoginResponse:
     base_url, auth_mode, username, api_key = _validate_login_payload(payload)
     client = RedmineClient(base_url, username, payload.password, api_key=api_key, auth_mode=auth_mode)
@@ -101,6 +131,7 @@ def _create_session_from_login(payload: LoginRequest, response: Response) -> Log
         "remember": bool(payload.remember),
         "created_at": now,
         "last_seen_at": now,
+        "projects_checked_at": now,
     }
     sid = uuid.uuid4().hex
     SESSION_STORE.set(sid, session)
@@ -112,13 +143,23 @@ def register_auth_routes(app: FastAPI) -> None:
     if getattr(app.state, "auth_routes_registered", False):
         return
     app.state.auth_routes_registered = True
-    _remove_existing_auth_routes(app)
-
     @app.post("/api/auth/login", response_model=LoginResponse)
     def api_login(payload: LoginRequest, request: Request, response: Response) -> LoginResponse:
         # 重新登录前先清理旧 session，避免新账号登录失败后页面继续使用旧 cookie 展示旧用户。
         _clear_request_session(request, response)
-        return _create_session_from_login(payload, response)
+        client_key = _login_client_key(request)
+        _check_login_rate_limit(client_key)
+        try:
+            result = _create_session_from_login(payload, response)
+        except HTTPException as exc:
+            if exc.status_code != 429:
+                _record_login_failure(client_key)
+            raise
+        except RedmineError:
+            _record_login_failure(client_key)
+            raise
+        _clear_login_failures(client_key)
+        return result
 
     @app.post("/login")
     def api_login_form(
@@ -129,7 +170,9 @@ def register_auth_routes(app: FastAPI) -> None:
     ) -> RedirectResponse:
         response = RedirectResponse(url="/", status_code=303)
         _clear_request_session(request, response)
+        client_key = _login_client_key(request)
         try:
+            _check_login_rate_limit(client_key)
             _create_session_from_login(
                 LoginRequest(
                     auth_mode="password",
@@ -140,10 +183,13 @@ def register_auth_routes(app: FastAPI) -> None:
                 response,
             )
         except (HTTPException, RedmineError) as exc:
+            if not isinstance(exc, HTTPException) or exc.status_code != 429:
+                _record_login_failure(client_key)
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
             error_response = RedirectResponse(url=f"/?login_error={quote(str(detail), safe='')}", status_code=303)
             _clear_request_session(request, error_response)
             return error_response
+        _clear_login_failures(client_key)
         return response
 
     @app.get("/api/auth/me", response_model=LoginResponse)
@@ -167,6 +213,7 @@ def register_auth_routes(app: FastAPI) -> None:
             session["last_seen_at"] = time.time()
             if not session.get("is_admin"):
                 session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
+            SESSION_STORE.set(sid, session)
             return _public_session(session)
 
         _delete_session_cookie(response)
@@ -174,11 +221,5 @@ def register_auth_routes(app: FastAPI) -> None:
 
     @app.post("/api/auth/logout")
     def api_logout(request: Request, response: Response) -> Dict[str, bool]:
-        _clear_request_session(request, response)
-        return {"ok": True}
-
-    @app.post("/api/auth/clear-local-credentials")
-    def api_clear_local_credentials(request: Request, response: Response) -> Dict[str, bool]:
-        clear_local_credentials()
         _clear_request_session(request, response)
         return {"ok": True}

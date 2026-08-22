@@ -9,6 +9,8 @@ import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
 
+from .attachment_policy import AttachmentContent, content_bytes, validate_mail_attachment_batch
+
 class EmailSendError(Exception):
     pass
 
@@ -64,7 +66,7 @@ def send_release_email(
     cc_addrs: list[str] | None,
     subject: str,
     body: str,
-    attachments: list[tuple[str, str, bytes]],
+    attachments: list[tuple[str, str, AttachmentContent]],
 ) -> None:
     if not settings.smtp_host:
         raise EmailSendError("请先填写 SMTP 服务器")
@@ -82,12 +84,17 @@ def send_release_email(
         msg["Cc"] = ", ".join(cc_addrs)
     msg.set_content(body)
 
+    try:
+        validate_mail_attachment_batch(attachments)
+    except Exception as exc:
+        raise EmailSendError(str(exc)) from exc
     for filename, _description, content in attachments:
-        if not content:
+        data = content_bytes(content)
+        if not data:
             continue
         mime_type, _encoding = mimetypes.guess_type(filename)
         maintype, subtype = (mime_type or "application/octet-stream").split("/", 1)
-        msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
 
     recipients = to_addrs + cc_addrs
     try:

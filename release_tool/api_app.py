@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Dict
 
@@ -17,22 +16,11 @@ from fastapi.staticfiles import StaticFiles
 
 from .redmine_api import RedmineError
 
-app = FastAPI(title="Redmine Firmware Release API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.exception_handler(RedmineError)
 async def redmine_error_handler(_request: Request, exc: RedmineError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-def _mount_frontend() -> None:
+def _mount_frontend(app: FastAPI) -> None:
     dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
     index_file = dist / "index.html"
     if not index_file.exists():
@@ -50,15 +38,27 @@ def _mount_frontend() -> None:
     app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
 
 
-_mount_frontend()
+def create_base_app() -> FastAPI:
+    app = FastAPI(title="Redmine Firmware Release API")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_exception_handler(RedmineError, redmine_error_handler)
+    _mount_frontend(app)
+    return app
+
+
+app = create_base_app()
 
 
 def main() -> None:
-    import uvicorn
+    from .app_factory import main as run_server
 
-    host = os.environ.get("RELEASE_TOOL_HOST", "127.0.0.1")
-    port = int(os.environ.get("RELEASE_TOOL_PORT", "7860"))
-    uvicorn.run("release_tool.app_factory:app", host=host, port=port, reload=False)
+    run_server()
 
 
 if __name__ == "__main__":

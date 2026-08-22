@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -38,6 +39,16 @@ class ReleaseLockTest(unittest.TestCase):
                         self.assertEqual(owner, "owner-b")
             finally:
                 context.__exit__(None, None, None)
+
+    def test_active_lock_renews_its_lease(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "release_tool.config_store.PROJECT_ROOT", Path(temp_dir)
+        ):
+            with acquire_publish_lock("demo:V1", owner="owner-a", wait_seconds=0, ttl_seconds=1):
+                time.sleep(1.2)
+                with self.assertRaises(PublishLockTimeout):
+                    with acquire_publish_lock("demo:V1", owner="owner-b", wait_seconds=0, ttl_seconds=1):
+                        pass
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@
             <el-input v-model="settings.user_internal.smtp_from" class="full-row" placeholder="user@company.local"><template #prepend>内网发件人</template></el-input>
           </div>
           <div class="toolbar mail-settings-actions">
+            <el-button :loading="revealingPasswords" @click="openPasswordReveal">显示已保存密码</el-button>
             <el-button :loading="testingInternal" @click="testInternal">测试内网账号</el-button>
             <el-button type="primary" :loading="savingInternal" @click="saveInternal">保存内网账号</el-button>
           </div>
@@ -148,13 +149,25 @@
         <el-button type="primary" @click="saveTemplateDraft">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="passwordRevealVisible" title="验证身份后显示邮件密码" width="460px">
+      <el-form label-position="top" @submit.prevent="revealPasswords">
+        <el-form-item label="当前 Redmine 密码或 API Key">
+          <el-input v-model="revealCredential" type="password" show-password autocomplete="current-password" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordRevealVisible = false">取消</el-button>
+        <el-button type="primary" :loading="revealingPasswords" @click="revealPasswords">验证并显示</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { errorMessage, getExternalAccountContacts, getMailSettings, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testAdminMailServer, testMailConnection } from '../api/http'
+import { errorMessage, getExternalAccountContacts, getMailSettings, revealMailPasswords, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testAdminMailServer, testMailConnection } from '../api/http'
 import type { ContactPersonConfig, ContactTemplateConfig, MailSettings, SessionInfo } from '../types'
 
 const props = defineProps<{ session: SessionInfo }>()
@@ -170,6 +183,9 @@ const testingAdminExternal = ref(false)
 const testingInternal = ref(false)
 const testingUser = ref(false)
 const loadingExternalContacts = ref(false)
+const revealingPasswords = ref(false)
+const passwordRevealVisible = ref(false)
+const revealCredential = ref('')
 const internalPeople = ref<ContactPersonConfig[]>([])
 const externalPeople = ref<ContactPersonConfig[]>([])
 const externalTemplates = ref<Array<{ name: string; emails: string[] }>>([])
@@ -204,7 +220,30 @@ const pagedContacts = computed(() => {
 
 function contactOptionLabel(email: string): string { return externalContactOptions.value.find((item) => item.email.toLowerCase() === email.toLowerCase())?.label || email }
 
-function openContactDialog(item?: ContactPersonConfig) {
+function openPasswordReveal() {
+  revealCredential.value = ''
+  passwordRevealVisible.value = true
+}
+
+async function revealPasswords() {
+  if (!settings.value || !revealCredential.value) return ElMessage.warning('请输入当前 Redmine 密码或 API Key')
+  revealingPasswords.value = true
+  try {
+    const passwords = await revealMailPasswords(revealCredential.value)
+    settings.value.user_internal.smtp_password = passwords.internal_password
+    settings.value.user_external.smtp_password = passwords.external_password
+    passwordRevealVisible.value = false
+    revealCredential.value = ''
+    ElMessage.success('邮件密码已显示在密码框中')
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    revealingPasswords.value = false
+  }
+}
+
+function openContactDialog(value?: unknown) {
+  const item = value as ContactPersonConfig | undefined
   editingContactIndex.value = item ? activePeople.value.indexOf(item) : -1
   contactDraft.value = item ? { ...item } : { name: '', email: '' }
   contactDialogVisible.value = true
@@ -229,7 +268,8 @@ function saveContactDraft() {
   contactDialogVisible.value = false
 }
 
-async function removeContact(item: ContactPersonConfig) {
+async function removeContact(value: unknown) {
+  const item = value as ContactPersonConfig
   try {
     await ElMessageBox.confirm(`确认删除联系人“${item.name || item.email}”吗？`, '删除联系人', { type: 'warning' })
   } catch {
@@ -244,7 +284,8 @@ async function removeContact(item: ContactPersonConfig) {
   contactPage.value = Math.min(contactPage.value, lastPage)
 }
 
-function openTemplateDialog(item?: { name: string; emails: string[] }) {
+function openTemplateDialog(value?: unknown) {
+  const item = value as { name: string; emails: string[] } | undefined
   editingTemplateIndex.value = item ? externalTemplates.value.indexOf(item) : -1
   templateDraft.value = item ? { name: item.name, emails: [...item.emails] } : { name: '', emails: [] }
   templateDialogVisible.value = true
@@ -262,7 +303,8 @@ function saveTemplateDraft() {
   templateDialogVisible.value = false
 }
 
-async function removeTemplate(item: { name: string; emails: string[] }) {
+async function removeTemplate(value: unknown) {
+  const item = value as { name: string; emails: string[] }
   try {
     await ElMessageBox.confirm(`确认删除联系人组“${item.name}”吗？`, '删除联系人组', { type: 'warning' })
   } catch {
@@ -279,7 +321,7 @@ async function testAdminExternal() { if (!settings.value) return; testingAdminEx
 async function testInternal() { if (!settings.value) return; testingInternal.value = true; try { await runMailConnectionTest('internal', settings.value.user_internal) } catch (error) { ElMessage.error(errorMessage(error)) } finally { testingInternal.value = false } }
 async function testUser() { if (!settings.value) return; testingUser.value = true; try { await runMailConnectionTest('external', settings.value.user_external) } catch (error) { ElMessage.error(errorMessage(error)) } finally { testingUser.value = false } }
 
-async function loadExternalAccountContacts(showMessage = true) { if (!settings.value) return; const smtpUser = settings.value.user_external.smtp_user.trim(); if (!smtpUser) { externalPeople.value = []; externalTemplates.value = []; if (showMessage) ElMessage.warning('请先填写外网 SMTP 用户名'); return } loadingExternalContacts.value = true; try { const data = await getExternalAccountContacts(smtpUser) as any; externalPeople.value = data.contacts_to_people?.length ? data.contacts_to_people : (data.contacts_to || []).map((email: string) => ({ name: nameFromEmail(email), email })); externalTemplates.value = editableExternalTemplates(data.contact_templates || []); if (showMessage) ElMessage.success('已读取当前外网账号联系人') } catch (error) { ElMessage.error(errorMessage(error)) } finally { loadingExternalContacts.value = false } }
+async function loadExternalAccountContacts(showMessage = true) { if (!settings.value) return; const smtpUser = settings.value.user_external.smtp_user.trim(); if (!smtpUser) { externalPeople.value = []; externalTemplates.value = []; if (showMessage) ElMessage.warning('请先填写外网 SMTP 用户名'); return } loadingExternalContacts.value = true; try { const data = await getExternalAccountContacts(smtpUser); externalPeople.value = data.contacts_to_people?.length ? data.contacts_to_people : (data.contacts_to || []).map((email: string) => ({ name: nameFromEmail(email), email })); externalTemplates.value = editableExternalTemplates(data.contact_templates || []); if (showMessage) ElMessage.success('已读取当前外网账号联系人') } catch (error) { ElMessage.error(errorMessage(error)) } finally { loadingExternalContacts.value = false } }
 async function handleExternalSmtpUserChange() { await loadExternalAccountContacts(false) }
 
 async function load() { loading.value = true; try { settings.value = await getMailSettings(); internalPeople.value = settings.value.admin.internal_contacts.contacts_people?.length ? settings.value.admin.internal_contacts.contacts_people : settings.value.admin.internal_contacts.contacts_to.map((email) => ({ name: nameFromEmail(email), email })); externalPeople.value = settings.value.user_external.contacts_to_people?.length ? settings.value.user_external.contacts_to_people : settings.value.user_external.contacts_to.map((email) => ({ name: nameFromEmail(email), email })); externalTemplates.value = editableExternalTemplates(settings.value.user_external.contact_templates) } catch (error) { ElMessage.error(errorMessage(error)) } finally { loading.value = false } }

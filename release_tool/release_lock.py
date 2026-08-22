@@ -74,6 +74,17 @@ def release_publish_lock(lock_key: str, owner: str) -> None:
         conn.execute("DELETE FROM publish_locks WHERE lock_key = ? AND owner = ?", (lock_key, owner))
 
 
+def renew_publish_lock(lock_key: str, owner: str, ttl_seconds: float) -> bool:
+    now = time.time()
+    with db() as conn:
+        _ensure_table(conn)
+        cursor = conn.execute(
+            "UPDATE publish_locks SET expires_at = ? WHERE lock_key = ? AND owner = ?",
+            (now + ttl_seconds, lock_key, owner),
+        )
+        return cursor.rowcount == 1
+
+
 @contextmanager
 def acquire_publish_lock(
     lock_key: str,
@@ -98,7 +109,27 @@ def acquire_publish_lock(
             raise PublishLockTimeout("当前项目版本正在发布中，请稍后再试")
         time.sleep(max(0.01, min(poll_seconds, deadline - time.monotonic())))
 
+    stop_heartbeat = threading.Event()
+    lease_lost = threading.Event()
+
+    def heartbeat() -> None:
+        interval = max(0.1, min(ttl / 3, 30.0))
+        while not stop_heartbeat.wait(interval):
+            try:
+                if not renew_publish_lock(normalized_key, actual_owner, ttl):
+                    lease_lost.set()
+                    return
+            except Exception:
+                lease_lost.set()
+                return
+
+    heartbeat_thread = threading.Thread(target=heartbeat, name="release-lock-heartbeat", daemon=True)
+    heartbeat_thread.start()
     try:
         yield actual_owner
+        if lease_lost.is_set():
+            raise PublishLockTimeout("发布锁租约已丢失，请检查本次发布结果后重试")
     finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=2)
         release_publish_lock(normalized_key, actual_owner)

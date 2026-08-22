@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .dependencies import SESSION_COOKIE, SESSION_STORE
-from .session_config import SESSION_COOKIE_SAMESITE, SESSION_COOKIE_SECURE, SESSION_IDLE_SECONDS, SESSION_TTL_SECONDS, session_cookie_max_age
+from .session_config import SESSION_COOKIE_SAMESITE, SESSION_IDLE_SECONDS, SESSION_TTL_SECONDS, session_cookie_max_age, session_cookie_secure
 
 
 def _expired(session: dict, now: float) -> bool:
@@ -37,6 +37,7 @@ def register_session_guard(app: FastAPI) -> None:
                     response.delete_cookie(SESSION_COOKIE)
                     return response
                 session["last_seen_at"] = now
+                SESSION_STORE.set(sid, session)
                 sid_to_refresh = sid
         response = await call_next(request)
         if sid_to_refresh:
@@ -45,7 +46,7 @@ def register_session_guard(app: FastAPI) -> None:
                 sid_to_refresh,
                 httponly=True,
                 samesite=SESSION_COOKIE_SAMESITE,
-                secure=SESSION_COOKIE_SECURE,
+                secure=session_cookie_secure(),
                 max_age=session_cookie_max_age() if session.get("remember") else None,
             )
         return response

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
@@ -23,6 +24,8 @@ GLOBAL_OWNER = "global"
 USER_OWNER = "user"
 CONTACT_TO = "to"
 CONTACT_CC = "cc"
+_INITIALIZED_DATABASES: set[str] = set()
+_DATABASE_INIT_LOCK = threading.Lock()
 
 
 def config_dir() -> Path:
@@ -37,10 +40,19 @@ def db_path() -> Path:
 
 @contextmanager
 def db() -> Iterable[sqlite3.Connection]:
-    conn = sqlite3.connect(db_path(), timeout=30)
+    database = db_path()
+    conn = sqlite3.connect(database, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
-        _init_db(conn)
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        database_key = str(database.resolve())
+        if database_key not in _INITIALIZED_DATABASES:
+            with _DATABASE_INIT_LOCK:
+                if database_key not in _INITIALIZED_DATABASES:
+                    _init_db(conn)
+                    conn.commit()
+                    _INITIALIZED_DATABASES.add(database_key)
         yield conn
         conn.commit()
     finally:
@@ -149,6 +161,29 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_audit_logs_recent
             ON audit_logs(created_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS server_sessions (
+            sid TEXT PRIMARY KEY,
+            payload TEXT NOT NULL DEFAULT '{}',
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_server_sessions_updated
+            ON server_sessions(updated_at);
+
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            client_key TEXT PRIMARY KEY,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            window_started REAL NOT NULL DEFAULT 0,
+            locked_until REAL NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
         """
     )
     # 旧版本曾把“记住登录”凭据保存为服务器全局配置；升级后立即清除，避免跨客户端复用。
@@ -264,25 +299,6 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 def _delete_settings(conn: sqlite3.Connection, keys: tuple[str, ...]) -> None:
     conn.executemany("DELETE FROM app_settings WHERE key = ?", [(key,) for key in keys])
-
-
-def clear_local_credentials() -> None:
-    with db() as conn:
-        _delete_settings(conn, ("auth_mode", "username", "password", "api_key", "remember"))
-        conn.execute("UPDATE user_internal_email SET smtp_password = '', updated_at = CURRENT_TIMESTAMP")
-        conn.execute("UPDATE user_external_email SET smtp_password = '', updated_at = CURRENT_TIMESTAMP")
-
-    settings_file = config_dir() / "settings.json"
-    if settings_file.exists():
-        try:
-            data = json.loads(settings_file.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-        if isinstance(data, dict):
-            data["remember"] = False
-            data.pop("password", None)
-            data.pop("api_key", None)
-            settings_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def get_email_server_settings(scope: str) -> dict[str, Any]:

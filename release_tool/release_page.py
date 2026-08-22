@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import quote, unquote
 
+from .attachment_policy import AttachmentContent
+
 PRODUCT_LINES = {
     "常规版本 (5X)": {"key": "Regular", "np500": False},
     "Trunking 集群": {"key": "Trunking", "np500": False},
@@ -27,7 +29,7 @@ class ReleaseForm:
     commit: str
     product_line: str
     changelog_items: list[str] = field(default_factory=list)
-    files: list[tuple[str, str, bytes]] = field(default_factory=list)  # name, desc, bytes
+    files: list[tuple[str, str, AttachmentContent]] = field(default_factory=list)
     wiki_title: str | None = None
     replace_attachments: bool = False
 

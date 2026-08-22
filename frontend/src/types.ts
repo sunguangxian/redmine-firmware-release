@@ -86,6 +86,26 @@ export interface MailSettings {
   }
 }
 
+export interface AdminMailSettingsPayload {
+  internal_server: SmtpServerConfig
+  external_server: SmtpServerConfig
+  internal_contacts: ContactConfig
+}
+
+export interface UserInternalMailSettingsPayload {
+  smtp_user: string
+  smtp_password: string
+  smtp_from: string
+  contacts_to: string[]
+  contacts_cc: string[]
+  contact_templates: ContactTemplateConfig[]
+}
+
+export interface UserExternalMailSettingsPayload extends UserInternalMailSettingsPayload {
+  contacts_to_people: ContactPersonConfig[]
+  contacts_cc_people: ContactPersonConfig[]
+}
+
 export interface MetaInfo {
   app_version: string
   product_lines: string[]

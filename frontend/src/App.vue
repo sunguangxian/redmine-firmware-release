@@ -21,7 +21,6 @@
             <span>{{ session.is_admin ? '管理员' : '普通用户' }}</span>
           </div>
           <div class="workspace-header-actions">
-            <el-button class="quiet-action" @click="handleClearCredentials">清除凭据</el-button>
             <el-button class="logout-action" @click="handleLogout">退出</el-button>
           </div>
         </div>
@@ -54,17 +53,18 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { defineAsyncComponent, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import LoginView from './views/LoginView.vue'
-import LegacyMigrationView from './views/LegacyMigrationView.vue'
-import MailSettingsView from './views/MailSettingsView.vue'
-import PublishHistoryView from './views/PublishHistoryView.vue'
-import ReleaseEditView from './views/ReleaseEditView.vue'
-import ReleasePublishView from './views/ReleasePublishView.vue'
-import WikiConfigView from './views/WikiConfigView.vue'
-import { clearLocalCredentials, errorMessage, getMe, getMeta, logout } from './api/http'
+import { errorMessage, getMe, getMeta, logout } from './api/http'
 import type { MetaInfo, SessionInfo } from './types'
+
+const LegacyMigrationView = defineAsyncComponent(() => import('./views/LegacyMigrationView.vue'))
+const MailSettingsView = defineAsyncComponent(() => import('./views/MailSettingsView.vue'))
+const PublishHistoryView = defineAsyncComponent(() => import('./views/PublishHistoryView.vue'))
+const ReleaseEditView = defineAsyncComponent(() => import('./views/ReleaseEditView.vue'))
+const ReleasePublishView = defineAsyncComponent(() => import('./views/ReleasePublishView.vue'))
+const WikiConfigView = defineAsyncComponent(() => import('./views/WikiConfigView.vue'))
 
 const session = ref<SessionInfo | null>(null)
 const checkingSession = ref(true)
@@ -79,12 +79,6 @@ function handleLoggedIn(info: SessionInfo) {
 async function handleLogout() {
   await logout()
   session.value = null
-}
-
-async function handleClearCredentials() {
-  await clearLocalCredentials()
-  session.value = null
-  ElMessage.success('已清除本地保存的登录和邮件密码')
 }
 
 onMounted(async () => {

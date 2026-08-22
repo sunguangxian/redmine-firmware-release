@@ -49,10 +49,17 @@ copy scripts\production.env.example scripts\production.env
 RELEASE_TOOL_HOST=0.0.0.0
 RELEASE_TOOL_PORT=7860
 REDMINE_BASE_URL=http://192.168.1.208:3000
+RELEASE_TOOL_TLS_CERTFILE=D:\Tools\redmine-firmware-release\certs\server.crt
+RELEASE_TOOL_TLS_KEYFILE=D:\Tools\redmine-firmware-release\certs\server.key
+RELEASE_TOOL_ALLOW_INSECURE_HTTP=0
 RELEASE_TOOL_SESSION_TTL_SECONDS=28800
 RELEASE_TOOL_SESSION_IDLE_SECONDS=7200
-RELEASE_TOOL_SESSION_COOKIE_SECURE=0
+RELEASE_TOOL_SESSION_COOKIE_SECURE=1
 RELEASE_TOOL_SESSION_COOKIE_SAMESITE=lax
+RELEASE_TOOL_PROJECT_ACCESS_CACHE_SECONDS=300
+RELEASE_TOOL_LOGIN_RATE_LIMIT=5
+RELEASE_TOOL_LOGIN_RATE_WINDOW_SECONDS=300
+RELEASE_TOOL_MAX_MAIL_ATTACHMENT_MB=50
 ```
 
 说明：
@@ -62,10 +69,17 @@ RELEASE_TOOL_SESSION_COOKIE_SAMESITE=lax
 - `REDMINE_BASE_URL` 是工具连接的 Redmine 地址。
 - `RELEASE_TOOL_SESSION_TTL_SECONDS` 是登录会话最长有效时间，默认 8 小时。
 - `RELEASE_TOOL_SESSION_IDLE_SECONDS` 是空闲超时时间，默认 2 小时。
-- `RELEASE_TOOL_SESSION_COOKIE_SECURE=1` 只适合 HTTPS 访问；纯 HTTP 内网访问时保持 `0`，否则浏览器不会发送 Cookie。
+- 非本机监听默认强制配置 TLS 证书和私钥，避免登录密码、API Key 和 SMTP 密码在局域网明文传输。
+- `RELEASE_TOOL_ALLOW_INSECURE_HTTP=1` 仅用于隔离测试网络的临时兼容，生产环境不要开启。
+- HTTPS 部署必须设置 `RELEASE_TOOL_SESSION_COOKIE_SECURE=1`。
 - `RELEASE_TOOL_SESSION_COOKIE_SAMESITE` 默认 `lax`，一般不需要修改。
+- 普通用户的项目权限默认每 300 秒向 Redmine 重新确认一次。
+- 同一客户端默认 5 次登录失败后锁定 300 秒，避免撞库和触发 Redmine 账号锁定。
+- 邮件附件默认最多 50 MB；发布附件使用磁盘缓冲和流式上传，不整包读入内存。
 
-登录页的“在本机浏览器中保持登录”只会延长当前浏览器的会话 Cookie；Redmine 密码和 API Key 不会保存到服务器磁盘，也不会被其他客户端自动复用。
+服务端会话保存在本地 SQLite，支持多个 worker 共享。Redmine 密码和 API Key 使用 Windows DPAPI 加密后保存，并随会话过期而失效，不会被其他客户端自动复用。请限制 `.redmine-release-tool` 目录的文件访问权限。
+
+邮件设置查询默认不返回 SMTP 密码；用户点击“显示已保存密码”后，必须重新输入当前 Redmine 密码或 API Key 才会临时回填。
 
 ## 4. 首次安装和构建
 
@@ -99,7 +113,7 @@ powershell -ExecutionPolicy Bypass -File scripts\start-production.ps1
 浏览器访问：
 
 ```text
-http://服务器IP:7860
+https://服务器IP:7860
 ```
 
 日志会写入：
@@ -169,7 +183,7 @@ nssm start RedmineReleaseTool
 
 检查 `REDMINE_BASE_URL` 是否正确，服务器是否能访问 Redmine。
 
-如果使用 HTTP 访问，确认 `RELEASE_TOOL_SESSION_COOKIE_SECURE=0`；如果设置为 `1`，浏览器只会在 HTTPS 下发送登录 Cookie。
+确认使用 `https://` 访问，并检查 TLS 证书是否受客户端信任、`RELEASE_TOOL_SESSION_COOKIE_SECURE=1` 是否生效。
 
 ### 登录一段时间后自动退出
 

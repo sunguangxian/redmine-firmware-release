@@ -54,16 +54,6 @@ def _ensure_table(conn) -> None:
         conn.execute("ALTER TABLE release_publish_history ADD COLUMN form_payload TEXT NOT NULL DEFAULT '{}'")
     conn.execute(
         """
-        DROP INDEX IF EXISTS idx_release_publish_history_lookup
-        """
-    )
-    conn.execute(
-        """
-        DROP INDEX IF EXISTS idx_release_publish_history_version_lookup
-        """
-    )
-    conn.execute(
-        """
         CREATE INDEX IF NOT EXISTS idx_release_publish_history_recent_lookup
             ON release_publish_history(project_id, wiki_title, id DESC)
         """
@@ -151,6 +141,26 @@ def update_publish_history(history_id: int, **fields: Any) -> None:
             f"UPDATE release_publish_history SET {', '.join(updates)} WHERE id = ?",
             params,
         )
+
+
+def fail_interrupted_publish_history() -> int:
+    with db() as conn:
+        _ensure_table(conn)
+        cursor = conn.execute(
+            """
+            UPDATE release_publish_history
+            SET release_status = CASE WHEN release_status = 'running' THEN 'failed' ELSE release_status END,
+                file_status = CASE WHEN file_status = 'running' THEN 'failed' ELSE file_status END,
+                wiki_status = CASE WHEN wiki_status = 'running' THEN 'failed' ELSE wiki_status END,
+                index_status = CASE WHEN index_status = 'running' THEN 'failed' ELSE index_status END,
+                mail_status = CASE WHEN mail_status = 'running' THEN 'failed' ELSE mail_status END,
+                error_message = CASE WHEN error_message = '' THEN '服务重启导致操作中断，请检查远端状态后使用恢复操作' ELSE error_message END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE release_status = 'running' OR file_status = 'running' OR wiki_status = 'running'
+               OR index_status = 'running' OR mail_status = 'running'
+            """
+        )
+        return int(cursor.rowcount or 0)
 
 
 def _status_label(status: str) -> str:

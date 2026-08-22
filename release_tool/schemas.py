@@ -71,3 +71,7 @@ class UserInternalMailRequest(BaseModel):
     contacts_to: List[str] = Field(default_factory=list)
     contacts_cc: List[str] = Field(default_factory=list)
     contact_templates: List[ContactTemplateConfig] = Field(default_factory=list)
+
+
+class MailPasswordRevealRequest(BaseModel):
+    credential: str = ""

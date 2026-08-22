@@ -6,9 +6,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from .access_control import require_project_access
-from .attachment_policy import sha256_hex
+from .attachment_policy import AttachmentContent, content_size, sha256_hex, validate_attachment_batch
 from .dependencies import _current_client, _current_session
 from .email_sender import EmailSendError
 from .mail_contact_helpers import mail_scope_label as _mail_scope_label
@@ -24,21 +25,25 @@ def _split_changelog(changelog: str) -> List[str]:
     return [line.strip() for line in (changelog or "").splitlines() if line.strip()]
 
 
-async def _read_preview_files(files: Optional[List[UploadFile]]) -> List[Dict[str, Any]]:
+def _read_preview_files(files: Optional[List[UploadFile]]) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
+    rows: List[Tuple[str, str, AttachmentContent]] = []
     for upload in files or []:
-        content = await upload.read()
-        if upload.filename and content:
-            result.append({"filename": upload.filename, "size": len(content), "sha256": sha256_hex(content)})
+        if upload.filename:
+            upload.file.seek(0)
+            rows.append((upload.filename, "", upload.file))
+            result.append({"filename": upload.filename, "size": content_size(upload.file), "sha256": sha256_hex(upload.file)})
+    validate_attachment_batch(rows)
     return result
 
 
-async def _read_mail_files(files: Optional[List[UploadFile]]) -> List[Tuple[str, str, bytes]]:
-    result: List[Tuple[str, str, bytes]] = []
+def _read_mail_files(files: Optional[List[UploadFile]]) -> List[Tuple[str, str, AttachmentContent]]:
+    result: List[Tuple[str, str, AttachmentContent]] = []
     for upload in files or []:
-        content = await upload.read()
-        if upload.filename and content:
-            result.append((upload.filename, "", content))
+        if upload.filename:
+            upload.file.seek(0)
+            result.append((upload.filename, "", upload.file))
+    validate_attachment_batch(result)
     return result
 
 
@@ -121,7 +126,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 notice_cc_addrs = []
                 mail_scope_label = ""
 
-            preview_files = await _read_preview_files(files)
+            preview_files = await run_in_threadpool(_read_preview_files, files)
             form = ReleaseForm(
                 project_id=project_id,
                 proj_tag=proj_tag_from_project(project_id, edit_title or None),
@@ -134,7 +139,8 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 wiki_title=edit_title or None,
                 replace_attachments=bool(replace_attachments),
             )
-            preview = ReleasePlanner(client).build_plan(
+            preview = await run_in_threadpool(
+                ReleasePlanner(client).build_plan,
                 form,
                 new_files=preview_files,
                 notice_enabled=notice_enabled,
@@ -182,7 +188,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 notice_to_addrs = []
                 notice_cc_addrs = []
                 mail_scope_label = ""
-            preview_files = await _read_preview_files(files)
+            preview_files = await run_in_threadpool(_read_preview_files, files)
             form = ReleaseForm(
                 project_id=project_id,
                 proj_tag=proj_tag_from_project(project_id, edit_title or None),
@@ -195,7 +201,8 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 wiki_title=edit_title or None,
                 replace_attachments=bool(replace_attachments),
             )
-            plan = ReleasePlanner(client).build_plan(
+            plan = await run_in_threadpool(
+                ReleasePlanner(client).build_plan,
                 form,
                 new_files=preview_files,
                 notice_enabled=notice_enabled,
@@ -229,11 +236,12 @@ def register_release_ops_routes(app: FastAPI) -> None:
             scope, to_addrs, cc_addrs = _validate_notice_preflight(
                 session, mail_scope, mail_to, mail_cc, mail_subject, mail_body
             )
-            file_rows = await _read_mail_files(files)
+            file_rows = await run_in_threadpool(_read_mail_files, files)
             logs.append(
                 f"邮件重发预检查通过：{_mail_scope_label(scope)}，收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个"
             )
-            message = _send_release_notice(
+            message = await run_in_threadpool(
+                _send_release_notice,
                 session=session,
                 client=client,
                 project_id=project_id,

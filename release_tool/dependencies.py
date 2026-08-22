@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import time
 from typing import Any, Dict, List
 
 from fastapi import Depends, HTTPException, Request
 
 from .redmine_api import RedmineClient, RedmineError
-from .session_store import InMemorySessionStore
+from .session_store import SessionMapping, SQLiteSessionStore
 from .schemas import LoginResponse
 
 SESSION_COOKIE = "release_tool_session"
-SESSIONS: Dict[str, Dict[str, Any]] = {}
-SESSION_STORE = InMemorySessionStore(SESSIONS)
+SESSION_STORE = SQLiteSessionStore()
+SESSIONS: Dict[str, Dict[str, Any]] = SessionMapping(SESSION_STORE)  # type: ignore[assignment]
 
 
 def _user_key(base_url: str, login: str) -> str:
@@ -28,6 +30,23 @@ def _current_session(request: Request) -> Dict[str, Any]:
     session = SESSION_STORE.get(sid)
     if not session or not session.get("connected"):
         raise _json_error("请先登录 Redmine", 401)
+    request.state.session_sid = sid
+    try:
+        refresh_seconds = max(30, int(os.environ.get("RELEASE_TOOL_PROJECT_ACCESS_CACHE_SECONDS", "300")))
+    except ValueError:
+        refresh_seconds = 300
+    if (
+        not session.get("is_admin")
+        and session.get("base_url")
+        and time.time() - float(session.get("projects_checked_at") or 0) >= refresh_seconds
+    ):
+        client = _client_from_session(session)
+        try:
+            session["projects"] = _visible_projects_for_user(client, session.get("projects", []), False)
+        except RedmineError as exc:
+            raise _json_error(f"暂时无法向 Redmine 复核项目权限：{exc}", 503) from exc
+        session["projects_checked_at"] = time.time()
+        SESSION_STORE.set(sid, session)
     return session
 
 

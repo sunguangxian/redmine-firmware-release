@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from .config_store import (
@@ -21,7 +22,12 @@ from .secret_store import protect_secret
 EXTERNAL_ACCOUNT_OWNER = "external_account"
 
 
-def external_account_key(smtp_user: str) -> str:
+def external_account_key(user_key: str, smtp_user: str) -> str:
+    identity = f"{str(user_key or '').strip()}\0{str(smtp_user or '').strip().lower()}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest() if identity.strip("\0") else ""
+
+
+def _legacy_external_account_key(smtp_user: str) -> str:
     return str(smtp_user or "").strip().lower()
 
 
@@ -98,6 +104,7 @@ def _get_external_people(conn: Any, account_key: str, contact_type: str) -> list
 def _replace_external_account_contact_settings(
     conn: Any,
     *,
+    user_key: str,
     smtp_user: str,
     contacts_to: list[str],
     contacts_cc: list[str],
@@ -105,7 +112,7 @@ def _replace_external_account_contact_settings(
     contacts_cc_people: list[dict[str, Any]] | None = None,
     contact_templates: list[dict[str, Any]] | None = None,
 ) -> None:
-    account_key = external_account_key(smtp_user)
+    account_key = external_account_key(user_key, smtp_user)
     if not account_key:
         return
     _init_external_account_contact_tables(conn)
@@ -136,22 +143,35 @@ def _replace_external_account_contact_settings(
     )
 
 
-def get_external_account_contact_settings(smtp_user: str) -> dict[str, Any]:
-    account_key = external_account_key(smtp_user)
+def get_external_account_contact_settings(user_key: str, smtp_user: str) -> dict[str, Any]:
+    account_key = external_account_key(user_key, smtp_user)
     if not account_key:
         return _empty_contact_settings()
 
+    legacy_key = _legacy_external_account_key(smtp_user)
     with db() as conn:
         _init_external_account_contact_tables(conn)
+        scoped_exists = conn.execute(
+            "SELECT 1 FROM external_account_contact_sets WHERE account_key = ?",
+            (account_key,),
+        ).fetchone() is not None
         to_people = _get_external_people(conn, account_key, CONTACT_TO)
         cc_people = _get_external_people(conn, account_key, CONTACT_CC)
+        if not scoped_exists and not to_people and not cc_people:
+            to_people = _get_external_people(conn, legacy_key, CONTACT_TO)
+            cc_people = _get_external_people(conn, legacy_key, CONTACT_CC)
     contacts_to = [item["email"] for item in to_people] or _get_contacts(EXTERNAL_ACCOUNT_OWNER, account_key, MAIL_SCOPE_EXTERNAL, CONTACT_TO)
     contacts_cc = [item["email"] for item in cc_people] or _get_contacts(EXTERNAL_ACCOUNT_OWNER, account_key, MAIL_SCOPE_EXTERNAL, CONTACT_CC)
+    if not scoped_exists:
+        contacts_to = contacts_to or _get_contacts(EXTERNAL_ACCOUNT_OWNER, legacy_key, MAIL_SCOPE_EXTERNAL, CONTACT_TO)
+        contacts_cc = contacts_cc or _get_contacts(EXTERNAL_ACCOUNT_OWNER, legacy_key, MAIL_SCOPE_EXTERNAL, CONTACT_CC)
     if not to_people:
         to_people = _clean_people(None, contacts_to)
     if not cc_people:
         cc_people = _clean_people(None, contacts_cc)
     templates = _get_contact_templates(EXTERNAL_ACCOUNT_OWNER, account_key, MAIL_SCOPE_EXTERNAL)
+    if not scoped_exists:
+        templates = templates or _get_contact_templates(EXTERNAL_ACCOUNT_OWNER, legacy_key, MAIL_SCOPE_EXTERNAL)
     return {
         "contacts_to": contacts_to,
         "contacts_cc": contacts_cc,
@@ -162,12 +182,16 @@ def get_external_account_contact_settings(smtp_user: str) -> dict[str, Any]:
 
 
 def get_external_account_contacts_for_user(user_key: str, smtp_user: str) -> dict[str, Any]:
-    return get_external_account_contact_settings(smtp_user)
+    settings = get_user_external_email_settings(user_key)
+    configured_user = str(settings.get("smtp_user", "")).strip()
+    if not configured_user or configured_user.lower() != str(smtp_user or "").strip().lower():
+        return _empty_contact_settings()
+    return get_external_account_contact_settings(user_key, configured_user)
 
 
 def get_user_external_email_account_settings(user_key: str) -> dict[str, Any]:
     settings = get_user_external_email_settings(user_key)
-    contacts = get_external_account_contact_settings(settings.get("smtp_user", ""))
+    contacts = get_external_account_contact_settings(user_key, settings.get("smtp_user", ""))
     return {**settings, **contacts}
 
 
@@ -200,6 +224,7 @@ def store_user_external_email_account_settings(
         )
         _replace_external_account_contact_settings(
             conn,
+            user_key=user_key,
             smtp_user=smtp_user,
             contacts_to=contacts_to,
             contacts_cc=contacts_cc,

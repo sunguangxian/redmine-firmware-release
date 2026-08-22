@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from .api_app import app as app
+from .api_app import create_base_app
 from .audit_api import register_audit_routes
 from .auth_api import register_auth_routes
 from .health_api import register_health_routes
@@ -21,7 +22,7 @@ from .session_guard import register_session_guard
 from .wiki_config_api import register_wiki_config_routes
 
 
-def move_frontend_routes_to_end() -> None:
+def move_frontend_routes_to_end(app) -> None:
     normal_routes = []
     frontend_routes = []
     for route in app.router.routes:
@@ -35,9 +36,7 @@ def move_frontend_routes_to_end() -> None:
 
 
 def create_app():
-    if getattr(app.state, "release_tool_initialized", False):
-        return app
-    app.state.release_tool_initialized = True
+    app = create_base_app()
 
     register_auth_routes(app)
     register_audit_routes(app)
@@ -53,7 +52,7 @@ def create_app():
     register_release_ops_routes(app)
     register_release_publish_routes(app)
     register_wiki_config_routes(app)
-    move_frontend_routes_to_end()
+    move_frontend_routes_to_end(app)
     return app
 
 
@@ -65,4 +64,21 @@ def main() -> None:
 
     host = os.environ.get("RELEASE_TOOL_HOST", "127.0.0.1")
     port = int(os.environ.get("RELEASE_TOOL_PORT", "7860"))
-    uvicorn.run("release_tool.app_factory:app", host=host, port=port, reload=False)
+    certfile = os.environ.get("RELEASE_TOOL_TLS_CERTFILE", "").strip()
+    keyfile = os.environ.get("RELEASE_TOOL_TLS_KEYFILE", "").strip()
+    allow_insecure = os.environ.get("RELEASE_TOOL_ALLOW_INSECURE_HTTP", "").strip().lower() in {"1", "true", "yes", "on"}
+    is_loopback = host.strip().lower() in {"127.0.0.1", "localhost", "::1"}
+    if bool(certfile) != bool(keyfile):
+        raise RuntimeError("HTTPS 配置不完整：TLS 证书和私钥必须同时配置")
+    if certfile and (not Path(certfile).is_file() or not Path(keyfile).is_file()):
+        raise RuntimeError("HTTPS 配置无效：TLS 证书或私钥文件不存在")
+    if not is_loopback and not certfile and not allow_insecure:
+        raise RuntimeError("拒绝在非本机地址启用明文 HTTP；请配置 TLS 证书，或显式设置 RELEASE_TOOL_ALLOW_INSECURE_HTTP=1")
+    uvicorn.run(
+        "release_tool.app_factory:app",
+        host=host,
+        port=port,
+        reload=False,
+        ssl_certfile=certfile or None,
+        ssl_keyfile=keyfile or None,
+    )

@@ -5,8 +5,13 @@ from release_tool.app_factory import app, create_app
 
 class AppFactoryTest(unittest.TestCase):
     def test_create_app_is_idempotent(self):
-        self.assertIs(create_app(), app)
-        self.assertIs(create_app(), app)
+        first = create_app()
+        second = create_app()
+        self.assertIsNot(first, second)
+        self.assertEqual(
+            {getattr(route, "path", "") for route in first.router.routes},
+            {getattr(route, "path", "") for route in second.router.routes},
+        )
 
     def test_key_api_routes_are_registered(self):
         paths = {getattr(route, "path", "") for route in app.router.routes}
@@ -27,6 +32,7 @@ class AppFactoryTest(unittest.TestCase):
         }
 
         self.assertTrue(expected.issubset(paths), expected - paths)
+        self.assertNotIn("/api/auth/clear-local-credentials", paths)
 
 
 if __name__ == "__main__":

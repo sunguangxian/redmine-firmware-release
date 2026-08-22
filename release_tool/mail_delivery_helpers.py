@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 from urllib.parse import quote
 
+from .attachment_policy import AttachmentContent
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
     MAIL_SCOPE_INTERNAL,
@@ -113,7 +114,7 @@ def send_release_notice(
     project_id: str,
     wiki_title: str,
     version_name: str = "",
-    file_rows: List[Tuple[str, str, bytes]],
+    file_rows: List[Tuple[str, str, AttachmentContent]],
     mail_scope: str,
     mail_to: List[str],
     mail_cc: List[str],

@@ -6,7 +6,7 @@ import re
 from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
-from .attachment_policy import sha256_hex, validate_attachment_batch
+from .attachment_policy import AttachmentContent, content_size, sha256_hex, validate_attachment_batch
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
 from .release_lock import PublishLockTimeout, acquire_publish_lock
@@ -338,7 +338,7 @@ class ReleasePublisher:
             return
         self._log(logs, "发布预检查：校验附件大小并生成 SHA256")
         validate_attachment_batch(form.files)
-        files: list[tuple[str, str, bytes]] = []
+        files: list[tuple[str, str, AttachmentContent]] = []
         for filename, description, content in form.files:
             digest = sha256_hex(content)
             desc = (description or "").strip()
@@ -486,7 +486,7 @@ class ReleasePublisher:
         if not form.files:
             self._log(logs, "本次未选择新附件，跳过附件上传")
         for filename, description, content in form.files:
-            if not content:
+            if content_size(content) <= 0:
                 self._log(logs, f"跳过空附件：{filename}")
                 continue
             existing = existing_by_name.get(filename)
@@ -518,7 +518,7 @@ class ReleasePublisher:
         existing: dict,
         filename: str,
         description: str,
-        content: bytes,
+        content: AttachmentContent,
         logs: list[str] | None = None,
     ) -> None:
         new_sha = self._sha_from_description(description) or sha256_hex(content)

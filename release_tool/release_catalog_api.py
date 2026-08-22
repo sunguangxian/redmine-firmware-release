@@ -19,30 +19,10 @@ from .release_page import (
 )
 
 
-def _route_has_method(route: Any, method: str) -> bool:
-    return method.upper() in set(getattr(route, "methods", set()) or set())
-
-
-def _remove_existing_release_catalog_routes(app: FastAPI) -> None:
-    specs = [
-        ("/api/releases", "GET"),
-        ("/api/releases/detail", "GET"),
-        ("/api/projects/{project_id}/release-categories", "GET"),
-    ]
-
-    def should_remove(route: Any) -> bool:
-        path = getattr(route, "path", "")
-        return any(path == target and _route_has_method(route, method) for target, method in specs)
-
-    app.router.routes[:] = [route for route in app.router.routes if not should_remove(route)]
-
-
 def register_release_catalog_routes(app: FastAPI) -> None:
     if getattr(app.state, "release_catalog_routes_registered", False):
         return
     app.state.release_catalog_routes_registered = True
-    _remove_existing_release_catalog_routes(app)
-
     @app.get("/api/projects/{project_id}/release-categories")
     def api_project_release_categories(
         project_id: str,

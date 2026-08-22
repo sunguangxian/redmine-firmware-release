@@ -44,7 +44,7 @@ class DependenciesTest(unittest.TestCase):
         request = Mock()
         request.cookies = {SESSION_COOKIE: "sid"}
 
-        self.assertIs(_current_session(request), session)
+        self.assertEqual(_current_session(request), session)
 
     def test_require_admin_rejects_normal_user(self):
         with self.assertRaises(HTTPException) as ctx:

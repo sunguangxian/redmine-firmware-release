@@ -34,36 +34,10 @@ class WikiModeConvertRequest(BaseModel):
     target_mode: str
 
 
-def _route_has_method(route: Any, method: str) -> bool:
-    return method.upper() in set(getattr(route, "methods", set()) or set())
-
-
-def _remove_existing_wiki_config_routes(app: FastAPI) -> None:
-    specs = [
-        ("/api/wiki-config/templates", "GET"),
-        ("/api/wiki-config/generate", "POST"),
-        ("/api/wiki-config/check", "POST"),
-        ("/api/wiki-config/{project_id}/refresh-preview", "GET"),
-        ("/api/wiki-config/{project_id}/refresh", "POST"),
-        ("/api/wiki-config/{project_id}/convert-preview", "POST"),
-        ("/api/wiki-config/{project_id}/convert", "POST"),
-        ("/api/wiki-config/{project_id}", "GET"),
-        ("/api/wiki-config/{project_id}", "PUT"),
-    ]
-
-    def should_remove(route: Any) -> bool:
-        path = getattr(route, "path", "")
-        return any(path == target and _route_has_method(route, method) for target, method in specs)
-
-    app.router.routes[:] = [route for route in app.router.routes if not should_remove(route)]
-
-
 def register_wiki_config_routes(app: FastAPI) -> None:
     if getattr(app.state, "wiki_config_routes_registered", False):
         return
     app.state.wiki_config_routes_registered = True
-    _remove_existing_wiki_config_routes(app)
-
     @app.get("/api/wiki-config/templates")
     def api_wiki_templates(session: Dict[str, Any] = Depends(_current_session)) -> List[Any]:
         _require_admin(session)

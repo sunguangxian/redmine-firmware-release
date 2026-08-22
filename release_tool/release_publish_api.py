@@ -11,9 +11,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Depends, FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from .access_control import list_visible_history, require_project_access
-from .attachment_policy import sha256_hex
+from .attachment_policy import AttachmentContent, content_size, sha256_hex, validate_attachment_batch
 from .config_store import MAIL_SCOPE_INTERNAL
 from .dependencies import _current_client, _current_session
 from .email_sender import EmailSendError
@@ -26,18 +27,11 @@ from .redmine_api import RedmineClient, RedmineError
 from .release_helpers import invalidate_release_rows, list_release_rows, validate_release_preflight
 from .release_page import ReleaseForm, proj_tag_from_project
 from .release_planner import ReleasePlanner
-from .release_publish_history import create_publish_history, get_publish_history, list_publish_history, update_publish_history
+from .release_publish_history import create_publish_history, fail_interrupted_publish_history, get_publish_history, list_publish_history, update_publish_history
 
 
 class RecoverRequest(BaseModel):
     action: str = "rebuild_index"
-
-
-def _remove_existing_publish_route(app: FastAPI) -> None:
-    app.router.routes[:] = [
-        route for route in app.router.routes
-        if not (getattr(route, "path", "") == "/api/releases/publish" and "POST" in getattr(route, "methods", set()))
-    ]
 
 
 def _mail_status_label(status: str) -> str:
@@ -71,13 +65,21 @@ def _make_publish_progress(history_id: int, logs: List[str]):
     return progress
 
 
-async def _read_upload_files(files: Optional[List[UploadFile]]) -> List[Tuple[str, str, bytes]]:
-    rows: List[Tuple[str, str, bytes]] = []
+def _upload_file_rows(files: Optional[List[UploadFile]]) -> List[Tuple[str, str, AttachmentContent]]:
+    rows: List[Tuple[str, str, AttachmentContent]] = []
     for upload in files or []:
-        content = await upload.read()
-        if upload.filename and content:
-            rows.append((upload.filename, "", content))
+        if upload.filename:
+            upload.file.seek(0)
+            rows.append((upload.filename, "", upload.file))
+    validate_attachment_batch(rows)
     return rows
+
+
+def _plan_file_rows(file_rows: List[Tuple[str, str, AttachmentContent]]) -> List[Dict[str, Any]]:
+    return [
+        {"filename": filename, "size": content_size(content), "sha256": sha256_hex(content)}
+        for filename, _description, content in file_rows
+    ]
 
 
 def _form_payload(
@@ -109,7 +111,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
     if getattr(app.state, "release_publish_routes_registered", False):
         return
     app.state.release_publish_routes_registered = True
-    _remove_existing_publish_route(app)
+    fail_interrupted_publish_history()
 
     @app.post("/api/releases/publish")
     async def api_publish_release(
@@ -135,7 +137,10 @@ def register_release_publish_routes(app: FastAPI) -> None:
         logs: List[str] = []
         action = "编辑版本" if edit_title else "发布新版本"
         items = [line.strip() for line in changelog.splitlines() if line.strip()]
-        file_rows = await _read_upload_files(files)
+        try:
+            file_rows = await run_in_threadpool(_upload_file_rows, files)
+        except RedmineError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc), "logs": [f"附件校验失败：{exc}"]})
         payload = _form_payload(
             project_id=project_id,
             version_name=version_name,
@@ -195,11 +200,9 @@ def register_release_publish_routes(app: FastAPI) -> None:
         )
 
         try:
-            plan_files = [
-                {"filename": filename, "size": len(content), "sha256": sha256_hex(content)}
-                for filename, _desc, content in file_rows
-            ]
-            plan = ReleasePlanner(client).build_plan(
+            plan_files = await run_in_threadpool(_plan_file_rows, file_rows)
+            plan = await run_in_threadpool(
+                ReleasePlanner(client).build_plan,
                 form,
                 new_files=plan_files,
                 notice_enabled=notice_enabled,
@@ -208,7 +211,8 @@ def register_release_publish_routes(app: FastAPI) -> None:
                 mail_cc_count=len(notice_cc_addrs),
                 logs=logs,
             )
-            title = ReleasePublisher(client).publish(form, logs, progress=progress, plan=plan)
+            update_publish_history(history_id, form_payload={**payload, "plan": plan}, logs=logs)
+            title = await run_in_threadpool(ReleasePublisher(client).publish, form, logs, progress, plan)
             invalidate_release_rows(project_id)
             update_publish_history(
                 history_id,
@@ -229,7 +233,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
                 mail_status = "running"
                 update_publish_history(history_id, mail_status=mail_status, logs=logs)
                 logs.append(f"邮件通知已启用：{_mail_scope_label(notice_scope)}，收件人 {len(notice_to_addrs)} 个，抄送 {len(notice_cc_addrs)} 个")
-                notice_message = _send_release_notice(session=session, client=client, project_id=project_id, wiki_title=title, version_name=version_name.strip(), file_rows=file_rows, mail_scope=notice_scope, mail_to=notice_to_addrs, mail_cc=notice_cc_addrs, mail_subject=mail_subject, mail_body=mail_body)
+                notice_message = await run_in_threadpool(_send_release_notice, session=session, client=client, project_id=project_id, wiki_title=title, version_name=version_name.strip(), file_rows=file_rows, mail_scope=notice_scope, mail_to=notice_to_addrs, mail_cc=notice_cc_addrs, mail_subject=mail_subject, mail_body=mail_body)
                 mail_status = "success"
                 notice_message = f"邮件发送：成功，{notice_message}"
                 logs.append(notice_message)
@@ -242,10 +246,10 @@ def register_release_publish_routes(app: FastAPI) -> None:
         else:
             logs.append("邮件通知未启用，跳过发送")
 
-        releases = list_release_rows(client, project_id, product_line.strip())
+        releases = await run_in_threadpool(list_release_rows, client, project_id, product_line.strip())
         logs.append(f"刷新版本列表完成：返回 {len(releases)} 条")
         logs.append(f"{action}完成：{title}")
-        update_publish_history(history_id, wiki_title=title, form_payload={**payload, "edit_title": title}, mail_status=mail_status, logs=logs)
+        update_publish_history(history_id, wiki_title=title, form_payload={**payload, "edit_title": title, "plan": plan}, mail_status=mail_status, logs=logs)
         file_status = "success" if file_rows else "skipped"
         return {
             "ok": True,

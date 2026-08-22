@@ -8,8 +8,8 @@
 
 from __future__ import annotations
 
-import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI
@@ -19,35 +19,18 @@ from .audit_log import record_audit
 from .dependencies import _client_from_session, _current_client, _current_session, _require_admin
 from .legacy_changelog_migrator import LegacyChangelogMigrator
 from .legacy_job_helpers import append_legacy_log, get_legacy_job_snapshot, set_legacy_job_state
-from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job
+from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job, fail_interrupted_legacy_jobs
 from .redmine_api import RedmineClient
 from .release_helpers import invalidate_release_rows
 from .release_page import extract_inline_release_block
+
+_LEGACY_JOB_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="legacy-migration")
 
 
 class LegacyMigrationRequestV2(BaseModel):
     project_id: str
     entry_pages: List[str] = Field(default_factory=lambda: ["Changelog"])
     release_detail_mode: str = "auto"
-
-
-def _route_has_method(route: Any, method: str) -> bool:
-    return method.upper() in set(getattr(route, "methods", set()) or set())
-
-
-def _remove_existing_legacy_routes(app: FastAPI) -> None:
-    specs = [
-        ("/api/legacy-migration/preview", "POST"),
-        ("/api/legacy-migration/execute", "POST"),
-        ("/api/legacy-migration/execute-job", "POST"),
-        ("/api/legacy-migration/jobs/{job_id}", "GET"),
-    ]
-
-    def should_remove(route: Any) -> bool:
-        path = getattr(route, "path", "")
-        return any(path == target and _route_has_method(route, method) for target, method in specs)
-
-    app.router.routes[:] = [route for route in app.router.routes if not should_remove(route)]
 
 
 def _make_migrator(
@@ -136,7 +119,7 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
     if getattr(app.state, "legacy_migration_routes_registered", False):
         return
     app.state.legacy_migration_routes_registered = True
-    _remove_existing_legacy_routes(app)
+    fail_interrupted_legacy_jobs()
 
     @app.post("/api/legacy-migration/preview")
     def api_preview_legacy_migration(
@@ -182,12 +165,7 @@ def register_legacy_migration_routes(app: FastAPI) -> None:
                 "release_detail_mode": payload.release_detail_mode,
             },
         )
-        thread = threading.Thread(
-            target=_run_legacy_migration_job,
-            args=(job_id, payload, dict(session)),
-            daemon=True,
-        )
-        thread.start()
+        _LEGACY_JOB_EXECUTOR.submit(_run_legacy_migration_job, job_id, payload, dict(session))
         return get_legacy_job_snapshot(job_id)
 
     @app.get("/api/legacy-migration/jobs/{job_id}")

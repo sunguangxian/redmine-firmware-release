@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hmac
+import time
 from typing import Any, Dict
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, Query, Request
 
 from .audit_log import record_audit
 from .config_store import (
@@ -17,7 +19,7 @@ from .config_store import (
     store_internal_contact_settings,
     store_user_internal_email_settings,
 )
-from .dependencies import _current_session, _require_admin
+from .dependencies import SESSION_STORE, _current_session, _json_error, _require_admin
 from .external_account_contacts import (
     get_external_account_contacts_for_user,
     get_user_external_email_account_settings,
@@ -25,36 +27,14 @@ from .external_account_contacts import (
 )
 from .internal_contact_people import clean_people, get_internal_contact_people, store_internal_contact_people
 from .mail_contact_helpers import contacts_for_scope, normalize_mail_scope
-from .schemas import AdminMailSettingsRequest, UserExternalMailRequest, UserInternalMailRequest
-
-
-def _route_has_method(route: Any, method: str) -> bool:
-    return method.upper() in set(getattr(route, "methods", set()) or set())
-
-
-def _remove_existing_mail_settings_routes(app: FastAPI) -> None:
-    specs = [
-        ("/api/mail/settings", "GET"),
-        ("/api/mail/admin-settings", "PUT"),
-        ("/api/mail/user-internal-settings", "PUT"),
-        ("/api/mail/user-external-settings", "PUT"),
-        ("/api/mail/contacts", "GET"),
-        ("/api/mail/external-account-contacts", "GET"),
-    ]
-
-    def should_remove(route: Any) -> bool:
-        path = getattr(route, "path", "")
-        return any(path == target and _route_has_method(route, method) for target, method in specs)
-
-    app.router.routes[:] = [route for route in app.router.routes if not should_remove(route)]
+from .redmine_api import RedmineClient, RedmineError
+from .schemas import AdminMailSettingsRequest, MailPasswordRevealRequest, UserExternalMailRequest, UserInternalMailRequest
 
 
 def register_mail_settings_routes(app: FastAPI) -> None:
     if getattr(app.state, "mail_settings_routes_registered", False):
         return
     app.state.mail_settings_routes_registered = True
-    _remove_existing_mail_settings_routes(app)
-
     @app.get("/api/mail/settings")
     def api_mail_settings(session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
         internal_server = get_email_server_settings(MAIL_SCOPE_INTERNAL)
@@ -90,6 +70,51 @@ def register_mail_settings_routes(app: FastAPI) -> None:
                 "contacts_cc_people": user_external.get("contacts_cc_people", []),
                 "contact_templates": user_external["contact_templates"],
             },
+        }
+
+    @app.post("/api/mail/passwords/reveal")
+    def api_reveal_mail_passwords(
+        payload: MailPasswordRevealRequest,
+        request: Request,
+        session: Dict[str, Any] = Depends(_current_session),
+    ) -> Dict[str, str]:
+        credential = payload.credential
+        if not credential:
+            raise _json_error("请输入当前 Redmine 密码或 API Key")
+        now = time.time()
+        if float(session.get("mail_reveal_locked_until") or 0) > now:
+            raise _json_error("身份验证失败次数过多，请稍后再试", 429)
+        auth_mode = session.get("auth_mode", "password")
+        expected_credential = session.get("api_key", "") if auth_mode == "api_key" else session.get("password", "")
+        if not hmac.compare_digest(str(credential), str(expected_credential)):
+            failures = int(session.get("mail_reveal_failures") or 0) + 1
+            session["mail_reveal_failures"] = failures
+            if failures >= 3:
+                session["mail_reveal_locked_until"] = now + 300
+            session_sid = getattr(request.state, "session_sid", "")
+            if session_sid:
+                SESSION_STORE.set(session_sid, session)
+            raise _json_error("身份验证失败", 401)
+        client = RedmineClient(
+            session.get("base_url", ""),
+            session.get("username", ""),
+            credential if auth_mode != "api_key" else "",
+            api_key=credential if auth_mode == "api_key" else "",
+            auth_mode=auth_mode,
+        )
+        try:
+            client.test_login()
+        except RedmineError as exc:
+            raise _json_error(f"身份验证失败：{exc}", 401) from exc
+        session.pop("mail_reveal_failures", None)
+        session.pop("mail_reveal_locked_until", None)
+        session_sid = getattr(request.state, "session_sid", "")
+        if session_sid:
+            SESSION_STORE.set(session_sid, session)
+        user_key = session.get("user_key", "")
+        return {
+            "internal_password": get_user_internal_email_settings(user_key).get("smtp_password", ""),
+            "external_password": get_user_external_email_account_settings(user_key).get("smtp_password", ""),
         }
 
     @app.put("/api/mail/admin-settings")

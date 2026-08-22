@@ -75,12 +75,14 @@ async function loadHistory() {
   }
 }
 
-function statusLabel(row: PublishHistoryItem, field: 'release_status' | 'file_status' | 'wiki_status' | 'index_status' | 'mail_status'): string {
+function statusLabel(value: unknown, field: 'release_status' | 'file_status' | 'wiki_status' | 'index_status' | 'mail_status'): string {
+  const row = value as PublishHistoryItem
   const record = row as unknown as Record<string, unknown>
   return String(record[`${field}_label`] || record[field] || '')
 }
 
-async function recover(row: PublishHistoryItem, action: 'rebuild_index' | 'continue') {
+async function recover(value: unknown, action: 'rebuild_index' | 'continue') {
+  const row = value as PublishHistoryItem
   recoveringId.value = row.id
   recoveringAction.value = action
   logs.value = []

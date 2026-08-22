@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { ContactTemplateConfig, LegacyMigrationJob, LegacyMigrationPreview, LegacyMigrationResult, MailSettings, MetaInfo, ProjectReleaseCategories, ReleaseDetail, ReleaseSummary, SessionInfo, WikiModeConvertPreview, WikiModeConvertResult, WikiRefreshPreview, WikiRefreshResult } from '../types'
+import type { AdminMailSettingsPayload, ContactPersonConfig, ContactTemplateConfig, LegacyMigrationJob, LegacyMigrationPreview, LegacyMigrationResult, MailSettings, MetaInfo, ProjectReleaseCategories, ReleaseDetail, ReleaseSummary, SessionInfo, UserExternalMailSettingsPayload, UserInternalMailSettingsPayload, WikiModeConvertPreview, WikiModeConvertResult, WikiRefreshPreview, WikiRefreshResult } from '../types'
 
 const http = axios.create({ baseURL: '', withCredentials: true })
 
@@ -10,7 +10,7 @@ export type RecoverAction = { action: 'rebuild_index' | 'continue'; label: strin
 export type PublishHistoryItem = { id: number; project_id: string; wiki_title: string; version_name: string; action: string; release_status: string; file_status: string; wiki_status: string; index_status: string; mail_status: string; release_status_label?: string; file_status_label?: string; wiki_status_label?: string; index_status_label?: string; mail_status_label?: string; status_summary?: string; recover_actions?: RecoverAction[]; can_rebuild_index?: boolean; can_continue?: boolean; error_message: string; logs: string[]; created_at: string; updated_at: string }
 export type LegacyReleaseDetailMode = 'auto' | 'inline' | 'page'
 export type LegacyMigrationPayload = { project_id: string; entry_pages: string[]; release_detail_mode?: LegacyReleaseDetailMode }
-export type MailContactSettings = { contacts_to: string[]; contacts_cc: string[]; contact_templates: ContactTemplateConfig[] }
+export type MailContactSettings = { contacts_to: string[]; contacts_cc: string[]; contacts_to_people?: ContactPersonConfig[]; contacts_cc_people?: ContactPersonConfig[]; contact_templates: ContactTemplateConfig[] }
 
 export function errorMessage(error: unknown): string { if (axios.isAxiosError(error)) { const detail = error.response?.data?.detail; if (typeof detail === 'string') return detail; if (error.response?.status === 401) return '登录已过期，请重新登录'; if (error.response?.status === 403) return '当前账号无权执行该操作'; return error.message } return error instanceof Error ? error.message : String(error) }
 export function errorLogs(error: unknown): string[] { if (!axios.isAxiosError(error)) return []; const logs = error.response?.data?.logs; return Array.isArray(logs) ? logs.filter((item) => typeof item === 'string') : [] }
@@ -18,7 +18,6 @@ export async function getMeta(): Promise<MetaInfo> { const { data } = await http
 export async function login(payload: { auth_mode: string; username: string; password: string; api_key: string; remember: boolean }): Promise<SessionInfo> { const { data } = await http.post('/api/auth/login', payload); return data }
 export async function getMe(): Promise<SessionInfo> { const { data } = await http.get('/api/auth/me'); return data }
 export async function logout(): Promise<void> { await http.post('/api/auth/logout') }
-export async function clearLocalCredentials(): Promise<void> { await http.post('/api/auth/clear-local-credentials') }
 export async function listReleases(projectId: string, productLine = ''): Promise<ReleaseSummary[]> { const { data } = await http.get('/api/releases', { params: { project_id: projectId, product_line: productLine } }); return data }
 export async function getProjectReleaseCategories(projectId: string): Promise<ProjectReleaseCategories> { const { data } = await http.get(`/api/projects/${encodeURIComponent(projectId)}/release-categories`); return data }
 export async function getReleaseDetail(projectId: string, wikiTitle: string): Promise<ReleaseDetail> { const { data } = await http.get('/api/releases/detail', { params: { project_id: projectId, wiki_title: wikiTitle } }); return data }
@@ -27,9 +26,10 @@ export async function planRelease(form: FormData): Promise<ReleasePlan> { const 
 export async function publishRelease(form: FormData): Promise<PublishReleaseResult> { const { data } = await http.post('/api/releases/publish', form, { headers: { 'Content-Type': 'multipart/form-data' } }); return data }
 export async function sendReleaseNotice(form: FormData): Promise<{ ok: boolean; message: string; logs: string[] }> { const { data } = await http.post('/api/releases/notice/send', form, { headers: { 'Content-Type': 'multipart/form-data' } }); return data }
 export async function getMailSettings(): Promise<MailSettings> { const { data } = await http.get('/api/mail/settings'); return data }
-export async function saveAdminMailSettings(payload: unknown): Promise<void> { await http.put('/api/mail/admin-settings', payload) }
-export async function saveUserInternalMailSettings(payload: unknown): Promise<void> { await http.put('/api/mail/user-internal-settings', payload) }
-export async function saveUserExternalMailSettings(payload: unknown): Promise<void> { await http.put('/api/mail/user-external-settings', payload) }
+export async function revealMailPasswords(credential: string): Promise<{ internal_password: string; external_password: string }> { const { data } = await http.post('/api/mail/passwords/reveal', { credential }); return data }
+export async function saveAdminMailSettings(payload: AdminMailSettingsPayload): Promise<void> { await http.put('/api/mail/admin-settings', payload) }
+export async function saveUserInternalMailSettings(payload: UserInternalMailSettingsPayload): Promise<void> { await http.put('/api/mail/user-internal-settings', payload) }
+export async function saveUserExternalMailSettings(payload: UserExternalMailSettingsPayload): Promise<void> { await http.put('/api/mail/user-external-settings', payload) }
 export async function testMailConnection(payload: { scope: string; smtp_user: string; smtp_password: string; smtp_from: string }): Promise<{ ok: boolean; message: string }> { const { data } = await http.post('/api/mail/test-connection', payload); return data }
 export async function testAdminMailServer(payload: { scope: string; smtp_host: string; smtp_port: number; smtp_from: string; use_tls: boolean }): Promise<{ ok: boolean; message: string }> { const { data } = await http.post('/api/mail/admin-test-connection', payload); return data }
 export async function getMailHistory(params: { project_id?: string; wiki_title?: string; version_name?: string; limit?: number }): Promise<{ ok: boolean; items: MailHistoryItem[] }> { const { data } = await http.get('/api/mail/history', { params }); return data }

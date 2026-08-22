@@ -24,6 +24,10 @@ SESSION_IDLE_SECONDS = _int_env("RELEASE_TOOL_SESSION_IDLE_SECONDS", 7200)  # é»
 SESSION_COOKIE_SECURE = _bool_env("RELEASE_TOOL_SESSION_COOKIE_SECURE", False)
 
 
+def session_cookie_secure() -> bool:
+    return SESSION_COOKIE_SECURE or bool(os.environ.get("RELEASE_TOOL_TLS_CERTFILE", "").strip())
+
+
 def _samesite_env(name: str, default: str = "lax") -> str:
     value = (os.environ.get(name, default) or default).strip().lower()
     return value if value in {"lax", "strict", "none"} else default

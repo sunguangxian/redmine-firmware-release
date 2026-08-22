@@ -179,13 +179,13 @@ function applyJob(job: LegacyMigrationJob) {
   currentJobId.value = job.job_id
   currentJobStatus.value = job.status
   progressLogs.value = job.logs || []
-  if (job.status === 'succeeded' && job.result) {
+  if (job.status === 'succeeded' && job.result.preview) {
     previewData.value = job.result.preview
-    message.value = job.result.message
+    message.value = job.result.message || '旧项目升级完成'
     ok.value = true
     executing.value = false
     stopPolling()
-    ElMessage.success(job.result.message)
+    ElMessage.success(message.value)
   } else if (job.status === 'failed') {
     message.value = job.error || '旧项目升级失败'
     ok.value = false

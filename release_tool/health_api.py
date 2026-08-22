@@ -17,7 +17,7 @@ from .config_store import (
     get_email_server_settings,
     get_internal_contact_settings,
 )
-from .dependencies import _current_client, _current_session, _json_error
+from .dependencies import _current_client, _current_session, _json_error, _require_admin
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
 from .release_helpers import invalidate_release_rows
@@ -30,18 +30,15 @@ def register_health_routes(app: FastAPI) -> None:
 
     @app.get("/api/health")
     def api_health() -> Dict[str, Any]:
-        database = db_path()
         return {
             "ok": True,
             "service": "redmine-firmware-release",
-            "database": str(database),
-            "database_exists": database.exists(),
             "frontend_dist_exists": (Path(__file__).resolve().parent.parent / "frontend" / "dist" / "index.html").exists(),
-            "redmine_base_url": os.environ.get("REDMINE_BASE_URL", ""),
         }
 
     @app.get("/api/health/db")
-    def api_health_db() -> Dict[str, Any]:
+    def api_health_db(session: Dict[str, Any] = Depends(_current_session)) -> Dict[str, Any]:
+        _require_admin(session)
         database = db_path()
         try:
             with db() as conn:
