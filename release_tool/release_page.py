@@ -20,6 +20,39 @@ INLINE_BEGIN_PREFIX = "<!-- RELEASE_INLINE_BEGIN:"
 INLINE_END_PREFIX = "<!-- RELEASE_INLINE_END:"
 
 
+def _escape_markdown_text(value: str) -> str:
+    return (value or "").replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _escape_table_cell(value: str) -> str:
+    return _escape_markdown_text(value).replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
+
+
+def _unescape_markdown_text(value: str) -> str:
+    return re.sub(r"\\([\\\[\]|])", r"\1", value or "")
+
+
+def _split_table_row(line: str) -> list[str]:
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in line.strip().strip("|"):
+        if escaped:
+            current.extend(("\\", char))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
+
+
 @dataclass
 class ReleaseForm:
     project_id: str
@@ -455,8 +488,11 @@ def _release_body_markdown(
             continue
         desc = item.get("description") or ""
         url = item.get("url")
-        cell = f"[{name}]({url})" if url else name
-        rows.append(f"| {cell} | {desc} |")
+        escaped_name = _escape_table_cell(name)
+        escaped_desc = _escape_table_cell(desc)
+        safe_url = (url or "").replace("(", "%28").replace(")", "%29")
+        cell = f"[{escaped_name}]({safe_url})" if safe_url else escaped_name
+        rows.append(f"| {cell} | {escaped_desc} |")
     if not rows:
         rows.append("| （无） | |")
     internal_separator = "" if not heading else "\n--------------\n"
@@ -487,7 +523,7 @@ def parse_release_files(text: str) -> list[dict[str, str | None]]:
         line = raw_line.strip()
         if not line.startswith("|") or "---" in line or "文件名" in line:
             continue
-        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        cells = _split_table_row(line)
         if not cells:
             continue
         file_cell = cells[0]
@@ -495,13 +531,15 @@ def parse_release_files(text: str) -> list[dict[str, str | None]]:
             continue
         desc = cells[1] if len(cells) > 1 else ""
 
-        link_match = re.match(r"\[([^\]]+)\]\(([^)]+)\)", file_cell)
+        link_match = re.fullmatch(r"\[((?:\\.|[^\]])+)\]\((.*)\)", file_cell)
         if link_match:
-            filename = link_match.group(1).strip()
+            filename = _unescape_markdown_text(link_match.group(1).strip())
             url = link_match.group(2).strip()
         else:
-            filename = file_cell.strip()
+            filename = _unescape_markdown_text(file_cell.strip())
             url = None
+
+        desc = _unescape_markdown_text(desc).replace("<br>", "\n")
 
         if filename:
             files.append({"filename": filename, "description": desc, "url": url})

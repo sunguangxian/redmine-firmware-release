@@ -157,6 +157,16 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         self.assertEqual(client.wiki_puts.count(title), 1)
         self.assertEqual(client.pages[title]["parent"]["title"], "Release_Notes_Regular")
 
+    def test_page_release_list_uses_generated_index_instead_of_detail_pages(self):
+        client = self.seed_page()
+        title = ReleasePublisher(client).publish(form())
+        client.wiki_gets.clear()
+
+        rows = ReleasePublisher(client).list_releases("dp5x")
+
+        self.assertEqual(rows[0]["title"], title)
+        self.assertNotIn(title, client.wiki_gets)
+
     def test_planner_reports_page_and_inline_targets(self):
         inline_client = self.seed_inline()
         inline_plan = ReleasePlanner(inline_client).build_plan(form())

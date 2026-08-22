@@ -34,6 +34,26 @@ class ReleaseHelpersTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "请填写至少一条变更说明"):
             validate_release_preflight("demo", "V1", "2026-07-05", "abc", [])
 
+    def test_validate_release_preflight_rejects_internal_wiki_markers(self):
+        with self.assertRaisesRegex(ValueError, "内部页面标记"):
+            validate_release_preflight(
+                "demo",
+                "V1.0.0 -->",
+                "2026-07-05",
+                "abc",
+                ["item"],
+            )
+
+    def test_validate_release_preflight_rejects_multiline_version(self):
+        with self.assertRaisesRegex(ValueError, "不能换行"):
+            validate_release_preflight(
+                "demo",
+                "V1.0\nmalformed",
+                "2026-07-05",
+                "abc",
+                ["item"],
+            )
+
     def test_list_release_rows_filters_and_limits(self):
         releases = [
             {"wiki_title": "A", "product_line": "5X"},

@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Tuple
 from .publisher import ReleasePublisher
 from .redmine_api import RedmineClient
 
+
+_RESERVED_WIKI_MARKERS = ("<!-- RELEASE_INLINE_BEGIN:", "<!-- RELEASE_INLINE_END:", "<!-- RELEASE_SYNC_BEGIN", "<!-- RELEASE_SYNC_END")
+
 RECENT_RELEASE_LIMIT = 50
 _RELEASE_CACHE: dict[Tuple[str, str], tuple[float, List[Dict[str, Any]]]] = {}
 
@@ -86,3 +89,16 @@ def validate_release_preflight(
         raise ValueError("请填写 Commit")
     if not changelog_items:
         raise ValueError("请填写至少一条变更说明")
+    fields = {
+        "项目标识": project_id,
+        "版本号": version_name,
+        "Commit": commit,
+        "变更说明": "\n".join(changelog_items),
+    }
+    for label, value in fields.items():
+        if any(marker in value for marker in _RESERVED_WIKI_MARKERS) or "-->" in value:
+            raise ValueError(f"{label}不能包含发布工具内部页面标记")
+        if "\x00" in value:
+            raise ValueError(f"{label}不能包含空字符")
+    if "\r" in version_name or "\n" in version_name or len(version_name.strip()) > 128:
+        raise ValueError("版本号不能换行且长度不能超过 128 个字符")

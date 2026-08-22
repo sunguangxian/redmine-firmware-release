@@ -12,6 +12,7 @@ class FakeRedmineClient:
         self.files: list[dict[str, Any]] = []
         self.uploads: dict[str, bytes] = {}
         self.wiki_puts: list[str] = []
+        self.wiki_gets: list[str] = []
         self.next_version_id = 1
         self.next_file_id = 1
         self.wiki_start_page = "Wiki"
@@ -34,6 +35,7 @@ class FakeRedmineClient:
         return [{"title": title} for title in sorted(self.pages)]
 
     def get_wiki_page(self, project_id: str, title: str, *, include_attachments: bool = False) -> dict[str, Any] | None:
+        self.wiki_gets.append(title)
         page = self.pages.get(title)
         return dict(page) if page else None
 

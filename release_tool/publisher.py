@@ -415,9 +415,9 @@ class ReleasePublisher:
             profile = sync.discover_profile()
         except RedmineError:
             profile = None
+        category_titles = {category.key: category.title for category in getattr(profile, "categories", [])} if profile else {}
         if profile and self._is_inline_profile(profile):
             rows = []
-            category_titles = {category.key: category.title for category in getattr(profile, "categories", [])}
             for item in sync._build_items(profile):
                 rows.append(
                     {
@@ -433,9 +433,26 @@ class ReleasePublisher:
                 )
             rows.sort(key=lambda x: x["date"], reverse=True)
             return rows
+        if profile:
+            indexed_items = sync.build_page_index_items(profile)
+            if indexed_items:
+                rows = [
+                    {
+                        "title": item["page"],
+                        "display_title": item["page"],
+                        "container_page": "",
+                        "block_id": "",
+                        "version": item["ver"],
+                        "date": item["date"],
+                        "product_line": category_titles.get(item.get("cat", ""), ""),
+                        "summary": item.get("summary", ""),
+                    }
+                    for item in indexed_items
+                ]
+                rows.sort(key=lambda x: x["date"], reverse=True)
+                return rows
         pages = self.client.get_wiki_index(project_id)
         releases = []
-        category_titles = {category.key: category.title for category in getattr(profile, "categories", [])} if profile else {}
         for item in pages:
             title = item["title"]
             if not title.startswith("Release_") or "_FW_" not in title:

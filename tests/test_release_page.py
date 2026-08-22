@@ -36,6 +36,34 @@ class ReleasePageTest(unittest.TestCase):
         self.assertEqual(files[0]["url"], "/attachments/download/1/firmware.bin")
         self.assertEqual(files[0]["description"], "SHA256: abc")
 
+    def test_release_file_table_round_trips_markdown_delimiters(self):
+        form = ReleaseForm(
+            project_id="demo",
+            proj_tag="DEMO",
+            version_name="V1.0.0",
+            release_date="2026-07-05",
+            commit="abc123",
+            product_line="Regular",
+            changelog_items=["change"],
+        )
+        text = build_release_markdown(
+            form,
+            1,
+            [
+                {
+                    "filename": "firm[ware]|x.bin",
+                    "description": "first | second",
+                    "url": "/attachments/a(b).bin",
+                }
+            ],
+        )
+
+        files = parse_release_files(text)
+
+        self.assertEqual(files[0]["filename"], "firm[ware]|x.bin")
+        self.assertEqual(files[0]["description"], "first | second")
+        self.assertEqual(files[0]["url"], "/attachments/a%28b%29.bin")
+
 
 if __name__ == "__main__":
     unittest.main()

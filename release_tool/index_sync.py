@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .redmine_api import RELEASE_PAGE_RE, RedmineClient, RedmineError
-from .release_page import parse_inline_releases, proj_tag_from_project
+from .release_page import parse_inline_releases, parse_release_page, proj_tag_from_project
 from .wiki_config import CONFIG_PAGE_TITLE, ConfigCategory, parse_release_wiki_config
 
 SYNC_BEGIN = "<!-- RELEASE_SYNC_BEGIN -->"
@@ -258,10 +258,11 @@ class IndexSync:
                 continue
             text = page.get("text", "")
             tag = proj_tag_from_project(self.project_id, title)
-            ver = self._extract_version(text, tag, title)
-            date = self._extract_date(text, title)
-            commit = self._extract_commit(text)
-            summary = self._extract_summary(text, ver)
+            parsed = parse_release_page(title, text)
+            ver = parsed.get("version_name") or self._extract_version(text, tag, title)
+            date = parsed.get("release_date") or self._extract_date(text, title)
+            commit = parsed.get("commit") or self._extract_commit(text)
+            summary = (parsed.get("changelog", "").splitlines() or [""])[0] or self._extract_summary(text, ver)
             cat = self._categorize(title, text, ver, commit, profile.categories)
             items.append(
                 {
@@ -272,6 +273,32 @@ class IndexSync:
                     "summary": summary,
                 }
             )
+        return items
+
+    def build_page_index_items(self, profile: WikiProfile) -> list[dict[str, Any]]:
+        """Read release-list rows without fetching every release detail page."""
+        containers = (
+            [(category.key, category.list_page) for category in profile.categories]
+            if profile.mode == "multi_list"
+            else [("", profile.main_page)]
+        )
+        pattern = re.compile(
+            r"^-\s+\[\[(?P<page>[^|\]]+)\|(?P<ver>.+?)\s+\((?P<date>\d{4}-\d{2}-\d{2})\)\]\]\s*-\s*(?P<summary>.*)$",
+            re.M,
+        )
+        items: list[dict[str, Any]] = []
+        for category, title in containers:
+            text = self._page_text(title)
+            for match in pattern.finditer(text):
+                items.append(
+                    {
+                        "cat": category,
+                        "ver": match.group("ver").strip(),
+                        "date": match.group("date"),
+                        "page": match.group("page").strip(),
+                        "summary": match.group("summary").strip(),
+                    }
+                )
         return items
 
     def _is_inline_profile(self, profile: WikiProfile) -> bool:
@@ -680,7 +707,7 @@ class IndexSync:
         return "?"
 
     def _extract_date(self, text: str, title: str = "") -> str:
-        m = re.search(r"\*\*[^*:]+:\*\*\s*(\d{4}-\d{2}-\d{2})", text)
+        m = re.search(r"\*\*(?:日期|Date):\*\*\s*(\d{4}-\d{2}-\d{2})", text, re.I)
         if m:
             return m.group(1)
         title_date = re.search(r"_(\d{8})$", title)
