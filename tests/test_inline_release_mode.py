@@ -31,7 +31,21 @@ main_page: Release_Notes
     def test_default_template_uses_inline_mode(self):
         template = build_config_template("single_list", "dp580")
         self.assertIn("release_detail_mode: inline", template)
+        self.assertIn("text_format: common_mark", template)
         self.assertNotIn("release_page_prefix:", template)
+
+    def test_textile_config_is_rejected(self):
+        text = """
+<!-- RELEASE_CONFIG_BEGIN -->
+```yaml
+mode: single_list
+text_format: textile
+main_page: Release_Notes
+```
+<!-- RELEASE_CONFIG_END -->
+"""
+
+        self.assertIsNone(parse_release_wiki_config(text))
 
     def test_inline_ref_round_trip(self):
         ref = inline_ref("Release_Notes", "V1.2.3")

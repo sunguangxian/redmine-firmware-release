@@ -16,6 +16,14 @@ class RedmineError(Exception):
     pass
 
 
+class RedmineNotFound(RedmineError):
+    pass
+
+
+class RedmineConflict(RedmineError):
+    pass
+
+
 VERSION_DESCRIPTION_LIMIT = 255
 RETRY_STATUS_CODES = {429, 502, 503, 504}
 
@@ -95,7 +103,9 @@ class RedmineClient:
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
         method = method.upper()
-        max_attempts = 1 + self._retry_count() if self._should_retry(method, path) else 1
+        wiki_payload = (kwargs.get("json") or {}).get("wiki_page", {})
+        versioned_wiki_put = method == "PUT" and wiki_payload.get("version") is not None
+        max_attempts = 1 + self._retry_count() if self._should_retry(method, path) and not versioned_wiki_put else 1
         last_error: requests.RequestException | None = None
         resp: requests.Response | None = None
         for attempt in range(1, max_attempts + 1):
@@ -122,9 +132,9 @@ class RedmineClient:
         if resp.status_code == 403:
             raise RedmineError(f"权限不足：{path}")
         if resp.status_code == 404:
-            raise RedmineError(f"资源不存在：{path}")
+            raise RedmineNotFound(f"资源不存在：{path}")
         if resp.status_code == 409:
-            raise RedmineError("Wiki 页面已被其他用户修改，请刷新后重试，避免覆盖他人改动")
+            raise RedmineConflict("Wiki 页面已被其他用户修改，请刷新后重试，避免覆盖他人改动")
         if resp.status_code >= 400:
             detail = resp.text[:500]
             raise RedmineError(f"Redmine {method} {path} 返回 HTTP {resp.status_code}: {detail}")
@@ -166,10 +176,8 @@ class RedmineClient:
                 f"/projects/{quote(project_id)}/wiki/{quote(title, safe='')}.json{suffix}",
             )
             return data.get("wiki_page")
-        except RedmineError as exc:
-            if "404" in str(exc) or "资源不存在" in str(exc):
-                return None
-            raise
+        except RedmineNotFound:
+            return None
 
     def put_wiki_page(
         self,
@@ -200,10 +208,8 @@ class RedmineClient:
                 "DELETE",
                 f"/projects/{quote(project_id)}/wiki/{quote(title, safe='')}.json",
             )
-        except RedmineError as exc:
-            if "404" in str(exc) or "资源不存在" in str(exc):
-                return
-            raise
+        except RedmineNotFound:
+            return
 
     def list_versions(self, project_id: str) -> list[dict[str, Any]]:
         versions: list[dict[str, Any]] = []

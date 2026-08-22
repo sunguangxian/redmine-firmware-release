@@ -298,19 +298,27 @@ class LegacyChangelogMigrator:
                     )
                     new_text = replace_inline_release_block(current, release.wiki_title, block)
                     self._log(f"写入内联 Release 块：{container} / {release.wiki_title}")
-                    self.client.put_wiki_page(self.project_id, container, new_text, "legacy changelog inline migration")
+                    self.client.put_wiki_page(
+                        self.project_id,
+                        container,
+                        new_text,
+                        "legacy changelog inline migration",
+                        version=(page or {}).get("version"),
+                    )
                     self.client.update_version(int(version["id"]), wiki_page_title=container, due_date=release.date, description=self._version_description(release))
                 else:
                     text = build_release_markdown(form, int(version["id"]), linked_files)
                     text = text.rstrip() + f"\n\n## 迁移来源\n\n- [[{release.source_page}]]\n"
                     parent_title = "Release_Notes" if single_list else f"Release_Notes_{release.model}"
                     self._log(f"写入 Release Wiki：{release.wiki_title}")
+                    existing_page = self.client.get_wiki_page(self.project_id, release.wiki_title)
                     self.client.put_wiki_page(
                         self.project_id,
                         release.wiki_title,
                         text,
                         "legacy changelog migration",
                         parent_title=parent_title,
+                        version=(existing_page or {}).get("version"),
                     )
                     self.client.update_version(int(version["id"]), wiki_page_title=release.wiki_title, due_date=release.date, description=self._version_description(release))
             except RedmineError as exc:
@@ -588,17 +596,20 @@ class LegacyChangelogMigrator:
             CONFIG_BEGIN,
             "```yaml",
             "mode: single_list",
+            "text_format: common_mark",
             "main_page: Release_Notes",
             f"release_detail_mode: {detail_mode}",
         ]
         if detail_mode == "page":
             lines.append(f"release_page_prefix: Release_{category['key']}_FW_")
         lines.extend(["```", CONFIG_END, ""])
+        existing = self.client.get_wiki_page(self.project_id, CONFIG_PAGE_TITLE)
         self.client.put_wiki_page(
             self.project_id,
             CONFIG_PAGE_TITLE,
             "\n".join(lines),
             "legacy changelog migration config",
+            version=(existing or {}).get("version"),
         )
 
     def _save_multi_list_config(self, categories: List[Dict[str, str]], detail_mode: str = "page") -> None:
@@ -610,6 +621,7 @@ class LegacyChangelogMigrator:
             CONFIG_BEGIN,
             "```yaml",
             "mode: multi_list",
+            "text_format: common_mark",
             "main_page: Release_Notes",
         ]
         lines.append(f"release_detail_mode: {detail_mode}")
@@ -630,11 +642,13 @@ class LegacyChangelogMigrator:
                 ]
             )
         lines.extend(["```", CONFIG_END, ""])
+        existing = self.client.get_wiki_page(self.project_id, CONFIG_PAGE_TITLE)
         self.client.put_wiki_page(
             self.project_id,
             CONFIG_PAGE_TITLE,
             "\n".join(lines),
             "legacy changelog migration config",
+            version=(existing or {}).get("version"),
         )
 
     def _create_release_structure(self, categories: List[Dict[str, str]], *, single_list: bool, detail_mode: str = "page") -> None:

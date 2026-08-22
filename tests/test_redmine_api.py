@@ -97,6 +97,16 @@ class RedmineApiTest(unittest.TestCase):
         payload = session.calls[0]["kwargs"]["json"]["wiki_page"]
         self.assertEqual(payload["version"], 18)
 
+    def test_versioned_wiki_update_is_not_retried(self):
+        session = FakeSession([requests.Timeout("ambiguous timeout")])
+        client = self._client(session)
+
+        with patch.dict("os.environ", {"RELEASE_TOOL_REDMINE_RETRIES": "3"}, clear=False):
+            with self.assertRaises(RedmineError):
+                client.put_wiki_page("dp580", "Release_Notes", "updated", version=18)
+
+        self.assertEqual(len(session.calls), 1)
+
     def test_request_retries_transient_get_failure(self):
         session = FakeSession([requests.ConnectionError("reset"), FakeResponse(status_code=200, json_data={"ok": True})])
         client = self._client(session)

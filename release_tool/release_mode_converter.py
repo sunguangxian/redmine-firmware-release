@@ -138,6 +138,7 @@ class ReleaseModeConverter:
                     new_text,
                     "release mode inline cleanup",
                     parent_title=self._inline_parent_title(profile, container_page),
+                    version=page.get("version"),
                 )
                 cleaned += 1
         return cleaned
@@ -146,6 +147,7 @@ class ReleaseModeConverter:
         versions = self._version_ids()
         categories = self._category_map(profile)
         container_texts: dict[str, str] = {}
+        container_versions: dict[str, int | None] = {}
         source_texts: dict[str, str] = {}
         converted = 0
         for item in items:
@@ -164,6 +166,7 @@ class ReleaseModeConverter:
                     profile,
                     category,
                 )
+                container_versions[target_container] = (container or {}).get("version")
             if source_container not in source_texts:
                 source = self.client.get_wiki_page(self.project_id, source_container)
                 source_texts[source_container] = (source or {}).get("text", "")
@@ -178,7 +181,9 @@ class ReleaseModeConverter:
                 new_text,
                 "release mode inline container migration",
                 parent_title=self._inline_conversion_parent_title(profile, target_container, category),
+                version=container_versions[target_container],
             )
+            container_versions[target_container] = int(container_versions[target_container] or 0) + 1
             version_name = item.get("ver") or ""
             if versions.get(version_name):
                 self.client.update_version(
@@ -231,6 +236,7 @@ class ReleaseModeConverter:
         versions = self._version_ids()
         categories = self._category_map(profile)
         container_texts: dict[str, str] = {}
+        container_versions: dict[str, int | None] = {}
         converted = 0
         for item in items:
             title = item.get("page") or ""
@@ -259,6 +265,7 @@ class ReleaseModeConverter:
                     profile,
                     category,
                 )
+                container_versions[container_page] = (container or {}).get("version")
             current_text = container_texts[container_page]
             new_text = replace_inline_release_block(current_text, title, block)
             container_texts[container_page] = new_text
@@ -268,7 +275,9 @@ class ReleaseModeConverter:
                 new_text,
                 "release mode conversion to inline",
                 parent_title=self._inline_conversion_parent_title(profile, container_page, category),
+                version=container_versions[container_page],
             )
+            container_versions[container_page] = int(container_versions[container_page] or 0) + 1
             if versions.get(version_name):
                 self.client.update_version(
                     int(versions[version_name]),
@@ -341,12 +350,14 @@ class ReleaseModeConverter:
                 parsed.get("files") or [],
                 main_page=profile.main_page,
             )
+            existing = self.client.get_wiki_page(self.project_id, title)
             self.client.put_wiki_page(
                 self.project_id,
                 title,
                 markdown,
                 "release mode conversion to page",
                 parent_title=self._page_parent_title(profile, category),
+                version=(existing or {}).get("version"),
             )
             if versions.get(version_name):
                 self.client.update_version(
@@ -554,7 +565,13 @@ class ReleaseModeConverter:
         if not page:
             raise RedmineError(f"未找到 {CONFIG_PAGE_TITLE}，无法切换 Release 版本模式。")
         text = self._replace_config_mode(page.get("text", ""), target_mode)
-        self.client.put_wiki_page(self.project_id, CONFIG_PAGE_TITLE, text, "release detail mode conversion")
+        self.client.put_wiki_page(
+            self.project_id,
+            CONFIG_PAGE_TITLE,
+            text,
+            "release detail mode conversion",
+            version=page.get("version"),
+        )
 
     def _replace_config_mode(self, text: str, target_mode: str) -> str:
         block_pattern = re.compile(rf"{re.escape(CONFIG_BEGIN)}(?P<body>.*?){re.escape(CONFIG_END)}", re.S)

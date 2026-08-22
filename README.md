@@ -78,6 +78,9 @@ docs\production_deployment.md
 
 项目结构由项目 Wiki 页 `Release_Tool_Config` 决定。
 
+Redmine 的文本格式必须使用 CommonMark Markdown 或 Markdown。工具生成的配置会写入
+`text_format: common_mark`；Textile 页面不受支持，保存配置时会被拒绝，避免生成无法正确渲染或回读的页面。
+
 - `single_list`：单列表项目，版本分类可以为空。
 - `multi_list`：多分类项目，发布或编辑版本时必须填写版本分类，并且必须匹配配置中的分类。
 - `release_detail_mode: inline`：默认模式，版本明细直接写在主页面或分类列表页中，不单独创建每个版本的 Wiki 页面。

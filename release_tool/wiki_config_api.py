@@ -147,7 +147,14 @@ def register_wiki_config_routes(app: FastAPI) -> None:
         ok, msg = validate_config_text(payload.text or "")
         if not ok:
             raise _json_error(msg)
-        client.put_wiki_page(project_id, CONFIG_PAGE_TITLE, payload.text, "release tool config update")
+        current = client.get_wiki_page(project_id, CONFIG_PAGE_TITLE)
+        client.put_wiki_page(
+            project_id,
+            CONFIG_PAGE_TITLE,
+            payload.text,
+            "release tool config update",
+            version=(current or {}).get("version"),
+        )
         invalidate_release_rows(project_id)
         record_audit(
             actor=session.get("user_login", ""),

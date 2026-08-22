@@ -31,9 +31,10 @@ def validate_config_text(text: str) -> tuple[bool, str]:
     if not config:
         return False, "配置无效：请检查 RELEASE_CONFIG_BEGIN / RELEASE_CONFIG_END 之间的内容。"
     detail = "内联版本" if config.release_detail_mode == "inline" else "一版本一页"
+    format_detail = f"页面格式 {config.text_format}"
     if config.mode == "single_list":
-        return True, f"配置有效：single_list，主页面 {config.main_page}，{detail}。"
-    lines = [f"配置有效：multi_list，主页面 {config.main_page}，{detail}。", "分类："]
+        return True, f"配置有效：single_list，主页面 {config.main_page}，{detail}，{format_detail}。"
+    lines = [f"配置有效：multi_list，主页面 {config.main_page}，{detail}，{format_detail}。", "分类："]
     for item in config.categories:
         list_page = item.list_page or item.hub_page
         lines.append(f"- {item.key}: {item.title or item.key}, hub={item.hub_page}, list={list_page}")
@@ -69,6 +70,7 @@ def _single_list_template(tag: str, detail_mode: str = "inline") -> str:
 {CONFIG_BEGIN}
 ```yaml
 mode: single_list
+text_format: common_mark
 main_page: Release_Notes
 release_detail_mode: {detail_mode}
 {prefix_line}```
@@ -108,6 +110,7 @@ Release_Notes
 {CONFIG_BEGIN}
 ```yaml
 mode: multi_list
+text_format: common_mark
 main_page: Release_Notes
 release_detail_mode: {detail_mode}
 {prefix_line}categories:
@@ -166,6 +169,7 @@ Changelog_for_5X
 {CONFIG_BEGIN}
 ```yaml
 mode: multi_list
+text_format: common_mark
 main_page: Release_Notes
 release_detail_mode: {detail_mode}
 {prefix_line}categories:

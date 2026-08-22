@@ -160,6 +160,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
         title = edit_title or ""
         mail_status = "skipped"
         notice_message = ""
+        plan: Dict[str, Any] = {}
 
         try:
             logs.append(f"开始{action}：项目 {project_id}")
@@ -225,8 +226,24 @@ def register_release_publish_routes(app: FastAPI) -> None:
             )
         except (RedmineError, ValueError) as exc:
             logs.append(f"{action}失败：{exc}")
+            title = title or str(plan.get("target_page") or "")
             update_publish_history(history_id, wiki_title=title, mail_status="skipped", error_message=str(exc), logs=logs)
-            return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})
+            failed_item = get_publish_history(history_id) or {}
+            partial = any(failed_item.get(field) == "success" for field in ("release_status", "file_status", "wiki_status"))
+            return JSONResponse(
+                status_code=409 if "已被其他用户修改" in str(exc) else 400,
+                content={
+                    "detail": str(exc),
+                    "logs": logs,
+                    "publish_history_id": history_id,
+                    "partial": partial,
+                    "release_status": failed_item.get("release_status", "failed"),
+                    "file_status": failed_item.get("file_status", "failed"),
+                    "wiki_status": failed_item.get("wiki_status", "failed"),
+                    "index_status": failed_item.get("index_status", "failed"),
+                    "recover_actions": failed_item.get("recover_actions", []),
+                },
+            )
 
         if notice_enabled:
             try:

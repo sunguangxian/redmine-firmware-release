@@ -10,6 +10,7 @@ CONFIG_BEGIN = "<!-- RELEASE_CONFIG_BEGIN -->"
 CONFIG_END = "<!-- RELEASE_CONFIG_END -->"
 RELEASE_DETAIL_MODE_INLINE = "inline"
 RELEASE_DETAIL_MODE_PAGE = "page"
+SUPPORTED_TEXT_FORMATS = {"common_mark", "markdown"}
 
 
 @dataclass
@@ -26,6 +27,7 @@ class ReleaseWikiConfig:
     main_page: str = ""
     release_page_prefix: str = ""
     release_detail_mode: str = RELEASE_DETAIL_MODE_INLINE
+    text_format: str = "common_mark"
     categories: list[ConfigCategory] = field(default_factory=list)
 
     @property
@@ -33,6 +35,8 @@ class ReleaseWikiConfig:
         if self.mode not in {"single_list", "multi_list"}:
             return False
         if self.release_detail_mode not in {RELEASE_DETAIL_MODE_INLINE, RELEASE_DETAIL_MODE_PAGE}:
+            return False
+        if self.text_format not in SUPPORTED_TEXT_FORMATS:
             return False
         if not self.main_page:
             return False
@@ -94,6 +98,8 @@ def parse_release_wiki_config(text: str) -> ReleaseWikiConfig | None:
                 config.release_page_prefix = value
             elif key == "release_detail_mode":
                 config.release_detail_mode = value or RELEASE_DETAIL_MODE_INLINE
+            elif key == "text_format":
+                config.text_format = (value or "common_mark").lower()
 
     config.categories = [c for c in config.categories if c.key]
     return config if config.is_valid else None
