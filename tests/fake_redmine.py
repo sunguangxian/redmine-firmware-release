@@ -11,12 +11,18 @@ class FakeRedmineClient:
         self.versions: list[dict[str, Any]] = []
         self.files: list[dict[str, Any]] = []
         self.uploads: dict[str, bytes] = {}
+        self.wiki_puts: list[str] = []
         self.next_version_id = 1
         self.next_file_id = 1
         self.wiki_start_page = "Wiki"
 
     def seed_page(self, title: str, text: str, parent_title: str = "") -> None:
-        self.pages[title] = {"title": title, "text": text, "parent": {"title": parent_title} if parent_title else {}}
+        self.pages[title] = {
+            "title": title,
+            "text": text,
+            "version": 1,
+            "parent": {"title": parent_title} if parent_title else {},
+        }
 
     def seed_version(self, name: str, version_id: int | None = None) -> dict[str, Any]:
         item = {"id": version_id or self.next_version_id, "name": name}
@@ -39,12 +45,18 @@ class FakeRedmineClient:
         comment: str = "",
         parent_title: str | None = None,
         is_start_page: bool = False,
+        version: int | None = None,
     ) -> None:
+        current = self.pages.get(title)
+        if version is not None and (not current or int(current.get("version") or 0) != int(version)):
+            raise RuntimeError("wiki version conflict")
         self.pages[title] = {
             "title": title,
             "text": text,
+            "version": int((current or {}).get("version") or 0) + 1,
             "parent": {"title": parent_title} if parent_title else (self.pages.get(title, {}).get("parent") or {}),
         }
+        self.wiki_puts.append(title)
         if is_start_page:
             self.wiki_start_page = title
 

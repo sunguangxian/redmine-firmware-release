@@ -14,7 +14,7 @@ class FakeProfile:
 
 
 class FakeIndexSync:
-    def sync_after_publish(self, title, markdown):
+    def sync_after_publish(self, title, markdown, parent_title=None):
         self.title = title
         self.markdown = markdown
 
@@ -28,7 +28,7 @@ class FakeClient:
     def get_wiki_page(self, project_id, title):
         return None
 
-    def put_wiki_page(self, project_id, title, text, comment):
+    def put_wiki_page(self, project_id, title, text, comment, **kwargs):
         self.wiki_written = True
 
     def update_version(self, version_id, **fields):

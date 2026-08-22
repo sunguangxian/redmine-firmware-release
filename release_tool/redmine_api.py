@@ -123,6 +123,8 @@ class RedmineClient:
             raise RedmineError(f"权限不足：{path}")
         if resp.status_code == 404:
             raise RedmineError(f"资源不存在：{path}")
+        if resp.status_code == 409:
+            raise RedmineError("Wiki 页面已被其他用户修改，请刷新后重试，避免覆盖他人改动")
         if resp.status_code >= 400:
             detail = resp.text[:500]
             raise RedmineError(f"Redmine {method} {path} 返回 HTTP {resp.status_code}: {detail}")
@@ -177,12 +179,15 @@ class RedmineClient:
         comment: str = "",
         parent_title: str | None = None,
         is_start_page: bool = False,
+        version: int | None = None,
     ) -> None:
         payload: dict[str, Any] = {"wiki_page": {"text": text, "comments": comment}}
         if parent_title:
             payload["wiki_page"]["parent_title"] = parent_title
         if is_start_page:
             payload["wiki_page"]["is_start_page"] = True
+        if version is not None:
+            payload["wiki_page"]["version"] = int(version)
         self._request(
             "PUT",
             f"/projects/{quote(project_id)}/wiki/{quote(title, safe='')}.json",

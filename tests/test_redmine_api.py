@@ -88,6 +88,15 @@ class RedmineApiTest(unittest.TestCase):
         self.assertEqual(payload["text"], "# Release Notes")
         self.assertIs(payload["is_start_page"], True)
 
+    def test_put_wiki_page_sends_expected_version(self):
+        session = FakeSession([FakeResponse(status_code=204, content=b"")])
+        client = self._client(session)
+
+        client.put_wiki_page("dp580", "Release_Notes", "updated", version=18)
+
+        payload = session.calls[0]["kwargs"]["json"]["wiki_page"]
+        self.assertEqual(payload["version"], 18)
+
     def test_request_retries_transient_get_failure(self):
         session = FakeSession([requests.ConnectionError("reset"), FakeResponse(status_code=200, json_data={"ok": True})])
         client = self._client(session)
@@ -141,6 +150,13 @@ class RedmineApiTest(unittest.TestCase):
         with patch.dict("os.environ", {"RELEASE_TOOL_REDMINE_RETRIES": "0"}, clear=False):
             with self.assertRaisesRegex(RedmineError, "请求失败"):
                 client._request("GET", "/projects.json")
+
+    def test_request_reports_wiki_version_conflict(self):
+        session = FakeSession([FakeResponse(status_code=409, text="Conflict")])
+        client = self._client(session)
+
+        with self.assertRaisesRegex(RedmineError, "已被其他用户修改"):
+            client._request("PUT", "/projects/demo/wiki/Release_A.json", json={})
 
     def test_upload_and_download_use_configured_file_timeout(self):
         session = FakeSession()

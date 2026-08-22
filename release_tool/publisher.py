@@ -132,10 +132,17 @@ class ReleasePublisher:
 
         try:
             self._progress(progress, "wiki", "running")
-            self._assert_wiki_unchanged(form.project_id, title, existing_text, logs)
             markdown = build_release_markdown(form, version["id"], linked_files, main_page=profile.main_page)
             comment = "release tool update" if existing else "release tool create"
-            self.client.put_wiki_page(form.project_id, title, markdown, comment)
+            parent_title = self._release_parent_title(form, index_sync, profile)
+            self.client.put_wiki_page(
+                form.project_id,
+                title,
+                markdown,
+                comment,
+                parent_title=parent_title,
+                version=(existing or {}).get("version"),
+            )
             self._log(logs, "Wiki 页面写入完成")
             self._progress(progress, "wiki", "success")
         except Exception:
@@ -158,7 +165,7 @@ class ReleasePublisher:
 
         try:
             self._progress(progress, "index", "running")
-            index_sync.sync_after_publish(title, markdown)
+            index_sync.sync_after_publish(title, markdown, parent_title=parent_title)
             self._log(logs, "版本索引同步完成")
             self._progress(progress, "index", "success")
         except Exception:
@@ -242,7 +249,6 @@ class ReleasePublisher:
             raise
 
         try:
-            self._assert_wiki_unchanged(form.project_id, container_page, current_text, logs)
             base_text = current_text
             if old_block_id and old_block_id != new_block_id:
                 base_text = delete_inline_release_block(base_text, old_block_id)
@@ -263,6 +269,7 @@ class ReleasePublisher:
                 "release tool inline update",
                 parent_title=parent_title,
                 is_start_page=container_page == profile.main_page,
+                version=(page or {}).get("version"),
             )
             self._log(logs, f"内联版本写入完成：{container_page} / {form.version_name}")
             self._progress(progress, "wiki", "success")
@@ -324,13 +331,18 @@ class ReleasePublisher:
                 return category.hub if category.list_page != category.hub else profile.main_page
         return None
 
-    def _assert_wiki_unchanged(self, project_id: str, title: str, expected_text: str, logs: list[str] | None = None) -> None:
-        latest = self.client.get_wiki_page(project_id, title)
-        latest_text = (latest or {}).get("text", "")
-        if (expected_text or "") != latest_text:
-            self._log(logs, f"Wiki 冲突检测失败：{title}")
-            raise RedmineError(f"Wiki 页面已被其他用户修改：{title}。请刷新后重新发布，避免覆盖他人改动。")
-        self._log(logs, f"Wiki 冲突检测通过：{title}")
+    def _release_parent_title(self, form: ReleaseForm, index_sync, profile) -> str | None:
+        if profile.mode != "multi_list":
+            return profile.main_page
+        category_key = index_sync._categorize(
+            form.page_title,
+            f"**Product Line:** {form.product_line}",
+            ver=form.version_name,
+            commit=form.commit,
+            categories=profile.categories,
+        )
+        category = index_sync._category_by_key(profile, category_key)
+        return category.hub if category else None
 
     def _preflight_release(self, form: ReleaseForm, logs: list[str] | None = None) -> None:
         if not form.files:

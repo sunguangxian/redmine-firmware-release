@@ -149,6 +149,14 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         rows = ReleasePublisher(client).list_releases("dp5x")
         self.assertEqual(rows[0]["product_line"], "常规版本 (5X)")
 
+    def test_page_publish_writes_release_page_only_once(self):
+        client = self.seed_page()
+
+        title = ReleasePublisher(client).publish(form())
+
+        self.assertEqual(client.wiki_puts.count(title), 1)
+        self.assertEqual(client.pages[title]["parent"]["title"], "Release_Notes_Regular")
+
     def test_planner_reports_page_and_inline_targets(self):
         inline_client = self.seed_inline()
         inline_plan = ReleasePlanner(inline_client).build_plan(form())

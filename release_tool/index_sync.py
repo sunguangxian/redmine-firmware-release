@@ -57,8 +57,12 @@ class IndexSync:
         self._page_cache: dict[str, dict[str, Any] | None] = {}
         self._profile_cache: WikiProfile | None = None
 
-    def sync_after_publish(self, page_title: str, page_text: str) -> None:
-        self._page_cache[page_title] = {"title": page_title, "text": page_text}
+    def sync_after_publish(self, page_title: str, page_text: str, parent_title: str | None = None) -> None:
+        self._page_cache[page_title] = {
+            "title": page_title,
+            "text": page_text,
+            "parent": {"title": parent_title} if parent_title else {},
+        }
         profile = self.discover_profile()
         if self._is_inline_profile(profile):
             if profile.mode == "multi_list":
@@ -69,15 +73,6 @@ class IndexSync:
         if profile.mode == "multi_list":
             category = self._categorize(page_title, page_text, categories=profile.categories)
             self._sync_categories(profile, [category], items, update_main=True)
-            cat_profile = self._category_by_key(profile, category)
-            if cat_profile:
-                self.client.put_wiki_page(
-                    self.project_id,
-                    page_title,
-                    page_text,
-                    comment="release tool sync parent",
-                    parent_title=cat_profile.hub,
-                )
         else:
             self._refresh_single(profile, items)
 
@@ -366,8 +361,7 @@ class IndexSync:
 
             if cat_profile.list_page != cat_profile.hub:
                 hub_text = self._build_category_hub(profile, cat_profile)
-                self.client.put_wiki_page(
-                    self.project_id,
+                self._put_page(
                     cat_profile.hub,
                     hub_text,
                     "auto sync category structure",
@@ -379,12 +373,12 @@ class IndexSync:
                 for item in group:
                     page = self._get_page(item["page"])
                     if page and (page.get("parent") or {}).get("title") != cat_profile.hub:
-                        self.client.put_wiki_page(
-                            self.project_id,
+                        self._put_page(
                             item["page"],
                             page["text"],
                             "set parent",
                             parent_title=cat_profile.hub,
+                            page=page,
                         )
 
         if update_main:
@@ -408,23 +402,22 @@ class IndexSync:
         page = self._get_page(profile.main_page)
         current = (page or {}).get("text", "")
         new_text = self._replace_generated_region(current, lines, "版本列表") if current else fallback
-        self.client.put_wiki_page(
-            self.project_id,
+        self._put_page(
             profile.main_page,
             new_text,
             comment="Release Notes 索引",
             is_start_page=True,
+            page=page,
         )
-        self._page_cache[profile.main_page] = {"title": profile.main_page, "text": new_text}
         for item in sorted_items:
             page = self._get_page(item["page"])
             if page and (page.get("parent") or {}).get("title") != profile.main_page:
-                self.client.put_wiki_page(
-                    self.project_id,
+                self._put_page(
                     item["page"],
                     page["text"],
                     "set parent",
                     parent_title=profile.main_page,
+                    page=page,
                 )
         return len(items)
 
@@ -443,8 +436,7 @@ class IndexSync:
             new_text = fallback_text
         else:
             new_text = self._replace_generated_region(current, generated, section_title)
-        self.client.put_wiki_page(self.project_id, title, new_text, comment, parent_title=parent_title)
-        self._page_cache[title] = {"title": title, "text": new_text}
+        self._put_page(title, new_text, comment, parent_title=parent_title, page=page)
 
     def _replace_generated_region(self, text: str, generated: str, section_title: str) -> str:
         if SYNC_BEGIN in text and SYNC_END in text:
@@ -553,14 +545,13 @@ class IndexSync:
         if self._is_inline_profile(profile):
             current = self._clean_inline_main_text(current)
         new_text = self._replace_generated_region(current, generated, "Product Lines") if current else fallback
-        self.client.put_wiki_page(
-            self.project_id,
+        self._put_page(
             profile.main_page,
             new_text,
             comment="auto sync main counts",
             is_start_page=True,
+            page=page,
         )
-        self._page_cache[profile.main_page] = {"title": profile.main_page, "text": new_text}
 
     def _clean_inline_main_text(self, text: str) -> str:
         cleaned = re.sub(r"(?m)^>\s*Version lists are maintained by the release tool in the `\*_List` pages\.\s*\r?\n?", "", text or "")
@@ -710,6 +701,39 @@ class IndexSync:
         if title not in self._page_cache:
             self._page_cache[title] = self.client.get_wiki_page(self.project_id, title)
         return self._page_cache[title]
+
+    def _put_page(
+        self,
+        title: str,
+        text: str,
+        comment: str,
+        *,
+        parent_title: str | None = None,
+        is_start_page: bool = False,
+        page: dict[str, Any] | None = None,
+    ) -> None:
+        current = page if page is not None else self._get_page(title)
+        version = (current or {}).get("version")
+        self.client.put_wiki_page(
+            self.project_id,
+            title,
+            text,
+            comment,
+            parent_title=parent_title,
+            is_start_page=is_start_page,
+            version=version,
+        )
+        cached = dict(current or {})
+        cached.update(
+            {
+                "title": title,
+                "text": text,
+                "version": int(version or 0) + 1,
+            }
+        )
+        if parent_title:
+            cached["parent"] = {"title": parent_title}
+        self._page_cache[title] = cached
 
     def _page_text(self, title: str) -> str:
         page = self._get_page(title)
