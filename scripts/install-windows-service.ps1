@@ -1,7 +1,8 @@
 param(
     [string]$ServiceName = "RedmineReleaseTool",
     [string]$EnvFile = "",
-    [string]$NssmPath = "nssm.exe"
+    [string]$NssmPath = "nssm.exe",
+    [switch]$AllowInsecureHttp
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,7 +28,12 @@ if (-not (Test-Path (Join-Path $Root "logs"))) {
     New-Item -ItemType Directory -Path (Join-Path $Root "logs") | Out-Null
 }
 
-& $nssm.Source install $ServiceName $PowerShellExe "-ExecutionPolicy Bypass -NoProfile -File `"$StartScript`" -EnvFile `"$EnvFile`""
+$startArgs = "-ExecutionPolicy Bypass -NoProfile -File `"$StartScript`" -EnvFile `"$EnvFile`""
+if ($AllowInsecureHttp) {
+    $startArgs += " -AllowInsecureHttp"
+}
+
+& $nssm.Source install $ServiceName $PowerShellExe $startArgs
 & $nssm.Source set $ServiceName AppDirectory $Root
 & $nssm.Source set $ServiceName AppStdout (Join-Path $Root "logs\service-stdout.log")
 & $nssm.Source set $ServiceName AppStderr (Join-Path $Root "logs\service-stderr.log")
