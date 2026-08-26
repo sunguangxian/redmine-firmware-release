@@ -1,6 +1,7 @@
 param(
     [string]$EnvFile = "",
-    [switch]$NoBuildCheck
+    [switch]$NoBuildCheck,
+    [switch]$AllowInsecureHttp
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,6 +40,10 @@ if (-not $EnvFile) {
 
 Import-EnvFile $EnvFile
 
+if ($AllowInsecureHttp) {
+    $env:RELEASE_TOOL_ALLOW_INSECURE_HTTP = "1"
+}
+
 if (-not (Test-Path $VenvPython)) {
     throw "Virtual environment not found. Run scripts\install-production.ps1 first."
 }
@@ -53,9 +58,21 @@ if (-not (Test-Path $LogDir)) {
 
 $hostValue = if ($env:RELEASE_TOOL_HOST) { $env:RELEASE_TOOL_HOST } else { "127.0.0.1" }
 $portValue = if ($env:RELEASE_TOOL_PORT) { $env:RELEASE_TOOL_PORT } else { "7860" }
+$certValue = if ($env:RELEASE_TOOL_TLS_CERTFILE) { $env:RELEASE_TOOL_TLS_CERTFILE.Trim() } else { "" }
+$allowInsecureValue = if ($env:RELEASE_TOOL_ALLOW_INSECURE_HTTP) { $env:RELEASE_TOOL_ALLOW_INSECURE_HTTP.Trim().ToLowerInvariant() } else { "" }
+$isLoopback = $hostValue.Trim().ToLowerInvariant() -in @("127.0.0.1", "localhost", "::1")
+$isInsecureAllowed = $allowInsecureValue -in @("1", "true", "yes", "on")
+
+if (-not $isLoopback -and -not $certValue -and -not $isInsecureAllowed) {
+    throw "Listening on ${hostValue}:${portValue} without HTTPS is blocked. For an isolated LAN only, restart with -AllowInsecureHttp; otherwise configure RELEASE_TOOL_TLS_CERTFILE and RELEASE_TOOL_TLS_KEYFILE."
+}
+
 $logFile = Join-Path $LogDir ("release-tool-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 
 Write-Host "Starting Redmine Release Tool on ${hostValue}:${portValue}"
+if (-not $isLoopback -and -not $certValue -and $isInsecureAllowed) {
+    Write-Warning "Insecure HTTP is enabled for a non-loopback address. Use this only on a trusted isolated LAN."
+}
 Write-Host "Log file: $logFile"
 
 # uvicorn writes normal INFO logs to stderr. In Windows PowerShell 5.1, piping
