@@ -42,6 +42,9 @@ Import-EnvFile $EnvFile
 
 if ($AllowInsecureHttp) {
     $env:RELEASE_TOOL_ALLOW_INSECURE_HTTP = "1"
+    # Secure cookies are not sent over plain HTTP. LAN HTTP mode must disable it
+    # so login sessions continue to work from other machines on the intranet.
+    $env:RELEASE_TOOL_SESSION_COOKIE_SECURE = "0"
 }
 
 if (-not (Test-Path $VenvPython)) {
