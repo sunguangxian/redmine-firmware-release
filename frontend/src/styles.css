@@ -162,9 +162,8 @@ body {
 
 .workspace-main {
   box-sizing: border-box;
-  width: 100%;
-  max-width: none;
-  margin: 0;
+  max-width: 1380px;
+  margin: 0 auto;
   padding: 14px 30px 48px;
 }
 
@@ -225,9 +224,6 @@ body {
 }
 
 .workspace-tabs > .el-tabs__content {
-  box-sizing: border-box;
-  max-width: 1380px;
-  margin: 0 auto;
   overflow: visible;
 }
 
