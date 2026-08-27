@@ -161,8 +161,10 @@ body {
 }
 
 .workspace-main {
-  max-width: 1380px;
-  margin: 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   padding: 14px 30px 48px;
 }
 
@@ -170,12 +172,23 @@ body {
   margin: 0 0 14px;
 }
 
+.workspace-tabs > .el-tabs__header .el-tabs__nav-wrap {
+  width: 100%;
+}
+
 .workspace-tabs > .el-tabs__header .el-tabs__nav-wrap::after {
   display: none;
 }
 
+.workspace-tabs > .el-tabs__header .el-tabs__nav-scroll {
+  width: 100%;
+}
+
 .workspace-tabs > .el-tabs__header .el-tabs__nav {
   box-sizing: border-box;
+  display: flex;
+  float: none;
+  width: 100%;
   padding: 5px;
   border: 1px solid rgba(216, 225, 236, 0.9);
   border-radius: 14px;
@@ -188,6 +201,10 @@ body {
 }
 
 .workspace-tabs > .el-tabs__header .el-tabs__item {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
   height: 38px;
   padding: 0 18px;
   border-radius: 10px;
@@ -208,6 +225,9 @@ body {
 }
 
 .workspace-tabs > .el-tabs__content {
+  box-sizing: border-box;
+  max-width: 1380px;
+  margin: 0 auto;
   overflow: visible;
 }
 
@@ -491,11 +511,14 @@ body {
 
   .workspace-tabs > .el-tabs__header .el-tabs__nav {
     float: none;
-    width: max-content;
+    width: 100%;
   }
 
   .workspace-tabs > .el-tabs__header .el-tabs__item {
-    padding: 0 14px;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 10px;
+    font-size: 12px;
   }
 
   .workspace-main .el-card__body {
