@@ -1,21 +1,150 @@
 <template>
   <div>
-    <el-card class="card">
-      <div class="toolbar">
+    <el-card class="card structure-manager">
+      <template #header>
+        <div class="structure-heading">
+          <div>
+            <div>Release Wiki 结构管理</div>
+            <p>通过表单维护页面和模块，保存时由工具自动生成配置。</p>
+          </div>
+          <el-tag type="info" effect="plain">{{ form.mode === 'multi_list' ? `${form.categories.length} 个模块` : '单页面' }}</el-tag>
+        </div>
+      </template>
+
+      <div class="toolbar structure-toolbar">
         <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 320px">
           <el-option v-for="project in projects" :key="project.identifier" :label="`${project.name} (${project.identifier})`" :value="project.identifier" />
         </el-select>
-        <el-select v-model="templateKey" placeholder="结构模板" style="width: 280px">
+        <el-button @click="load">读取当前配置</el-button>
+        <span class="toolbar-spacer" />
+        <el-select v-model="templateKey" placeholder="快速套用结构" style="width: 280px">
           <el-option v-for="item in templates" :key="String(item[1])" :label="String(item[0])" :value="String(item[1])" />
         </el-select>
-        <el-button @click="generate">生成模板</el-button>
-        <el-button @click="load">读取当前配置</el-button>
-        <el-button @click="check">检测配置</el-button>
-        <el-button type="primary" @click="save">保存到项目 Wiki</el-button>
+        <el-button @click="generate">套用模板</el-button>
+      </div>
+
+      <div class="structure-layout">
+        <section class="structure-form-panel">
+          <div class="section-title">基础设置</div>
+          <el-form label-position="top">
+            <div class="form-grid">
+              <el-form-item label="结构方式">
+                <el-radio-group v-model="form.mode">
+                  <el-radio-button value="single_list">单页面</el-radio-button>
+                  <el-radio-button value="multi_list">多模块</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="版本内容保存方式">
+                <el-radio-group v-model="form.releaseDetailMode">
+                  <el-radio-button value="inline">写入列表页</el-radio-button>
+                  <el-radio-button value="page">每个版本单独一页</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="主页面名称">
+                <el-input v-model="form.mainPage" placeholder="例如 Release_Notes" />
+              </el-form-item>
+              <el-form-item v-if="form.releaseDetailMode === 'page'" label="版本页面命名规则">
+                <el-input v-model="form.releasePagePrefix" placeholder="例如 Release_{category}_FW_" />
+              </el-form-item>
+            </div>
+          </el-form>
+
+          <template v-if="form.mode === 'multi_list'">
+            <div class="module-section-header">
+              <div>
+                <div class="section-title">模块列表</div>
+                <p>每个模块对应一个产品线或版本分类，可按顺序增删和调整。</p>
+              </div>
+              <el-button type="primary" plain @click="addCategory">添加模块</el-button>
+            </div>
+
+            <div v-if="!form.categories.length" class="empty-modules">
+              暂无模块，请点击“添加模块”。
+            </div>
+            <div v-for="(item, index) in form.categories" :key="item.id" class="module-card">
+              <div class="module-card-header">
+                <div class="module-number">{{ index + 1 }}</div>
+                <strong>{{ item.title || item.key || `模块 ${index + 1}` }}</strong>
+                <div class="module-actions">
+                  <el-button text :disabled="index === 0" @click="moveCategory(index, -1)">上移</el-button>
+                  <el-button text :disabled="index === form.categories.length - 1" @click="moveCategory(index, 1)">下移</el-button>
+                  <el-button text type="danger" @click="removeCategory(index)">删除</el-button>
+                </div>
+              </div>
+              <div class="module-fields">
+                <el-form-item label="显示名称">
+                  <el-input v-model="item.title" placeholder="例如 Trunking 集群" />
+                </el-form-item>
+                <el-form-item label="模块标识">
+                  <el-input v-model="item.key" placeholder="例如 Trunking" />
+                </el-form-item>
+                <el-form-item label="模块页面">
+                  <el-input v-model="item.hubPage" placeholder="例如 Release_Notes_Trunking" />
+                </el-form-item>
+                <el-form-item label="版本内容页面">
+                  <el-input v-model="item.listPage" placeholder="留空时与模块页面相同" />
+                  <div class="field-tip">需要独立列表页时，填写如 Release_Notes_Trunking_List。</div>
+                </el-form-item>
+              </div>
+            </div>
+          </template>
+        </section>
+
+        <aside class="structure-preview-panel">
+          <div class="section-title">结构预览</div>
+          <p class="preview-caption">保存后，工具会按下列关系维护 Wiki 页面。</p>
+          <div class="wiki-tree">
+            <div class="tree-node tree-root">
+              <span class="node-type">主页面</span>
+              <strong>{{ form.mainPage || '未填写主页面' }}</strong>
+            </div>
+            <div v-if="form.mode === 'multi_list'" class="tree-children">
+              <div v-for="(item, index) in form.categories" :key="`preview-${item.id}`" class="tree-branch">
+                <span class="branch-line" />
+                <div class="tree-node">
+                  <span class="node-type">模块 {{ index + 1 }}</span>
+                  <strong>{{ item.title || item.key || '未命名模块' }}</strong>
+                  <small>{{ item.hubPage || '未填写模块页面' }}</small>
+                  <div v-if="item.listPage && item.listPage !== item.hubPage" class="list-page">
+                    版本内容 → {{ item.listPage }}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="tree-children">
+              <div class="tree-branch">
+                <span class="branch-line" />
+                <div class="tree-node release-storage">
+                  <span class="node-type">版本内容</span>
+                  <strong>{{ form.releaseDetailMode === 'inline' ? '直接写入主页面' : '每个版本单独一页' }}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+          <el-alert v-if="formErrors.length" type="warning" :closable="false" show-icon>
+            <template #title>还有 {{ formErrors.length }} 项需要完善</template>
+            <div v-for="error in formErrors.slice(0, 4)" :key="error">• {{ error }}</div>
+          </el-alert>
+        </aside>
+      </div>
+
+      <el-collapse class="advanced-editor">
+        <el-collapse-item name="raw">
+          <template #title>高级：查看或编辑原始配置</template>
+          <el-alert type="info" :closable="false" title="一般无需修改这里。手工编辑后，请先应用到上方表单。" />
+          <el-input v-model="text" type="textarea" :rows="18" placeholder="Release_Tool_Config 内容" />
+          <div class="toolbar raw-actions">
+            <el-button @click="applyRawText">应用到表单</el-button>
+            <el-button @click="check">检测原始配置</el-button>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+
+      <div class="toolbar save-actions">
+        <el-button type="primary" @click="save">保存结构到项目 Wiki</el-button>
         <el-button :loading="previewing" @click="previewRefresh">预览重建索引</el-button>
         <el-button type="warning" :loading="refreshing" @click="refreshIndex">确认重建索引</el-button>
       </div>
-      <el-input v-model="text" type="textarea" :rows="24" placeholder="Release_Tool_Config 内容" />
       <el-alert v-if="message" class="card" :closable="false" :type="ok ? 'success' : 'warning'" show-icon>
         <template #title>{{ message }}</template>
       </el-alert>
@@ -104,16 +233,29 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { checkWikiConfig, convertWikiMode, errorMessage, generateWikiConfig, getWikiConfig, getWikiTemplates, previewWikiModeConvert, previewWikiRefresh, refreshWikiIndex, saveWikiConfig } from '../api/http'
 import type { Project, WikiModeConvertPreview, WikiRefreshPreview } from '../types'
+import { buildWikiConfigText, parseWikiConfigText, validateWikiConfigForm } from '../utils/wikiConfigUi'
+import type { WikiConfigCategoryForm, WikiConfigForm } from '../utils/wikiConfigUi'
 
 const props = defineProps<{ projects: Project[] }>()
 const projectId = ref(props.projects[0]?.identifier || '')
 const templateKey = ref('single_list')
 const templates = ref<Array<[string, string]>>([])
-const text = ref('')
+type CategoryRow = WikiConfigCategoryForm & { id: number }
+type ConfigFormState = Omit<WikiConfigForm, 'categories'> & { categories: CategoryRow[] }
+let nextCategoryId = 1
+const form = reactive<ConfigFormState>({
+  mode: 'single_list',
+  mainPage: 'Release_Notes',
+  releaseDetailMode: 'inline',
+  textFormat: 'common_mark',
+  releasePagePrefix: '',
+  categories: [],
+})
+const text = ref(buildWikiConfigText(form))
 const message = ref('')
 const ok = ref(true)
 const refreshPreview = ref<WikiRefreshPreview | null>(null)
@@ -123,6 +265,7 @@ const previewing = ref(false)
 const refreshing = ref(false)
 const previewingConvert = ref(false)
 const converting = ref(false)
+const formErrors = computed(() => validateWikiConfigForm(form))
 
 watch(
   () => props.projects,
@@ -137,11 +280,63 @@ watch(projectId, () => {
   convertPreview.value = null
 })
 
+watch(form, () => {
+  text.value = buildWikiConfigText(form)
+  refreshPreview.value = null
+}, { deep: true })
+
+function replaceForm(value: WikiConfigForm) {
+  form.mode = value.mode
+  form.mainPage = value.mainPage
+  form.releaseDetailMode = value.releaseDetailMode
+  form.textFormat = value.textFormat
+  form.releasePagePrefix = value.releasePagePrefix
+  form.categories = value.categories.map((item) => ({ ...item, id: nextCategoryId++ }))
+  text.value = buildWikiConfigText(form)
+}
+
+function addCategory() {
+  const number = form.categories.length + 1
+  form.categories.push({
+    id: nextCategoryId++,
+    key: `Module${number}`,
+    title: `模块 ${number}`,
+    hubPage: `${form.mainPage || 'Release_Notes'}_Module${number}`,
+    listPage: '',
+  })
+}
+
+function removeCategory(index: number) {
+  form.categories.splice(index, 1)
+}
+
+function moveCategory(index: number, offset: number) {
+  const target = index + offset
+  if (target < 0 || target >= form.categories.length) return
+  const [item] = form.categories.splice(index, 1)
+  form.categories.splice(target, 0, item)
+}
+
+function applyRawText() {
+  const parsed = parseWikiConfigText(text.value)
+  if (!parsed) {
+    ok.value = false
+    message.value = '无法识别原始配置，请检查配置标记、结构方式和主页面。'
+    return ElMessage.warning(message.value)
+  }
+  replaceForm(parsed)
+  ok.value = true
+  message.value = '原始配置已应用到可视化表单。'
+  ElMessage.success(message.value)
+}
+
 async function generate() {
   if (!projectId.value) return ElMessage.warning('请选择项目')
   try {
     const data = await generateWikiConfig(projectId.value, templateKey.value)
-    text.value = data.text
+    const parsed = parseWikiConfigText(data.text)
+    if (!parsed) throw new Error('模板内容无法转换为可视化配置')
+    replaceForm(parsed)
     message.value = data.message
     ok.value = true
   } catch (error) {
@@ -155,7 +350,14 @@ async function load() {
     const data = await getWikiConfig(projectId.value)
     text.value = data.text
     message.value = data.message
-    ok.value = Boolean(data.text)
+    const parsed = parseWikiConfigText(data.text)
+    if (parsed) {
+      replaceForm(parsed)
+      ok.value = true
+    } else {
+      ok.value = false
+      if (data.text) message.value = `${data.message}。可在“高级”区域检查原始内容。`
+    }
   } catch (error) {
     ElMessage.error(errorMessage(error))
   }
@@ -173,7 +375,13 @@ async function check() {
 
 async function save() {
   if (!projectId.value) return ElMessage.warning('请选择项目')
+  if (formErrors.value.length) {
+    ok.value = false
+    message.value = formErrors.value.join('\n')
+    return ElMessage.warning('请先完善结构配置')
+  }
   try {
+    text.value = buildWikiConfigText(form)
     const data = await saveWikiConfig(projectId.value, text.value)
     message.value = data.message
     ok.value = true
@@ -273,5 +481,248 @@ async function convertMode() {
 
 onMounted(async () => {
   templates.value = await getWikiTemplates()
+  if (projectId.value) await load()
 })
 </script>
+
+<style scoped>
+.structure-heading,
+.module-section-header,
+.module-card-header,
+.save-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.structure-heading p,
+.module-section-header p,
+.preview-caption {
+  margin: 5px 0 0;
+  color: #7a8798;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.structure-toolbar {
+  padding-bottom: 16px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.structure-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.8fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.structure-form-panel,
+.structure-preview-panel {
+  min-width: 0;
+}
+
+.structure-preview-panel {
+  position: sticky;
+  top: 86px;
+  padding: 18px;
+  border: 1px solid #e1e8f0;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #f8fbff, #f7fbfa);
+}
+
+.section-title {
+  color: #2d3d53;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.module-section-header {
+  margin: 10px 0 12px;
+}
+
+.module-card {
+  margin-bottom: 12px;
+  padding: 14px 16px 4px;
+  border: 1px solid #e1e7ef;
+  border-radius: 13px;
+  background: #fbfcfe;
+}
+
+.module-card-header {
+  justify-content: flex-start;
+  margin-bottom: 14px;
+}
+
+.module-number {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 8px;
+  background: #eaf2fd;
+  color: #2d67b5;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.module-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.module-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.module-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 14px;
+}
+
+.field-tip {
+  margin-top: 5px;
+  color: #929dad;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.empty-modules {
+  margin-bottom: 12px;
+  padding: 28px;
+  border: 1px dashed #cfd9e6;
+  border-radius: 13px;
+  color: #8490a2;
+  text-align: center;
+}
+
+.wiki-tree {
+  margin: 16px 0;
+}
+
+.tree-node {
+  display: grid;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid #dce5ef;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(45, 67, 94, 0.045);
+}
+
+.tree-root {
+  border-color: #bcd2ee;
+  background: #f0f6ff;
+}
+
+.node-type {
+  color: #7890ad;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.tree-node strong {
+  overflow-wrap: anywhere;
+  color: #30445e;
+  font-size: 13px;
+}
+
+.tree-node small,
+.list-page {
+  overflow-wrap: anywhere;
+  color: #718096;
+  font-size: 11px;
+}
+
+.list-page {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed #e0e6ed;
+  color: #347166;
+}
+
+.tree-children {
+  margin-left: 18px;
+  padding-left: 17px;
+  border-left: 2px solid #d9e3ef;
+}
+
+.tree-branch {
+  position: relative;
+  padding-top: 12px;
+}
+
+.branch-line {
+  position: absolute;
+  top: 31px;
+  left: -17px;
+  width: 17px;
+  border-top: 2px solid #d9e3ef;
+}
+
+.advanced-editor {
+  margin-top: 20px;
+  border-top: 1px solid #edf1f5;
+}
+
+.advanced-editor :deep(.el-alert) {
+  margin-bottom: 10px;
+}
+
+.advanced-editor :deep(textarea) {
+  font-family: Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.raw-actions {
+  margin: 10px 0 0;
+}
+
+.save-actions {
+  justify-content: flex-start;
+  margin-top: 18px;
+  margin-bottom: 0;
+  padding-top: 18px;
+  border-top: 1px solid #edf1f5;
+}
+
+@media (max-width: 980px) {
+  .structure-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .structure-preview-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 680px) {
+  .module-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-spacer {
+    display: none;
+  }
+
+  .structure-toolbar :deep(.el-select) {
+    width: 100% !important;
+  }
+
+  .module-card-header {
+    flex-wrap: wrap;
+  }
+
+  .module-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+</style>
