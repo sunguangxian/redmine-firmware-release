@@ -36,12 +36,13 @@ class ReleaseModeConverter:
         current_mode = source["config_mode"]
         source_mode = source["source_mode"]
         items = source["items"]
+        all_items = source["all_items"]
         pages_to_write = self._target_pages(sync, profile, items, target_mode)
-        pages_to_delete = self._pages_to_delete_after_conversion(profile, items, source_mode, target_mode)
+        pages_to_delete = self._pages_to_delete_after_conversion(profile, all_items, source_mode, target_mode)
+        model_pages = [category.hub for category in profile.categories]
+        index_pages = [profile.main_page, *model_pages]
         existing_pages = [title for title in pages_to_write if self.client.get_wiki_page(self.project_id, title)]
-        config_will_change = current_mode != target_mode or (
-            target_mode == "inline" and self._inline_config_needs_hub_pages(profile)
-        )
+        config_will_change = current_mode != target_mode or self._config_needs_hub_pages(profile)
         warnings: list[str] = list(source["warnings"])
         if source_mode == target_mode:
             warnings.append("当前可识别 Release 内容已经是目标版本模式，执行转换只会切换配置或重建索引。")
@@ -55,6 +56,10 @@ class ReleaseModeConverter:
             "current_mode": current_mode,
             "source_mode": source_mode,
             "target_mode": target_mode,
+            "project_structure": "multi_model" if profile.mode == "multi_list" else "single_model",
+            "model_count": len(profile.categories) if profile.mode == "multi_list" else 1,
+            "model_pages": model_pages,
+            "index_pages_to_write": index_pages,
             "release_count": len(items),
             "pages_to_write": pages_to_write,
             "pages_to_delete": pages_to_delete,
@@ -73,6 +78,7 @@ class ReleaseModeConverter:
         current_mode = source["config_mode"]
         source_mode = source["source_mode"]
         items = source["items"]
+        all_items = source["all_items"]
 
         converted_count = 0
         deleted_pages: list[str] = []
@@ -82,20 +88,40 @@ class ReleaseModeConverter:
                 deleted_pages = self._delete_page_list_pages(profile, items)
             elif source_mode == "inline" and target_mode == "page":
                 converted_count = self._inline_to_page(sync, profile, items)
+                self._clean_legacy_model_pages(profile)
+                deleted_pages = self._delete_legacy_list_pages(profile)
+            elif source_mode == "mixed" and target_mode == "inline":
+                inline_items = [item for item in items if item.get("_source_mode") == "inline"]
+                page_items = [item for item in items if item.get("_source_mode") == "page"]
+                if inline_items:
+                    if self._config_needs_hub_pages(profile):
+                        converted_count += self._inline_list_to_hub(sync, profile, inline_items)
+                    else:
+                        converted_count += self._clean_existing_inline_containers(profile, inline_items)
+                if page_items:
+                    converted_count += self._page_to_inline(sync, profile, page_items)
+                deleted_pages = self._delete_pages_after_inline_conversion(profile, all_items, "mixed")
+            elif source_mode == "mixed" and target_mode == "page":
+                inline_items = [item for item in items if item.get("_source_mode") == "inline"]
+                converted_count = self._inline_to_page(sync, profile, inline_items)
+                self._clean_legacy_model_pages(profile)
+                deleted_pages = self._delete_legacy_list_pages(profile)
             else:
                 raise RedmineError(f"不支持的 Release 版本模式转换：{source_mode} -> {target_mode}")
         elif source_mode == target_mode == "inline" and items:
-            if self._inline_config_needs_hub_pages(profile):
+            if self._config_needs_hub_pages(profile):
                 converted_count = self._inline_list_to_hub(sync, profile, items)
                 deleted_pages = self._delete_stale_inline_list_pages(profile, items)
             else:
                 converted_count = self._clean_existing_inline_containers(profile, items)
                 deleted_pages = self._delete_stale_inline_list_pages(profile, items)
+        elif source_mode == target_mode == "page" and items and self._config_needs_hub_pages(profile):
+            converted_count = len(items)
+            self._clean_legacy_model_pages(profile)
+            deleted_pages = self._delete_legacy_list_pages(profile)
 
         config_updated = False
-        if current_mode != target_mode or (
-            target_mode == "inline" and self._inline_config_needs_hub_pages(profile)
-        ):
+        if current_mode != target_mode or self._config_needs_hub_pages(profile):
             self._save_config_mode(target_mode)
             config_updated = True
 
@@ -205,12 +231,30 @@ class ReleaseModeConverter:
         source_profile = config_profile
         source_mode = config_mode
         source_items = config_items
+        all_items = config_items
         warnings: list[str] = []
 
-        if config_mode == target_mode and not config_items and alternate_items:
+        if config_items and alternate_items:
+            items_by_mode = {
+                config_mode: config_items,
+                alternate_mode: alternate_items,
+            }
+            source_mode = "mixed"
+            source_items = self._merge_source_items(
+                items_by_mode[target_mode],
+                items_by_mode["page" if target_mode == "inline" else "inline"],
+                target_mode,
+            )
+            all_items = [*config_items, *alternate_items]
+            warnings.append(
+                f"同时识别到 page 内容 {len(items_by_mode['page'])} 个和 inline 内容 "
+                f"{len(items_by_mode['inline'])} 个；将合并后转换，重复版本优先保留目标模式内容。"
+            )
+        elif config_mode == target_mode and not config_items and alternate_items:
             source_profile = alternate_profile
             source_mode = alternate_mode
             source_items = alternate_items
+            all_items = alternate_items
             warnings.append(
                 f"Release_Tool_Config 当前是 {config_mode}，但该模式未识别到 Release；"
                 f"已从现有 {alternate_mode} 内容识别到 {len(alternate_items)} 个 Release，将按实际内容转换。"
@@ -219,6 +263,7 @@ class ReleaseModeConverter:
             source_profile = alternate_profile
             source_mode = alternate_mode
             source_items = alternate_items
+            all_items = alternate_items
             warnings.append(
                 f"Release_Tool_Config 当前是 {config_mode}，但该模式未识别到 Release；"
                 f"已改用现有 {alternate_mode} 内容作为源。"
@@ -229,8 +274,27 @@ class ReleaseModeConverter:
             "config_mode": config_mode,
             "source_mode": source_mode,
             "items": source_items,
+            "all_items": all_items,
             "warnings": warnings,
         }
+
+    def _merge_source_items(
+        self,
+        preferred_items: list[dict[str, Any]],
+        fallback_items: list[dict[str, Any]],
+        preferred_mode: str,
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        fallback_mode = "page" if preferred_mode == "inline" else "inline"
+        for source_mode, items in ((preferred_mode, preferred_items), (fallback_mode, fallback_items)):
+            for item in items:
+                key = (item.get("cat") or "", item.get("ver") or item.get("page") or "")
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append({**item, "_source_mode": source_mode})
+        return result
 
     def _page_to_inline(self, sync: IndexSync, profile: WikiProfile, items: list[dict[str, Any]]) -> int:
         versions = self._version_ids()
@@ -403,9 +467,11 @@ class ReleaseModeConverter:
         source_mode: str,
         target_mode: str,
     ) -> list[str]:
-        if target_mode != "inline":
-            return []
         result: list[str] = []
+        if target_mode == "page":
+            if profile.mode == "multi_list":
+                result.extend(self._legacy_list_page_titles(profile))
+            return result
         if source_mode == "page":
             if profile.mode == "multi_list":
                 categories = self._category_map(profile)
@@ -419,6 +485,12 @@ class ReleaseModeConverter:
             if profile.mode == "multi_list":
                 result.extend(self._stale_inline_list_page_titles(profile, items))
             for item in items:
+                self._append_release_detail_page(result, item.get("block_id") or "")
+        elif source_mode == "mixed":
+            if profile.mode == "multi_list":
+                result.extend(self._stale_inline_list_page_titles(profile, items))
+            for item in items:
+                self._append_release_detail_page(result, item.get("page") or "")
                 self._append_release_detail_page(result, item.get("block_id") or "")
         return result
 
@@ -445,8 +517,16 @@ class ReleaseModeConverter:
         return result
 
     def _delete_page_list_pages(self, profile: WikiProfile, items: list[dict[str, Any]]) -> list[str]:
+        return self._delete_pages_after_inline_conversion(profile, items, "page")
+
+    def _delete_pages_after_inline_conversion(
+        self,
+        profile: WikiProfile,
+        items: list[dict[str, Any]],
+        source_mode: str,
+    ) -> list[str]:
         deleted: list[str] = []
-        for title in self._pages_to_delete_after_conversion(profile, items, "page", "inline"):
+        for title in self._pages_to_delete_after_conversion(profile, items, source_mode, "inline"):
             if not self.client.get_wiki_page(self.project_id, title):
                 continue
             self.client.delete_wiki_page(self.project_id, title)
@@ -459,6 +539,42 @@ class ReleaseModeConverter:
             self.client.delete_wiki_page(self.project_id, stale_title)
             deleted.append(stale_title)
         return deleted
+
+    def _delete_legacy_list_pages(self, profile: WikiProfile) -> list[str]:
+        deleted: list[str] = []
+        for title in self._legacy_list_page_titles(profile):
+            if not self.client.get_wiki_page(self.project_id, title):
+                continue
+            self.client.delete_wiki_page(self.project_id, title)
+            deleted.append(title)
+        return deleted
+
+    def _clean_legacy_model_pages(self, profile: WikiProfile) -> None:
+        for category in profile.categories:
+            if category.list_page == category.hub:
+                continue
+            page = self.client.get_wiki_page(self.project_id, category.hub)
+            if not page:
+                continue
+            current_text = page.get("text", "")
+            new_text = self._clean_inline_container_text(current_text, profile, category)
+            if new_text == current_text:
+                continue
+            self.client.put_wiki_page(
+                self.project_id,
+                category.hub,
+                new_text,
+                "release model page normalization",
+                parent_title=profile.main_page,
+                version=page.get("version"),
+            )
+
+    def _legacy_list_page_titles(self, profile: WikiProfile) -> list[str]:
+        return [
+            category.list_page
+            for category in profile.categories
+            if category.list_page and category.list_page != category.hub
+        ]
 
     def _append_release_detail_page(self, result: list[str], title: str) -> None:
         if self._is_release_detail_page(title) and title not in result:
@@ -557,7 +673,7 @@ class ReleaseModeConverter:
     def _category_map(self, profile: WikiProfile) -> dict[str, CategoryProfile]:
         return {category.key: category for category in profile.categories}
 
-    def _inline_config_needs_hub_pages(self, profile: WikiProfile) -> bool:
+    def _config_needs_hub_pages(self, profile: WikiProfile) -> bool:
         return profile.mode == "multi_list" and any(category.list_page != category.hub for category in profile.categories)
 
     def _save_config_mode(self, target_mode: str) -> None:
@@ -580,13 +696,13 @@ class ReleaseModeConverter:
             mode_pattern = re.compile(r"(?m)^(?P<prefix>\s*release_detail_mode\s*:\s*).*$")
             if mode_pattern.search(body):
                 body = mode_pattern.sub(lambda m: f"{m.group('prefix')}{target_mode}", body, count=1)
-                return self._inline_config_uses_hub_pages(body) if target_mode == "inline" else body
+                return self._config_uses_hub_pages(body)
             main_pattern = re.compile(r"(?m)^(\s*main_page\s*:\s*.*)$")
             if main_pattern.search(body):
                 body = main_pattern.sub(lambda m: f"{m.group(1)}\nrelease_detail_mode: {target_mode}", body, count=1)
-                return self._inline_config_uses_hub_pages(body) if target_mode == "inline" else body
+                return self._config_uses_hub_pages(body)
             body = body.rstrip() + f"\nrelease_detail_mode: {target_mode}\n"
-            return self._inline_config_uses_hub_pages(body) if target_mode == "inline" else body
+            return self._config_uses_hub_pages(body)
 
         match = block_pattern.search(text or "")
         if match:
@@ -594,7 +710,7 @@ class ReleaseModeConverter:
             return text[: match.start("body")] + new_body + text[match.end("body") :]
         return update_body(text or "")
 
-    def _inline_config_uses_hub_pages(self, body: str) -> str:
+    def _config_uses_hub_pages(self, body: str) -> str:
         lines = body.splitlines()
         result: list[str] = []
         current_hub = ""

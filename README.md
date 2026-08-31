@@ -81,10 +81,21 @@ docs\production_deployment.md
 Redmine 的文本格式必须使用 CommonMark Markdown 或 Markdown。工具生成的配置会写入
 `text_format: common_mark`；Textile 页面不受支持，保存配置时会被拒绝，避免生成无法正确渲染或回读的页面。
 
-- `single_list`：单列表项目，版本分类可以为空。
-- `multi_list`：多分类项目，发布或编辑版本时必须填写版本分类，并且必须匹配配置中的分类。
-- `release_detail_mode: inline`：默认模式，版本明细直接写在主页面或分类列表页中，不单独创建每个版本的 Wiki 页面。
-- `release_detail_mode: page`：兼容旧模式，每个版本单独创建一个 Release Wiki 页面。
+- `single_list`：单型号项目，主页面就是该型号的版本管理页。
+- `multi_list`：多型号项目，主页面维护型号入口，每种型号有一个型号页。
+- `release_detail_mode: inline`：每种型号的所有版本集中保存在一个页面。
+- `release_detail_mode: page`：型号页维护版本索引，每个版本使用独立 Release Wiki 页面。
+
+两个维度组合成四种受支持结构：
+
+| 项目型号 | 版本页面布局 | Wiki 关系 |
+|---|---|---|
+| 单型号 | 所有版本一个页面 | `Release_Notes` 内保存全部版本 |
+| 单型号 | 每个版本独立页面 | `Release_Notes → Release_xxx` |
+| 多型号 | 每个型号所有版本一个页面 | `Release_Notes → 型号页（页内全部版本）` |
+| 多型号 | 每个版本独立页面 | `Release_Notes → 型号页（版本索引）→ Release_xxx` |
+
+新配置不再创建额外的 `*_List` 中间页。旧配置仍可读取，可通过“版本页面布局转换”把内容归并到型号页。
 
 推荐小项目使用默认内联模式：
 
@@ -112,13 +123,19 @@ release_page_prefix: Release_DP580_FW_
 - 未配置多级分类的项目允许版本分类为空。
 - 其他项目如果有自己的多级 Wiki 或索引结构，应以该项目的 `Release_Tool_Config` 为准。
 
-single 和 multi 互转：
+项目型号结构调整：
 
 - 先修改并保存项目 `Release_Tool_Config`。
 - 在结构管理页点击“预览重建索引”，确认当前配置会更新哪些页面、哪些 Release 父页面会被调整、哪些 Release 无法归类。
 - 确认无误后点击“确认重建索引”，工具会按当前配置全量重建索引。
-- 重建索引只更新当前配置涉及的主页面、分类页面、列表页面和 Release 父页面，不会删除旧 Wiki 页面。
+- 重建索引只更新当前配置涉及的主页面、型号页面和 Release 父页面，不会删除旧 Wiki 页面。
 - 从 `single_list` 转 `multi_list` 时，历史 Release 如果没有可匹配的分类，预览中会列为“无法归类”，需要先编辑版本分类或调整配置后再重建。
+
+版本页面布局转换：
+
+- 可在“所有版本一个页面”和“每个版本独立页面”之间双向转换，不改变单型号/多型号结构。
+- 转换预览会同时识别 page、inline 和历史混合内容，列出目标型号页、目标版本页及待清理旧页面。
+- 旧 `*_List` 页面会在内容复制完成、配置切换并重建型号索引后清理。
 
 ## 旧 Changelog 项目升级
 
@@ -141,11 +158,13 @@ h2. version:V1.0.0.1 (2021-01-01)
 ## version:V1.0.0.1 (2021-01-01)
 ```
 
-旧项目升级页面支持三种版本模式：
+旧项目升级会自动按扫描结果判断单型号或多型号，并支持三种版本页面布局选择：
 
-- `auto`：自动模式。有 `Release_Tool_Config` 时沿用其中的 `release_detail_mode`；没有配置时默认 `inline`。
-- `inline`：强制迁移为内联模式，多个版本合并写入 `Release_Notes` 或分类页。
-- `page`：强制迁移为一版本一页，适合已经按 page 模式管理的项目继续保持原结构。
+- `auto`：有 `Release_Tool_Config` 时沿用其中的版本布局；没有配置时默认“所有版本一个页面”。
+- `inline`：所有版本一个页面，写入单型号主页面或多型号的型号页。
+- `page`：每个版本独立页面，单型号主页面或多型号的型号页负责维护版本索引。
+
+迁移目标与版本管理页的四种标准结构完全一致，不会创建额外的 `Release_Notes_型号_List` 中间页。
 
 升级后的默认目标结构为内联模式：
 

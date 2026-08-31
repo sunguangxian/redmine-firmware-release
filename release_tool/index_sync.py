@@ -98,6 +98,8 @@ class IndexSync:
         plan = self._build_refresh_plan(profile, items)
         return {
             "mode": profile.mode,
+            "project_structure": "multi_model" if profile.mode == "multi_list" else "single_model",
+            "version_layout": profile.release_detail_mode,
             "main_page": profile.main_page,
             "release_count": len(items),
             "categories": [
@@ -121,6 +123,17 @@ class IndexSync:
         parents_to_update: list[dict[str, str]] = []
         uncategorized: list[dict[str, str]] = []
         warnings: list[str] = []
+
+        legacy_list_pages = [
+            category.list_page
+            for category in profile.categories
+            if category.list_page and category.list_page != category.hub
+        ]
+        if legacy_list_pages:
+            warnings.append(
+                f"当前配置仍使用 {len(legacy_list_pages)} 个旧式独立列表页；"
+                "建议在“版本页面布局转换”中执行一次当前布局转换，将版本索引归并到型号页。"
+            )
 
         def add_page(title: str) -> None:
             if title and title not in pages_to_update:
@@ -424,7 +437,7 @@ class IndexSync:
             f"[项目文件](/projects/{self.project_id}/files)，Wiki 仅记录变更。\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
-            f"{lines}"
+            f"{SYNC_BEGIN}\n{lines}\n{SYNC_END}\n"
         )
         page = self._get_page(profile.main_page)
         current = (page or {}).get("text", "")
@@ -466,21 +479,38 @@ class IndexSync:
         self._put_page(title, new_text, comment, parent_title=parent_title, page=page)
 
     def _replace_generated_region(self, text: str, generated: str, section_title: str) -> str:
+        managed = f"{SYNC_BEGIN}\n{generated.rstrip()}\n{SYNC_END}"
         if SYNC_BEGIN in text and SYNC_END in text:
             return re.sub(
                 rf"{re.escape(SYNC_BEGIN)}.*?{re.escape(SYNC_END)}",
-                f"{SYNC_BEGIN}\n{generated}\n{SYNC_END}",
+                managed,
                 text,
                 flags=re.S,
             )
 
-        replaced = self._replace_section(text, section_title, generated)
+        generated_heading = re.match(
+            rf"^(?:#+\s*|h[1-6]\.\s*){re.escape(section_title)}\s*$",
+            generated.lstrip().splitlines()[0] if generated.strip() else "",
+        )
+        replaced = self._replace_section(
+            text,
+            section_title,
+            managed,
+            generated_has_heading=bool(generated_heading),
+        )
         if replaced != text:
             return replaced
 
-        return text.rstrip() + f"\n\n{SYNC_BEGIN}\n{generated}\n{SYNC_END}\n"
+        return text.rstrip() + f"\n\n{managed}\n"
 
-    def _replace_section(self, text: str, section_title: str, generated: str) -> str:
+    def _replace_section(
+        self,
+        text: str,
+        section_title: str,
+        generated: str,
+        *,
+        generated_has_heading: bool | None = None,
+    ) -> str:
         heading_re = re.compile(
             rf"(?P<head>^(?:#+\s*|h[1-6]\.\s*){re.escape(section_title)}\s*$)",
             re.M,
@@ -489,8 +519,9 @@ class IndexSync:
         if not match:
             return text
 
-        first_generated_line = generated.lstrip().splitlines()[0] if generated.strip() else ""
-        generated_has_heading = bool(heading_re.match(first_generated_line))
+        if generated_has_heading is None:
+            first_generated_line = generated.lstrip().splitlines()[0] if generated.strip() else ""
+            generated_has_heading = bool(heading_re.match(first_generated_line))
         start = match.start() if generated_has_heading or section_title == "版本列表" else match.end()
 
         next_heading = re.search(r"^(?:#+\s+|h[1-6]\.\s+).+$", text[match.end():], re.M)
@@ -509,7 +540,7 @@ class IndexSync:
             f"[[{profile.main_page}|← 返回 Release Notes]]\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
-            f"{list_text}"
+            f"{SYNC_BEGIN}\n{list_text}\n{SYNC_END}\n"
         )
 
     def _build_category_hub(self, profile: WikiProfile, category: CategoryProfile) -> str:
@@ -561,7 +592,7 @@ class IndexSync:
             f"> Version lists are maintained by the release tool.\n\n"
             f"--------------\n\n"
             f"{{{{>toc}}}}\n\n"
-            f"{generated}"
+            f"{SYNC_BEGIN}\n{generated}\n{SYNC_END}\n"
         )
 
     def _refresh_main_preserving_manual_content(self, profile: WikiProfile, items: list[dict[str, Any]]) -> None:
@@ -571,7 +602,7 @@ class IndexSync:
         current = (page or {}).get("text", "")
         if self._is_inline_profile(profile):
             current = self._clean_inline_main_text(current)
-        new_text = self._replace_generated_region(current, generated, "Product Lines") if current else fallback
+        new_text = self._replace_main_generated_region(current, generated) if current else fallback
         self._put_page(
             profile.main_page,
             new_text,
@@ -579,6 +610,24 @@ class IndexSync:
             is_start_page=True,
             page=page,
         )
+
+    def _replace_main_generated_region(self, text: str, generated: str) -> str:
+        managed = f"{SYNC_BEGIN}\n{generated.rstrip()}\n{SYNC_END}"
+        if SYNC_BEGIN in text and SYNC_END in text:
+            return re.sub(
+                rf"{re.escape(SYNC_BEGIN)}.*?{re.escape(SYNC_END)}",
+                managed,
+                text,
+                flags=re.S,
+            )
+
+        # 旧主页面没有同步标记；从第一个 Product Lines 标题开始的内容均由工具生成。
+        # 一次性收拢为标记区，避免每次重建只替换入口小节并累积重复型号段。
+        heading = re.search(r"(?im)^(?:##\s+Product Lines|h2\.\s+Product Lines)\s*$", text or "")
+        if heading:
+            prefix = text[: heading.start()].rstrip()
+            return f"{prefix}\n\n{managed}\n" if prefix else f"{managed}\n"
+        return text.rstrip() + f"\n\n{managed}\n"
 
     def _clean_inline_main_text(self, text: str) -> str:
         cleaned = re.sub(r"(?m)^>\s*Version lists are maintained by the release tool in the `\*_List` pages\.\s*\r?\n?", "", text or "")
@@ -681,7 +730,7 @@ class IndexSync:
 
     def _extract_product_line(self, text: str) -> str:
         for pattern in (
-            r"\*\*(?:产品线|Product Line|Product line):\*\*\s*([^\r\n]+)",
+            r"\*\*(?:型号|产品线|Product Line|Product line):\*\*\s*([^\r\n]+)",
             r"\*\*(?:分类|Category):\*\*\s*([^\r\n]+)",
         ):
             match = re.search(pattern, text)

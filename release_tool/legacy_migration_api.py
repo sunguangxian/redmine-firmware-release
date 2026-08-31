@@ -1,10 +1,4 @@
-"""旧 Changelog 迁移接口。
-
-支持按本次任务选择 release_detail_mode：
-- auto：有旧配置则沿用旧配置，没有配置默认 inline
-- inline：强制迁移为内联版本
-- page：强制迁移为一版本一页
-"""
+"""旧 Changelog 迁移接口，目标结构与版本管理的四种标准布局保持一致。"""
 
 from __future__ import annotations
 
@@ -22,7 +16,6 @@ from .legacy_job_helpers import append_legacy_log, get_legacy_job_snapshot, set_
 from .legacy_job_store import cleanup_legacy_jobs, create_legacy_job, fail_interrupted_legacy_jobs
 from .redmine_api import RedmineClient
 from .release_helpers import invalidate_release_rows
-from .release_page import extract_inline_release_block
 
 _LEGACY_JOB_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="legacy-migration")
 
@@ -58,43 +51,8 @@ def _create_legacy_job(job_id: str, payload: LegacyMigrationRequestV2) -> None:
     append_legacy_log(job_id, f"准备执行旧项目升级，版本模式：{payload.release_detail_mode or 'auto'}")
 
 
-def _legacy_inline_container(release: Any, *, single_list: bool) -> str:
-    return "Release_Notes" if single_list else f"Release_Notes_{release.model}"
-
-
-def _apply_inline_preview_counts(migrator: LegacyChangelogMigrator, preview: Dict[str, Any]) -> None:
-    releases, _sources, _warnings = migrator.scan()
-    categories = migrator._release_categories(releases)
-    single_list = len(categories) == 1
-    existing_blocks = 0
-    new_blocks = 0
-    page_cache: dict[str, str] = {}
-    for release in releases:
-        container = _legacy_inline_container(release, single_list=single_list)
-        if container not in page_cache:
-            page = migrator.client.get_wiki_page(migrator.project_id, container)
-            page_cache[container] = (page or {}).get("text", "")
-        block_id = release.wiki_title
-        if extract_inline_release_block(page_cache[container], block_id):
-            existing_blocks += 1
-        else:
-            new_blocks += 1
-    preview["release_pages_to_create"] = new_blocks
-    preview["existing_release_pages"] = existing_blocks
-
-
 def _preview_with_mode(migrator: LegacyChangelogMigrator) -> Dict[str, Any]:
-    preview = migrator.preview()
-    detail_mode = migrator._selected_detail_mode()
-    preview["release_detail_mode"] = detail_mode
-    preview["release_detail_mode_label"] = "内联模式" if detail_mode == "inline" else "一版本一页"
-    preview["requested_release_detail_mode"] = migrator.release_detail_mode
-    if detail_mode == "inline":
-        preview["target_page_label"] = "承载页面"
-        _apply_inline_preview_counts(migrator, preview)
-    else:
-        preview["target_page_label"] = "Release 明细页"
-    return preview
+    return migrator.preview()
 
 
 def _run_legacy_migration_job(job_id: str, payload: LegacyMigrationRequestV2, session: Dict[str, Any]) -> None:

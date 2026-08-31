@@ -44,6 +44,7 @@ class ReleasePlanner:
         publisher = ReleasePublisher(self.client)
         publisher._validate_category(form, index_sync, profile, logs)
         mode = getattr(profile, "release_detail_mode", "inline")
+        project_structure = "multi_model" if profile.mode == "multi_list" else "single_model"
         version_name_final = publisher._configured_version_name(form, index_sync, profile)
         version_plan = "将复用已有 Version"
         if not any(v.get("name", "").strip() == version_name_final for v in self.client.list_versions(form.project_id)):
@@ -70,7 +71,7 @@ class ReleasePlanner:
                 display_target = f"{container_page} / {form.version_name}"
                 new_block_id = publisher._next_block_id(block_id, old_display_version, form.version_name, True)
                 if block_id == (old_display_version or block_id) and block_id != form.version_name.strip():
-                    warnings.append(f"本次会把旧内联版本块 {block_id} 重命名为 {form.version_name.strip()}。")
+                    warnings.append(f"本次会把页面中的旧版本记录 {block_id} 重命名为 {form.version_name.strip()}。")
                 elif block_id != form.version_name.strip():
                     warnings.append(f"本次会保留唯一块标识 {block_id}，页面显示版本更新为 {form.version_name.strip()}。")
                 block_id = new_block_id
@@ -78,7 +79,7 @@ class ReleasePlanner:
                 container_page = index_sync.inline_container_for_release(
                     profile,
                     form.page_title,
-                    f"**产品线:** {form.product_line}\n**Commit:** {form.commit}\n",
+                    f"**型号:** {form.product_line}\n**Commit:** {form.commit}\n",
                 )
                 block_id = form.version_name.strip()
                 target_page = inline_ref(container_page, block_id)
@@ -109,6 +110,11 @@ class ReleasePlanner:
         plan = {
             "ok": True,
             "mode": mode,
+            "project_structure": project_structure,
+            "project_structure_label": "多型号项目" if project_structure == "multi_model" else "单型号项目",
+            "version_layout": mode,
+            "version_layout_label": "所有版本一个页面" if mode == "inline" else "每个版本独立页面",
+            "model": form.product_line.strip(),
             "action": "编辑版本" if form.wiki_title else "发布新版本",
             "project_id": form.project_id,
             "version_name": form.version_name,
@@ -140,6 +146,8 @@ class ReleasePlanner:
         lines = [
             f"操作：{plan['action']}",
             f"项目：{plan['project_id']}",
+            f"项目结构：{plan['project_structure_label']}",
+            f"版本布局：{plan['version_layout_label']}",
             f"版本：{plan['version_name']}",
             f"日期：{plan['release_date']}",
             f"Wiki 页面：{plan.get('display_target') or plan['target_page']}",

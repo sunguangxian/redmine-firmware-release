@@ -5,11 +5,12 @@
         <el-select v-model="projectId" :disabled="busy" placeholder="选择项目" filterable style="width: 320px" @change="reloadAll">
           <el-option v-for="project in projects" :key="project.identifier" :label="`${project.name} (${project.identifier})`" :value="project.identifier" />
         </el-select>
-        <el-select v-model="filterProductLine" :disabled="busy" clearable placeholder="全部分类" style="width: 220px" @change="loadReleases">
-          <el-option label="全部分类" value="" />
+        <el-select v-model="filterProductLine" :disabled="busy" clearable placeholder="全部型号" style="width: 220px" @change="loadReleases">
+          <el-option label="全部型号" value="" />
           <el-option v-for="item in projectCategories" :key="item.key" :label="item.title || item.key" :value="item.title || item.key" />
         </el-select>
         <el-button :disabled="busy" :loading="loadingReleases" @click="loadReleases">刷新列表</el-button>
+        <el-tag v-if="projectStructureLabel" type="info">{{ projectStructureLabel }} · {{ versionLayoutLabel }}</el-tag>
       </div>
 
       <el-select v-model="selectedWikiTitle" :disabled="busy" placeholder="选择要编辑的版本" filterable style="width: 100%; margin-bottom: 12px" @change="loadDetail">
@@ -19,7 +20,7 @@
       <el-table :data="releases" border height="220">
         <el-table-column prop="version" label="版本" width="160" />
         <el-table-column prop="date" label="日期" width="130" />
-        <el-table-column prop="product_line" label="分类" width="160" />
+        <el-table-column prop="product_line" label="型号" width="160" />
         <el-table-column label="Wiki 页" min-width="240"><template #default="{ row }">{{ row.display_title || row.title }}</template></el-table-column>
         <el-table-column prop="summary" label="摘要" min-width="240" />
       </el-table>
@@ -31,7 +32,7 @@
         <el-input v-model="form.version_name" :disabled="busy || !selectedWikiTitle" placeholder="V5.3.8.3"><template #prepend>版本号</template></el-input>
         <el-input v-model="form.release_date" :disabled="busy || !selectedWikiTitle" placeholder="YYYY-MM-DD"><template #prepend>发布日期</template></el-input>
         <el-input v-model="form.commit" :disabled="busy || !selectedWikiTitle" class="full-row" placeholder="git commit hash"><template #prepend>Commit</template></el-input>
-        <el-select v-model="form.product_line" :disabled="busy || !selectedWikiTitle" class="full-row" clearable filterable placeholder="版本分类（可选）">
+        <el-select v-model="form.product_line" :disabled="busy || !selectedWikiTitle" class="full-row" :clearable="projectStructure !== 'multi_model'" filterable :placeholder="projectStructure === 'multi_model' ? '选择型号（必填）' : '型号（可选）'">
           <el-option v-for="item in projectCategories" :key="item.key" :label="item.title || item.key" :value="item.title || item.key" />
         </el-select>
         <el-input v-model="form.changelog" :disabled="busy || !selectedWikiTitle" class="full-row" type="textarea" :rows="6" placeholder="每行一条变更说明" />
@@ -117,6 +118,9 @@ const filterProductLine = ref('')
 const selectedWikiTitle = ref('')
 const releases = ref<ReleaseSummary[]>([])
 const projectCategories = ref<Array<{ key: string; title: string }>>([])
+const projectStructure = ref('')
+const projectStructureLabel = ref('')
+const versionLayoutLabel = ref('')
 const publishHistory = ref<PublishHistoryItem[]>([])
 const mailHistory = ref<MailHistoryItem[]>([])
 const loadingReleases = ref(false)
@@ -164,7 +168,7 @@ function onFileChange(_file: UploadFile, files: UploadFiles) { selectedFiles.val
 function onFileRemove(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
 async function loadReleases() { if (!projectId.value || busy.value) return; loadingReleases.value = true; try { releases.value = await listReleases(projectId.value, filterProductLine.value) } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } finally { loadingReleases.value = false } }
 async function reloadAll() { if (busy.value) return; selectedWikiTitle.value = ''; baseline.value = ''; publishHistory.value = []; mailHistory.value = []; await loadCategories(); await loadReleases() }
-async function loadCategories() { if (!projectId.value) return; try { const data = await getProjectReleaseCategories(projectId.value); projectCategories.value = data.categories; const values = new Set(projectCategories.value.map((item) => item.title || item.key)); if (filterProductLine.value && !values.has(filterProductLine.value)) filterProductLine.value = ''; if (form.product_line && !values.has(form.product_line)) form.product_line = '' } catch (error) { projectCategories.value = []; ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
+async function loadCategories() { if (!projectId.value) return; try { const data = await getProjectReleaseCategories(projectId.value); projectCategories.value = data.categories; projectStructure.value = data.project_structure; projectStructureLabel.value = data.project_structure_label; versionLayoutLabel.value = data.version_layout_label; const values = new Set(projectCategories.value.map((item) => item.title || item.key)); if (filterProductLine.value && !values.has(filterProductLine.value)) filterProductLine.value = ''; if (form.product_line && !values.has(form.product_line)) form.product_line = '' } catch (error) { projectCategories.value = []; projectStructure.value = ''; projectStructureLabel.value = ''; versionLayoutLabel.value = ''; ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
 async function loadDetail() { if (!projectId.value || !selectedWikiTitle.value || busy.value) return; try { const detail = await getReleaseDetail(projectId.value, selectedWikiTitle.value); form.version_name = detail.version_name; form.release_date = detail.release_date; form.commit = detail.commit; form.product_line = detail.product_line; form.changelog = detail.changelog; filesInfo.value = detail.files_info; selectedFiles.value = []; replaceAttachments.value = false; noticeEnabled.value = false; mailSubject.value = ''; mailBody.value = ''; canRetryNotice.value = false; await loadHistories(); baseline.value = snapshot() } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
 async function loadHistories() { if (!projectId.value || !selectedWikiTitle.value) return; const [publishData, mailData] = await Promise.all([getPublishHistory({ project_id: projectId.value, wiki_title: selectedWikiTitle.value, version_name: form.version_name, limit: 20 }), getMailHistory({ project_id: projectId.value, wiki_title: selectedWikiTitle.value, version_name: form.version_name, limit: 20 })]); publishHistory.value = publishData.items; mailHistory.value = mailData.items }
 async function loadHistoriesQuietly() { try { await loadHistories() } catch (error) { ElMessage.warning(`历史记录刷新失败：${friendlyReleaseError(errorMessage(error))}`) } }

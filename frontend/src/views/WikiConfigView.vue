@@ -4,10 +4,10 @@
       <template #header>
         <div class="structure-heading">
           <div>
-            <div>Release Wiki 结构管理</div>
-            <p>通过表单维护页面和模块，保存时由工具自动生成配置。</p>
+            <div>版本管理结构</div>
+            <p>先选择项目包含一种还是多种型号，再选择每种型号的版本页面布局。</p>
           </div>
-          <el-tag type="info" effect="plain">{{ form.mode === 'multi_list' ? `${form.categories.length} 个模块` : '单页面' }}</el-tag>
+          <el-tag type="info" effect="plain">{{ form.mode === 'multi_list' ? `${form.categories.length} 种型号` : '单型号' }}</el-tag>
         </div>
       </template>
 
@@ -28,16 +28,16 @@
           <div class="section-title">基础设置</div>
           <el-form label-position="top">
             <div class="form-grid">
-              <el-form-item label="结构方式">
+              <el-form-item label="项目型号结构">
                 <el-radio-group v-model="form.mode">
-                  <el-radio-button value="single_list">单页面</el-radio-button>
-                  <el-radio-button value="multi_list">多模块</el-radio-button>
+                  <el-radio-button value="single_list">一种型号</el-radio-button>
+                  <el-radio-button value="multi_list">多种型号</el-radio-button>
                 </el-radio-group>
               </el-form-item>
-              <el-form-item label="版本内容保存方式">
+              <el-form-item label="每种型号的版本页面布局">
                 <el-radio-group v-model="form.releaseDetailMode">
-                  <el-radio-button value="inline">写入列表页</el-radio-button>
-                  <el-radio-button value="page">每个版本单独一页</el-radio-button>
+                  <el-radio-button value="inline">所有版本一个页面</el-radio-button>
+                  <el-radio-button value="page">每个版本独立页面</el-radio-button>
                 </el-radio-group>
               </el-form-item>
               <el-form-item label="主页面名称">
@@ -52,19 +52,19 @@
           <template v-if="form.mode === 'multi_list'">
             <div class="module-section-header">
               <div>
-                <div class="section-title">模块列表</div>
-                <p>每个模块对应一个产品线或版本分类，可按顺序增删和调整。</p>
+                <div class="section-title">型号列表</div>
+                <p>每种型号固定对应一个型号页；不再额外创建 *_List 中间页。</p>
               </div>
-              <el-button type="primary" plain @click="addCategory">添加模块</el-button>
+              <el-button type="primary" plain @click="addCategory">添加型号</el-button>
             </div>
 
             <div v-if="!form.categories.length" class="empty-modules">
-              暂无模块，请点击“添加模块”。
+              暂无型号，请点击“添加型号”。
             </div>
             <div v-for="(item, index) in form.categories" :key="item.id" class="module-card">
               <div class="module-card-header">
                 <div class="module-number">{{ index + 1 }}</div>
-                <strong>{{ item.title || item.key || `模块 ${index + 1}` }}</strong>
+                <strong>{{ item.title || item.key || `型号 ${index + 1}` }}</strong>
                 <div class="module-actions">
                   <el-button text :disabled="index === 0" @click="moveCategory(index, -1)">上移</el-button>
                   <el-button text :disabled="index === form.categories.length - 1" @click="moveCategory(index, 1)">下移</el-button>
@@ -72,18 +72,15 @@
                 </div>
               </div>
               <div class="module-fields">
-                <el-form-item label="显示名称">
-                  <el-input v-model="item.title" placeholder="例如 Trunking 集群" />
+                <el-form-item label="型号显示名称">
+                  <el-input v-model="item.title" placeholder="例如 F864X" />
                 </el-form-item>
-                <el-form-item label="模块标识">
-                  <el-input v-model="item.key" placeholder="例如 Trunking" />
+                <el-form-item label="型号标识">
+                  <el-input v-model="item.key" placeholder="例如 F864X" />
                 </el-form-item>
-                <el-form-item label="模块页面">
-                  <el-input v-model="item.hubPage" placeholder="例如 Release_Notes_Trunking" />
-                </el-form-item>
-                <el-form-item label="版本内容页面">
-                  <el-input v-model="item.listPage" placeholder="留空时与模块页面相同" />
-                  <div class="field-tip">需要独立列表页时，填写如 Release_Notes_Trunking_List。</div>
+                <el-form-item label="型号页面">
+                  <el-input :model-value="item.hubPage" placeholder="例如 Release_Notes_F864X" @input="updateCategoryPage(item, String($event))" />
+                  <div class="field-tip">集中布局时保存全部版本；独立布局时保存版本索引。</div>
                 </el-form-item>
               </div>
             </div>
@@ -102,12 +99,10 @@
               <div v-for="(item, index) in form.categories" :key="`preview-${item.id}`" class="tree-branch">
                 <span class="branch-line" />
                 <div class="tree-node">
-                  <span class="node-type">模块 {{ index + 1 }}</span>
+                  <span class="node-type">型号 {{ index + 1 }}</span>
                   <strong>{{ item.title || item.key || '未命名模块' }}</strong>
                   <small>{{ item.hubPage || '未填写模块页面' }}</small>
-                  <div v-if="item.listPage && item.listPage !== item.hubPage" class="list-page">
-                    版本内容 → {{ item.listPage }}
-                  </div>
+                  <div class="list-page">{{ form.releaseDetailMode === 'inline' ? '页内保存全部版本' : '版本索引 → 每个版本独立页面' }}</div>
                 </div>
               </div>
             </div>
@@ -116,7 +111,7 @@
                 <span class="branch-line" />
                 <div class="tree-node release-storage">
                   <span class="node-type">版本内容</span>
-                  <strong>{{ form.releaseDetailMode === 'inline' ? '直接写入主页面' : '每个版本单独一页' }}</strong>
+                  <strong>{{ form.releaseDetailMode === 'inline' ? '主页面内保存全部版本' : '主页面索引 → 每个版本独立页面' }}</strong>
                 </div>
               </div>
             </div>
@@ -127,6 +122,14 @@
           </el-alert>
         </aside>
       </div>
+      <el-alert
+        v-if="legacyListPages.length"
+        class="card"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="`检测到 ${legacyListPages.length} 个旧式 *_List 页面，请先在下方执行一次当前版本布局转换。`"
+      />
 
       <el-collapse class="advanced-editor">
         <el-collapse-item name="raw">
@@ -151,23 +154,28 @@
     </el-card>
 
     <el-card class="card">
-      <template #header>Release page / inline 互转</template>
+      <template #header>版本页面布局转换</template>
+      <p class="preview-caption">只转换“所有版本一个页面 / 每个版本独立页面”，不会改变单型号或多型号结构。</p>
       <div class="toolbar">
-        <el-select v-model="targetMode" placeholder="目标版本模式" style="width: 180px">
-          <el-option label="Inline 内联模式" value="inline" />
-          <el-option label="Page 独立页面模式" value="page" />
+        <el-select v-model="targetMode" placeholder="目标版本布局" style="width: 240px">
+          <el-option label="所有版本一个页面" value="inline" />
+          <el-option label="每个版本独立页面" value="page" />
         </el-select>
         <el-button :loading="previewingConvert" @click="previewConvert">预览转换</el-button>
         <el-button type="warning" :loading="converting" @click="convertMode">确认转换</el-button>
       </div>
 
       <div v-if="convertPreview" class="release-log">
-        <div>配置模式：{{ convertPreview.current_mode }}；实际源模式：{{ convertPreview.source_mode }} -> 目标模式：{{ convertPreview.target_mode }}</div>
+        <div>项目结构：{{ projectStructureLabel(convertPreview.project_structure) }}（{{ convertPreview.model_count }} 种型号）</div>
+        <div>当前内容：{{ layoutLabel(convertPreview.source_mode) }} → 目标：{{ layoutLabel(convertPreview.target_mode) }}</div>
         <div>识别 Release：{{ convertPreview.release_count }} 个</div>
+        <div>型号页面：</div>
+        <div v-for="page in convertPreview.model_pages" :key="`model-${page}`">- {{ page }}</div>
+        <div v-if="!convertPreview.model_pages.length">- {{ form.mainPage }}（单型号主页面）</div>
         <div>将写入页面：</div>
         <div v-for="page in convertPreview.pages_to_write" :key="page">- {{ page }}</div>
         <div v-if="!convertPreview.pages_to_write.length">- 无</div>
-        <div>将删除旧列表页：</div>
+        <div>转换完成后清理的旧页面：</div>
         <div v-for="page in convertPreview.pages_to_delete" :key="page">- {{ page }}</div>
         <div v-if="!convertPreview.pages_to_delete.length">- 无</div>
       </div>
@@ -187,7 +195,8 @@
     <el-card v-if="refreshPreview" class="card">
       <template #header>索引重建预览</template>
       <div class="toolbar">
-        <span>结构：{{ refreshPreview.mode }}</span>
+        <span>项目：{{ projectStructureLabel(refreshPreview.project_structure) }}</span>
+        <span>版本布局：{{ layoutLabel(refreshPreview.version_layout) }}</span>
         <span>主页面：{{ refreshPreview.main_page }}</span>
         <span>Release：{{ refreshPreview.release_count }} 个</span>
       </div>
@@ -204,10 +213,9 @@
       </el-alert>
 
       <el-table v-if="refreshPreview.categories.length" :data="refreshPreview.categories" border style="margin-bottom: 12px">
-        <el-table-column prop="key" label="分类" width="140" />
-        <el-table-column prop="title" label="标题" min-width="180" />
-        <el-table-column prop="hub" label="Hub 页面" min-width="180" />
-        <el-table-column prop="list_page" label="列表页面" min-width="180" />
+        <el-table-column prop="key" label="型号标识" width="140" />
+        <el-table-column prop="title" label="型号" min-width="180" />
+        <el-table-column prop="hub" label="型号页面" min-width="180" />
         <el-table-column prop="release_count" label="Release 数" width="110" />
       </el-table>
 
@@ -266,6 +274,7 @@ const refreshing = ref(false)
 const previewingConvert = ref(false)
 const converting = ref(false)
 const formErrors = computed(() => validateWikiConfigForm(form))
+const legacyListPages = computed(() => form.categories.filter((item) => item.listPage && item.listPage !== item.hubPage))
 
 watch(
   () => props.projects,
@@ -297,13 +306,30 @@ function replaceForm(value: WikiConfigForm) {
 
 function addCategory() {
   const number = form.categories.length + 1
+  const hubPage = `${form.mainPage || 'Release_Notes'}_Model${number}`
   form.categories.push({
     id: nextCategoryId++,
-    key: `Module${number}`,
-    title: `模块 ${number}`,
-    hubPage: `${form.mainPage || 'Release_Notes'}_Module${number}`,
-    listPage: '',
+    key: `Model${number}`,
+    title: `型号 ${number}`,
+    hubPage,
+    listPage: hubPage,
   })
+}
+
+function updateCategoryPage(item: CategoryRow, value: string) {
+  const followsModelPage = !item.listPage || item.listPage === item.hubPage
+  item.hubPage = value
+  if (followsModelPage) item.listPage = value
+}
+
+function layoutLabel(mode: string) {
+  if (mode === 'inline') return '所有版本一个页面'
+  if (mode === 'page') return '每个版本独立页面'
+  return '混合布局'
+}
+
+function projectStructureLabel(mode: string) {
+  return mode === 'multi_model' ? '多型号项目' : '单型号项目'
 }
 
 function removeCategory(index: number) {
@@ -379,6 +405,9 @@ async function save() {
     ok.value = false
     message.value = formErrors.value.join('\n')
     return ElMessage.warning('请先完善结构配置')
+  }
+  if (legacyListPages.value.length) {
+    return ElMessage.warning('当前仍有旧式 *_List 页面，请先执行下方版本布局转换')
   }
   try {
     text.value = buildWikiConfigText(form)
@@ -456,8 +485,8 @@ async function convertMode() {
   }
   try {
     await ElMessageBox.confirm(
-      '将把当前 Release 内容复制为目标版本模式、切换 Release_Tool_Config 并重建索引；page 转 inline 会删除旧列表页，但不会删除原有 Release 详情页或 inline 块。是否继续？',
-      '确认 Release 模式转换',
+      `将转换为“${layoutLabel(targetMode.value)}”、重建型号索引，并清理预览中列出的 ${convertPreview.value.pages_to_delete.length} 个旧页面。是否继续？`,
+      '确认版本页面布局转换',
       { type: 'warning' }
     )
   } catch {

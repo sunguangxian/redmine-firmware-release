@@ -496,9 +496,11 @@ def _release_body_markdown(
     if not rows:
         rows.append("| （无） | |")
     internal_separator = "" if not heading else "\n--------------\n"
+    model_line = f"**型号:** {form.product_line.strip()}\n" if form.product_line.strip() else ""
     return (
         f"**日期:** {form.release_date}\n"
-        f"**Commit:** {form.commit}\n\n"
+        f"**Commit:** {form.commit}\n"
+        f"{model_line}\n"
         f"{internal_separator}\n"
         f"{changes_title}\n\n"
         f"{changes}\n\n"
@@ -610,7 +612,7 @@ def parse_release_page(title: str, text: str) -> dict:
     commit_match = re.search(r"\*\*Commit:\*\*\s*([^\r\n]+)", text)
     commit = commit_match.group(1).strip() if commit_match else ""
 
-    product_match = re.search(r"\*\*产品线:\*\*\s*([^\r\n]+)", text)
+    product_match = re.search(r"\*\*(?:型号|产品线|Product Line|Product line|分类|Category):\*\*\s*([^\r\n]+)", text)
     if product_match:
         product_line = product_match.group(1).strip()
     elif "_NP500_FW_" in title:

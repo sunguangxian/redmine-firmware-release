@@ -271,6 +271,139 @@ class ReleaseModeConverterTest(unittest.TestCase):
         self.assertEqual(main_text.count("{{>toc}}"), 1)
         self.assertEqual(client.versions[0]["wiki_page_title"], "Release_Notes_Regular")
 
+    def test_mixed_page_and_inline_releases_merge_into_hub_and_keep_second_level_page(self):
+        client = FakeRedmineClient()
+        mixed_config = PAGE_CONFIG.replace("release_detail_mode: page", "release_detail_mode: inline")
+        client.seed_page("Release_Tool_Config", mixed_config)
+        client.seed_page("Release_Notes", "# Release Notes\n")
+        client.seed_page(
+            "Release_Notes_Regular",
+            "# Regular\n\n## Version List\n\n{{include(Release_Notes_Regular_List)}}\n",
+            parent_title="Release_Notes",
+        )
+        client.seed_version("V1.0.0", 1)
+        client.seed_version("V2.0.0", 2)
+        page_text = build_release_markdown(form("V1.0.0"), 1, [], main_page="Release_Notes")
+        client.seed_page("Release_Regular_FW_V1_0_0", page_text, parent_title="Release_Notes_Regular")
+        inline_block = build_inline_release_block(
+            form("V2.0.0"),
+            2,
+            [],
+            block_id="V2.0.0",
+            display_version="V2.0.0",
+            container_page="Release_Notes_Regular_List",
+        )
+        client.seed_page(
+            "Release_Notes_Regular_List",
+            "# Regular list\n\n"
+            "<!-- RELEASE_SYNC_BEGIN -->\n"
+            "- [[Release_Regular_FW_V1_0_0|V1.0.0 (2026-07-05)]] - old release\n"
+            "<!-- RELEASE_SYNC_END -->\n\n"
+            + inline_block,
+            parent_title="Release_Notes_Regular",
+        )
+
+        preview = ReleaseModeConverter(client, "dp5x").preview("inline")
+
+        self.assertEqual(preview["source_mode"], "mixed")
+        self.assertEqual(preview["release_count"], 2)
+        self.assertEqual(preview["pages_to_write"], ["Release_Notes_Regular"])
+        self.assertEqual(
+            preview["pages_to_delete"],
+            ["Release_Notes_Regular_List", "Release_Regular_FW_V1_0_0"],
+        )
+
+        result = ReleaseModeConverter(client, "dp5x").convert("inline")
+
+        self.assertEqual(result["converted_count"], 2)
+        self.assertNotIn("Release_Notes_Regular_List", client.pages)
+        self.assertNotIn("Release_Regular_FW_V1_0_0", client.pages)
+        self.assertIn("Release_Notes_Regular", client.pages)
+        self.assertEqual(client.pages["Release_Notes_Regular"]["parent"]["title"], "Release_Notes")
+        hub_text = client.pages["Release_Notes_Regular"]["text"]
+        self.assertIn("<!-- RELEASE_INLINE_BEGIN:Release_Regular_FW_V1_0_0 -->", hub_text)
+        self.assertIn("<!-- RELEASE_INLINE_BEGIN:V2.0.0 -->", hub_text)
+        self.assertNotIn("include(Release_Notes_Regular_List)", hub_text)
+        self.assertIn("list_page: Release_Notes_Regular", client.pages["Release_Tool_Config"]["text"])
+
+    def test_page_layout_normalizes_legacy_list_page_into_model_page(self):
+        client = FakeRedmineClient()
+        client.seed_page("Release_Tool_Config", PAGE_CONFIG)
+        client.seed_page("Release_Notes", "# Release Notes\n")
+        client.seed_page(
+            "Release_Notes_Regular",
+            "# Regular\n\n## Version List\n\n{{include(Release_Notes_Regular_List)}}\n",
+            parent_title="Release_Notes",
+        )
+        client.seed_page(
+            "Release_Notes_Regular_List",
+            "<!-- RELEASE_SYNC_BEGIN -->\n"
+            "- [[Release_Regular_FW_V1_0_0|V1.0.0 (2026-07-05)]] - old release\n"
+            "<!-- RELEASE_SYNC_END -->\n",
+            parent_title="Release_Notes_Regular",
+        )
+        client.seed_version("V1.0.0", 1)
+        client.seed_page(
+            "Release_Regular_FW_V1_0_0",
+            build_release_markdown(form("V1.0.0"), 1, [], main_page="Release_Notes"),
+            parent_title="Release_Notes_Regular",
+        )
+
+        preview = ReleaseModeConverter(client, "dp5x").preview("page")
+
+        self.assertEqual(preview["project_structure"], "multi_model")
+        self.assertEqual(preview["model_pages"], ["Release_Notes_Regular"])
+        self.assertEqual(preview["index_pages_to_write"], ["Release_Notes", "Release_Notes_Regular"])
+        self.assertTrue(preview["config_will_change"])
+        self.assertEqual(preview["pages_to_delete"], ["Release_Notes_Regular_List"])
+
+        result = ReleaseModeConverter(client, "dp5x").convert("page")
+
+        self.assertEqual(result["converted_count"], 1)
+        self.assertEqual(result["deleted_pages"], ["Release_Notes_Regular_List"])
+        self.assertNotIn("Release_Notes_Regular_List", client.pages)
+        self.assertIn("Release_Regular_FW_V1_0_0", client.pages)
+        self.assertIn("list_page: Release_Notes_Regular", client.pages["Release_Tool_Config"]["text"])
+        hub_text = client.pages["Release_Notes_Regular"]["text"]
+        self.assertIn("[[Release_Regular_FW_V1_0_0|V1.0.0 (2026-07-05)]]", hub_text)
+        self.assertNotIn("include(Release_Notes_Regular_List)", hub_text)
+
+    def test_legacy_inline_list_converts_to_detail_pages_and_model_index(self):
+        client = FakeRedmineClient()
+        legacy_inline_config = PAGE_CONFIG.replace("release_detail_mode: page", "release_detail_mode: inline")
+        client.seed_page("Release_Tool_Config", legacy_inline_config)
+        client.seed_page("Release_Notes", "# Release Notes\n")
+        client.seed_page(
+            "Release_Notes_Regular",
+            "# Regular\n\n## Version List\n\n{{include(Release_Notes_Regular_List)}}\n",
+            parent_title="Release_Notes",
+        )
+        client.seed_version("V2.0.0", 2)
+        block = build_inline_release_block(
+            form("V2.0.0"),
+            2,
+            [],
+            block_id="V2.0.0",
+            display_version="V2.0.0",
+            container_page="Release_Notes_Regular_List",
+        )
+        client.seed_page(
+            "Release_Notes_Regular_List",
+            "# Regular list\n\n" + block,
+            parent_title="Release_Notes_Regular",
+        )
+
+        result = ReleaseModeConverter(client, "dp5x").convert("page")
+
+        self.assertEqual(result["converted_count"], 1)
+        self.assertEqual(result["deleted_pages"], ["Release_Notes_Regular_List"])
+        self.assertNotIn("Release_Notes_Regular_List", client.pages)
+        self.assertIn("Release_Regular_FW_V2_0_0", client.pages)
+        self.assertIn("list_page: Release_Notes_Regular", client.pages["Release_Tool_Config"]["text"])
+        hub_text = client.pages["Release_Notes_Regular"]["text"]
+        self.assertIn("[[Release_Regular_FW_V2_0_0|V2.0.0 (2026-07-05)]]", hub_text)
+        self.assertNotIn("include(Release_Notes_Regular_List)", hub_text)
+
     def test_invalid_target_mode_is_rejected(self):
         client = FakeRedmineClient()
         client.seed_page("Release_Tool_Config", INLINE_CONFIG)

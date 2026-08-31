@@ -171,12 +171,17 @@ class ReleaseFlowFakeRedmineTest(unittest.TestCase):
         inline_client = self.seed_inline()
         inline_plan = ReleasePlanner(inline_client).build_plan(form())
         self.assertEqual(inline_plan["mode"], "inline")
+        self.assertEqual(inline_plan["project_structure"], "multi_model")
+        self.assertEqual(inline_plan["version_layout_label"], "所有版本一个页面")
+        self.assertEqual(inline_plan["model"], "常规版本 (5X)")
         self.assertEqual(inline_plan["container_page"], "Release_Notes_Regular")
         self.assertEqual(inline_plan["block_id"], "V1.0.0")
 
         page_client = self.seed_page()
         page_plan = ReleasePlanner(page_client).build_plan(form())
         self.assertEqual(page_plan["mode"], "page")
+        self.assertEqual(page_plan["project_structure_label"], "多型号项目")
+        self.assertEqual(page_plan["version_layout_label"], "每个版本独立页面")
         self.assertEqual(page_plan["target_page"], "Release_Regular_FW_V1_0_0")
 
     def test_page_edit_attachment_append_and_replace(self):

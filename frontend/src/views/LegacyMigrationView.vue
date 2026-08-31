@@ -1,18 +1,18 @@
 <template>
   <div>
     <el-card class="card">
-      <template #header>旧 Changelog 项目升级</template>
+      <template #header>旧项目版本升级</template>
       <div class="toolbar">
         <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 320px" @change="clearPreview">
           <el-option v-for="project in projects" :key="project.identifier" :label="`${project.name} (${project.identifier})`" :value="project.identifier" />
         </el-select>
-        <el-input v-model="entryPagesText" placeholder="入口页，多个用逗号分隔" style="width: 280px">
-          <template #prepend>入口页</template>
+        <el-input v-model="entryPagesText" placeholder="多个页面用逗号分隔" style="width: 300px">
+          <template #prepend>旧 Changelog 入口</template>
         </el-input>
-        <el-select v-model="releaseDetailMode" placeholder="版本模式" style="width: 220px" @change="clearPreview">
-          <el-option label="自动：沿用项目配置，否则内联" value="auto" />
-          <el-option label="内联：多个版本合并到列表页" value="inline" />
-          <el-option label="一版本一页：兼容旧结构" value="page" />
+        <el-select v-model="releaseDetailMode" placeholder="目标版本布局" style="width: 250px" @change="clearPreview">
+          <el-option label="自动：沿用版本管理配置" value="auto" />
+          <el-option label="所有版本一个页面" value="inline" />
+          <el-option label="每个版本独立页面" value="page" />
         </el-select>
         <el-button :loading="previewing" @click="preview">预览升级</el-button>
         <el-button type="danger" :loading="executing" :disabled="executeDisabled" @click="execute">确认执行升级</el-button>
@@ -20,7 +20,7 @@
 
       <el-alert class="card" type="warning" :closable="false" show-icon>
         <template #title>
-          执行升级会创建/复用 Redmine Version、把旧 Wiki 附件上传到项目文件、生成新的 Release Wiki 和索引；不会删除旧 Changelog 页面。版本模式可按本次迁移动态选择。
+          工具会从源页面自动判断单型号或多型号，并按版本管理的四种标准结构生成页面；不会创建额外的 *_List 中间页，也不会删除旧 Changelog 页面。
         </template>
       </el-alert>
 
@@ -32,9 +32,10 @@
     <el-card v-if="previewData" class="card">
       <template #header>升级预览</template>
       <div class="migration-summary">
-        <div>版本模式：{{ previewData.release_detail_mode_label || modeLabel(releaseDetailMode) }}</div>
-        <div>目标页面类型：{{ previewData.target_page_label || (previewData.release_detail_mode === 'page' ? 'Release 明细页' : '承载页面') }}</div>
-        <div>分类/型号：{{ previewData.model_count }}</div>
+        <div>项目型号结构：{{ previewData.project_structure_label }}</div>
+        <div>版本页面布局：{{ previewData.release_detail_mode_label || modeLabel(releaseDetailMode) }}</div>
+        <div>目标页面类型：{{ previewData.target_page_label }}</div>
+        <div>型号数量：{{ previewData.model_count }}</div>
         <div>源页面：{{ previewData.source_page_count }}</div>
         <div>历史版本：{{ previewData.release_count }}</div>
         <div>附件引用：{{ previewData.attachment_ref_count }}</div>
@@ -45,6 +46,13 @@
         <div>{{ previewData.release_detail_mode === 'page' ? '更新 Release 页' : '已有版本块' }}：{{ previewData.existing_release_pages }}</div>
         <div>上传项目文件：{{ previewData.project_files_to_upload }}</div>
         <div>复用项目文件：{{ previewData.existing_project_files }}</div>
+      </div>
+
+      <div class="release-log migration-target-pages">
+        <div>将维护的索引/型号页面：</div>
+        <div v-for="page in previewData.index_pages_to_write" :key="page">- {{ page }}</div>
+        <div v-if="previewData.release_detail_mode === 'page'">每个历史版本另建独立版本页面。</div>
+        <div v-else>每个型号的历史版本直接写入对应承载页面。</div>
       </div>
 
       <el-alert
@@ -59,7 +67,7 @@
       </el-alert>
 
       <el-table :data="previewData.source_pages" border height="300">
-        <el-table-column prop="model" label="分类/型号" width="180" />
+        <el-table-column prop="model" label="型号" width="180" />
         <el-table-column prop="title" label="源 Wiki 页面" min-width="220" />
         <el-table-column prop="release_count" label="版本数" width="100" />
         <el-table-column prop="attachment_ref_count" label="附件引用" width="110" />
@@ -139,9 +147,9 @@ watch(
 )
 
 function modeLabel(mode: LegacyReleaseDetailMode): string {
-  if (mode === 'page') return '一版本一页'
-  if (mode === 'inline') return '内联模式'
-  return '自动'
+  if (mode === 'page') return '每个版本独立页面'
+  if (mode === 'inline') return '所有版本一个页面'
+  return '自动沿用版本管理配置'
 }
 
 function migrationPayload() {
@@ -217,7 +225,7 @@ async function preview() {
   try {
     previewData.value = await previewLegacyMigration(migrationPayload())
     const modeText = previewData.value.release_detail_mode_label || modeLabel(releaseDetailMode.value)
-    message.value = `预览完成：${modeText}，识别 ${previewData.value.model_count} 个型号、${previewData.value.release_count} 个历史版本`
+    message.value = `预览完成：${previewData.value.project_structure_label} / ${modeText}，识别 ${previewData.value.model_count} 个型号、${previewData.value.release_count} 个历史版本`
     ok.value = !previewData.value.warnings.length && !previewData.value.problems.length
   } catch (error) {
     ElMessage.error(errorMessage(error))
@@ -231,7 +239,7 @@ async function execute() {
   const modeText = previewData.value.release_detail_mode_label || modeLabel(releaseDetailMode.value)
   try {
     await ElMessageBox.confirm(
-      `将按“${modeText}”写入 Redmine：创建/复用版本、上传旧附件到项目文件、生成 Release Wiki、重建索引。旧 Changelog 页面不会删除。是否继续？`,
+      `将按“${previewData.value.project_structure_label} / ${modeText}”写入 Redmine：创建或复用版本、迁移附件、生成标准型号页和版本页面并重建索引。旧 Changelog 页面不会删除。是否继续？`,
       '确认执行旧项目升级',
       { type: 'warning' }
     )

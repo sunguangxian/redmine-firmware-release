@@ -82,7 +82,7 @@ main_page: Release_Notes
         rows = parse_inline_releases(text, "Release_Notes")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["version"], "V1.2.3")
-        self.assertEqual(rows[0]["product_line"], "")
+        self.assertEqual(rows[0]["product_line"], "常规版本 (5X)")
 
     def test_inline_container_uses_toc_navigation(self):
         form = ReleaseForm(

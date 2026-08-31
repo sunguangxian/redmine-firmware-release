@@ -10,7 +10,13 @@ from urllib.parse import urlparse
 
 from .index_sync import IndexSync
 from .redmine_api import RedmineClient, RedmineError
-from .release_page import ReleaseForm, build_inline_release_block, build_release_markdown, replace_inline_release_block
+from .release_page import (
+    ReleaseForm,
+    build_inline_release_block,
+    build_release_markdown,
+    extract_inline_release_block,
+    replace_inline_release_block,
+)
 from .wiki_config import CONFIG_BEGIN, CONFIG_END, CONFIG_PAGE_TITLE, parse_release_wiki_config
 
 DEFAULT_ENTRY_PAGES = ["Changelog"]
@@ -101,6 +107,9 @@ class LegacyChangelogMigrator:
 
     def preview(self) -> Dict[str, Any]:
         releases, sources, warnings = self.scan()
+        categories = self._release_categories(releases)
+        single_list = len(categories) <= 1
+        detail_mode = self._selected_detail_mode()
         existing_versions = {item.get("name", ""): item for item in self.client.list_versions(self.project_id)}
         existing_titles = {item.get("title", "") for item in self._get_wiki_index()}
         project_files: List[Dict[str, Any]] = []
@@ -157,18 +166,33 @@ class LegacyChangelogMigrator:
         if duplicate_titles:
             warnings.append("存在重复目标 Release 页面，执行迁移前需要先处理冲突。")
 
+        if detail_mode == "inline":
+            new_release_pages, existing_release_pages = self._inline_preview_counts(releases, single_list=single_list)
+        else:
+            new_release_pages = len([title for title in release_titles if title not in existing_titles])
+            existing_release_pages = len([title for title in release_titles if title in existing_titles])
+        model_pages = [] if single_list else [f"Release_Notes_{item['key']}" for item in categories]
+
         return {
             "project_id": self.project_id,
             "entry_pages": self.entry_pages,
+            "project_structure": "single_model" if single_list else "multi_model",
+            "project_structure_label": "单型号项目" if single_list else "多型号项目",
+            "release_detail_mode": detail_mode,
+            "release_detail_mode_label": self._detail_mode_label(detail_mode),
+            "requested_release_detail_mode": self.release_detail_mode,
+            "target_page_label": "版本承载页" if detail_mode == "inline" else "独立版本页面",
+            "model_pages": model_pages,
+            "index_pages_to_write": ["Release_Notes", *model_pages],
             "source_page_count": len(sources),
-            "model_count": len({item.model for item in releases}),
+            "model_count": len(categories),
             "release_count": len(releases),
             "attachment_ref_count": len(attachment_refs),
             "matched_attachment_count": len(matched_refs),
             "versions_to_create": len([name for name in version_names if name not in existing_versions]),
             "existing_versions": len([name for name in version_names if name in existing_versions]),
-            "release_pages_to_create": len([title for title in release_titles if title not in existing_titles]),
-            "existing_release_pages": len([title for title in release_titles if title in existing_titles]),
+            "release_pages_to_create": new_release_pages,
+            "existing_release_pages": existing_release_pages,
             "project_files_to_upload": upload_count,
             "existing_project_files": existing_file_count,
             "can_read_project_files": can_read_project_files,
@@ -176,6 +200,24 @@ class LegacyChangelogMigrator:
             "warnings": warnings,
             "problems": problems,
         }
+
+    def _inline_preview_counts(self, releases: List[LegacyRelease], *, single_list: bool) -> Tuple[int, int]:
+        existing_blocks = 0
+        new_blocks = 0
+        page_cache: Dict[str, str] = {}
+        for release in releases:
+            container = self._legacy_inline_container(release, single_list=single_list)
+            if container not in page_cache:
+                page = self.client.get_wiki_page(self.project_id, container)
+                page_cache[container] = (page or {}).get("text", "")
+            if extract_inline_release_block(page_cache[container], release.wiki_title):
+                existing_blocks += 1
+            else:
+                new_blocks += 1
+        return new_blocks, existing_blocks
+
+    def _detail_mode_label(self, detail_mode: str) -> str:
+        return "所有版本一个页面" if detail_mode == "inline" else "每个版本独立页面"
 
     def execute(self) -> Dict[str, Any]:
         self._log("开始执行旧项目升级：预览并校验迁移计划")
@@ -207,7 +249,7 @@ class LegacyChangelogMigrator:
         structure = "single_list" if single_list else "multi_list"
         detail_mode = self._selected_detail_mode()
         preview["release_detail_mode"] = detail_mode
-        preview["release_detail_mode_label"] = "内联模式" if detail_mode == "inline" else "一版本一页"
+        preview["release_detail_mode_label"] = self._detail_mode_label(detail_mode)
         self._log(f"写入 Release_Tool_Config，结构：{structure}，版本模式：{detail_mode}，分类：{', '.join(item['title'] for item in categories)}")
         self._save_release_tool_config(categories, single_list=single_list, detail_mode=detail_mode)
         self._log("创建 Release_Notes 索引结构")
@@ -340,7 +382,7 @@ class LegacyChangelogMigrator:
             "updated_release_pages": updated_pages,
             "refreshed_release_count": refreshed,
             "release_detail_mode": detail_mode,
-            "release_detail_mode_label": "内联模式" if detail_mode == "inline" else "一版本一页",
+            "release_detail_mode_label": self._detail_mode_label(detail_mode),
             "message": (
                 f"迁移完成：创建版本 {created_versions} 个，上传项目文件 {uploaded_files} 个，"
                 f"更新 Release Wiki {updated_pages} {target_word}，重建索引 {refreshed} 个 Release。"
@@ -631,7 +673,7 @@ class LegacyChangelogMigrator:
         for category in categories:
             key = category["key"]
             title = category["title"]
-            list_page = f"Release_Notes_{key}" if detail_mode == "inline" else f"Release_Notes_{key}_List"
+            list_page = f"Release_Notes_{key}"
             lines.extend(
                 [
                     f"  - key: {key}",
@@ -679,31 +721,15 @@ class LegacyChangelogMigrator:
             key = category["key"]
             title = category["title"]
             hub = f"Release_Notes_{key}"
-            list_page = f"Release_Notes_{key}" if detail_mode == "inline" else f"Release_Notes_{key}_List"
-            if detail_mode == "inline":
-                self._put_current_page(
-                    hub,
-                    f"# {title}\n\n[[Release_Notes|返回 Release Notes]]\n\n## 版本列表\n\n",
-                    "legacy changelog migration structure",
-                    parent_title="Release_Notes",
-                )
-                continue
             self._put_current_page(
                 hub,
                 (
                     f"# {title}\n\n"
                     "[[Release_Notes|返回 Release Notes]]\n\n"
-                    "## Version List\n\n"
-                    f"{{{{include({list_page})}}}}\n"
+                    "## 版本列表\n\n"
                 ),
                 "legacy changelog migration structure",
                 parent_title="Release_Notes",
-            )
-            self._put_current_page(
-                list_page,
-                f"# {title} 版本列表\n\n",
-                "legacy changelog migration structure",
-                parent_title=hub,
             )
 
     def _legacy_inline_container(self, release: LegacyRelease, *, single_list: bool) -> str:

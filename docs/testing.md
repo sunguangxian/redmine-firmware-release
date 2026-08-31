@@ -45,8 +45,8 @@ npm run build
 11. 版本操作记录页面应显示中文状态，并在可恢复记录上显示“重建索引 / 继续发布”按钮。
 12. 默认 `Release_Tool_Config` 模板应生成 `release_detail_mode: inline`。
 13. 缺少 `release_detail_mode` 的旧配置应按 `inline` 处理。
-14. 内联模式发布后，版本内容应写入 `Release_Notes` 或分类 `list_page`，不应新建单独 Release 页面。
-15. 旧 Changelog 迁移默认应生成内联结构；若已有配置显式为 `release_detail_mode: page`，迁移应保留一版本一页模式。
+14. “所有版本一个页面”布局发布后，版本内容应写入 `Release_Notes` 或型号页，不应新建独立版本页面。
+15. 旧 Changelog 迁移应自动识别单型号/多型号；两种版本布局均不得生成额外的 `*_List` 中间页。
 16. 内联模式索引中的 Wiki 链接应指向实际承载页面，不应出现 `INLINE::`。
 17. 编辑内联版本并修改版本号时，旧版本块应被删除，新版本块应被写入。
 18. 旧 Changelog 迁移中存在重复版本号时，内联块内部标识应唯一，不能互相覆盖。

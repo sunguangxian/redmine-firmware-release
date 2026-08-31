@@ -5,11 +5,10 @@ from __future__ import annotations
 from .wiki_config import CONFIG_BEGIN, CONFIG_END, parse_release_wiki_config
 
 TEMPLATE_CHOICES = [
-    ("单列表：Release_Notes（内联版本）", "single_list"),
-    ("单列表：Release_Notes（一版本一页）", "single_list_page"),
-    ("多分类：直接更新分类页（内联版本）", "multi_list_direct"),
-    ("多分类：include 独立列表页（内联版本）", "multi_list_include"),
-    ("多分类：include 独立列表页（一版本一页）", "multi_list_include_page"),
+    ("单型号 / 所有版本一个页面", "single_list"),
+    ("单型号 / 每个版本独立页面", "single_list_page"),
+    ("多型号 / 每个型号所有版本一个页面", "multi_list_direct"),
+    ("多型号 / 每个版本独立页面", "multi_list_page"),
 ]
 
 
@@ -17,10 +16,13 @@ def build_config_template(template_key: str, project_id: str = "") -> str:
     tag = (project_id or "TP35").upper()
     if template_key == "single_list_page":
         return _single_list_template(tag, detail_mode="page")
+    if template_key == "multi_list_page":
+        return _multi_list_direct_template(detail_mode="page")
+    # 兼容旧界面保存的模板 key；新配置统一不再创建额外的 *_List 页面。
     if template_key == "multi_list_include_page":
-        return _multi_list_include_template(detail_mode="page")
+        return _multi_list_direct_template(detail_mode="page")
     if template_key == "multi_list_include":
-        return _multi_list_include_template(detail_mode="inline")
+        return _multi_list_direct_template(detail_mode="inline")
     if template_key == "multi_list_direct":
         return _multi_list_direct_template(detail_mode="inline")
     return _single_list_template(tag, detail_mode="inline")
@@ -30,11 +32,12 @@ def validate_config_text(text: str) -> tuple[bool, str]:
     config = parse_release_wiki_config(text or "")
     if not config:
         return False, "配置无效：请检查 RELEASE_CONFIG_BEGIN / RELEASE_CONFIG_END 之间的内容。"
-    detail = "内联版本" if config.release_detail_mode == "inline" else "一版本一页"
+    project_structure = "单型号" if config.mode == "single_list" else "多型号"
+    detail = "所有版本一个页面" if config.release_detail_mode == "inline" else "每个版本独立页面"
     format_detail = f"页面格式 {config.text_format}"
     if config.mode == "single_list":
-        return True, f"配置有效：single_list，主页面 {config.main_page}，{detail}，{format_detail}。"
-    lines = [f"配置有效：multi_list，主页面 {config.main_page}，{detail}，{format_detail}。", "分类："]
+        return True, f"配置有效：{project_structure}，主页面 {config.main_page}，{detail}，{format_detail}。"
+    lines = [f"配置有效：{project_structure}，主页面 {config.main_page}，{detail}，{format_detail}。", "型号："]
     for item in config.categories:
         list_page = item.list_page or item.hub_page
         lines.append(f"- {item.key}: {item.title or item.key}, hub={item.hub_page}, list={list_page}")
@@ -148,6 +151,7 @@ release_detail_mode: {detail_mode}
 
 def _multi_list_direct_template(detail_mode: str = "inline") -> str:
     prefix_line = "release_page_prefix: Release_{category}_FW_\n" if detail_mode == "page" else ""
+    detail_structure = "型号页内保存全部版本" if detail_mode == "inline" else "型号页列出版本，并链接到每个独立版本页"
     return f"""# Release Tool Config
 
 本页面用于配置当前项目的 Release Wiki 结构。
@@ -198,6 +202,6 @@ release_detail_mode: {detail_mode}
 ## 页面生成规则
 
 - Changelog_for_5X 可以作为旧入口。
-- Release_Notes 为主页面，工具自动生成分类入口。
-- Release_Notes_xxx 为分类页，版本明细直接写入分类页。
+- Release_Notes 为主页面，工具自动生成型号入口。
+- Release_Notes_xxx 为型号页；{detail_structure}。
 """

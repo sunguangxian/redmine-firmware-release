@@ -12,13 +12,33 @@ test('multi-module config round trips through the visual form model', () => {
     releasePagePrefix: '',
     categories: [
       { key: 'Regular', title: '常规版本', hubPage: 'Release_Notes_Regular', listPage: 'Release_Notes_Regular' },
-      { key: 'Record', title: '录音版本', hubPage: 'Release_Notes_Record', listPage: 'Release_Notes_Record_List' },
+      { key: 'Record', title: '录音版本', hubPage: 'Release_Notes_Record', listPage: 'Release_Notes_Record' },
     ],
   }
   const text = buildWikiConfigText(form)
   assert.deepEqual(parseWikiConfigText(text), form)
-  assert.match(text, /常规版本 \(Release_Notes_Regular\)/)
-  assert.match(text, /录音版本 \(Release_Notes_Record → Release_Notes_Record_List\)/)
+  assert.match(text, /常规版本 \(Release_Notes_Regular\) → 页内保存全部版本/)
+  assert.match(text, /录音版本 \(Release_Notes_Record\) → 页内保存全部版本/)
+  assert.doesNotMatch(text, /_List/)
+})
+
+test('legacy separate list pages remain readable until conversion normalizes them', () => {
+  const text = `
+<!-- RELEASE_CONFIG_BEGIN -->
+\`\`\`yaml
+mode: multi_list
+main_page: Release_Notes
+release_detail_mode: page
+categories:
+  - key: F864
+    title: F864
+    hub_page: Release_Notes_F864
+    list_page: Release_Notes_F864_List
+\`\`\`
+<!-- RELEASE_CONFIG_END -->`
+
+  const parsed = parseWikiConfigText(text)
+  assert.equal(parsed.categories[0].listPage, 'Release_Notes_F864_List')
 })
 
 test('form validation reports incomplete and duplicate modules', () => {

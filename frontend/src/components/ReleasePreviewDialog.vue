@@ -4,6 +4,9 @@
       <el-descriptions :column="2" border>
         <el-descriptions-item label="操作">{{ plan.action }}</el-descriptions-item>
         <el-descriptions-item label="项目">{{ plan.project_id }}</el-descriptions-item>
+        <el-descriptions-item label="项目结构">{{ plan.project_structure_label }}</el-descriptions-item>
+        <el-descriptions-item label="版本布局">{{ plan.version_layout_label }}</el-descriptions-item>
+        <el-descriptions-item v-if="plan.model" label="型号" :span="2">{{ plan.model }}</el-descriptions-item>
         <el-descriptions-item label="版本">{{ plan.version_name }}</el-descriptions-item>
         <el-descriptions-item label="日期">{{ plan.release_date }}</el-descriptions-item>
         <el-descriptions-item label="目标页面" :span="2">{{ plan.display_target || plan.wiki_title || plan.target_page }}</el-descriptions-item>

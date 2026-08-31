@@ -5,17 +5,18 @@
         <el-select v-model="projectId" :disabled="busy" placeholder="选择项目" filterable style="width: 320px" @change="reloadProject">
           <el-option v-for="project in projects" :key="project.identifier" :label="`${project.name} (${project.identifier})`" :value="project.identifier" />
         </el-select>
-        <el-select v-model="filterProductLine" :disabled="busy" clearable placeholder="全部分类" style="width: 220px" @change="loadReleases">
-          <el-option label="全部分类" value="" />
+        <el-select v-model="filterProductLine" :disabled="busy" clearable placeholder="全部型号" style="width: 220px" @change="loadReleases">
+          <el-option label="全部型号" value="" />
           <el-option v-for="item in projectCategories" :key="item.key" :label="item.title || item.key" :value="item.title || item.key" />
         </el-select>
         <el-button :disabled="busy" :loading="loadingReleases" @click="loadReleases">刷新列表</el-button>
+        <el-tag v-if="projectStructureLabel" type="info">{{ projectStructureLabel }} · {{ versionLayoutLabel }}</el-tag>
       </div>
 
       <el-table class="release-table" :data="releases" border height="260">
         <el-table-column prop="version" label="版本" width="160" />
         <el-table-column prop="date" label="日期" width="130" />
-        <el-table-column prop="product_line" label="分类" width="160" />
+        <el-table-column prop="product_line" label="型号" width="160" />
         <el-table-column label="Wiki 页" min-width="240">
           <template #default="{ row }">{{ row.display_title || row.title }}</template>
         </el-table-column>
@@ -29,7 +30,7 @@
         <el-input v-model="form.version_name" :disabled="busy" placeholder="V5.3.8.3"><template #prepend>版本号</template></el-input>
         <el-input v-model="form.release_date" :disabled="busy" placeholder="YYYY-MM-DD"><template #prepend>发布日期</template></el-input>
         <el-input v-model="form.commit" :disabled="busy" class="full-row" placeholder="git commit hash"><template #prepend>Commit</template></el-input>
-        <el-select v-model="form.product_line" :disabled="busy" class="full-row" clearable filterable placeholder="版本分类（可选）">
+        <el-select v-model="form.product_line" :disabled="busy" class="full-row" :clearable="projectStructure !== 'multi_model'" filterable :placeholder="projectStructure === 'multi_model' ? '选择型号（必填）' : '型号（可选）'">
           <el-option v-for="item in projectCategories" :key="item.key" :label="item.title || item.key" :value="item.title || item.key" />
         </el-select>
         <el-input v-model="form.changelog" :disabled="busy" class="full-row" type="textarea" :rows="6" placeholder="每行一条变更说明" />
@@ -99,6 +100,9 @@ const projectId = ref(props.projects[0]?.identifier || '')
 const filterProductLine = ref('')
 const releases = ref<ReleaseSummary[]>([])
 const projectCategories = ref<Array<{ key: string; title: string }>>([])
+const projectStructure = ref('')
+const projectStructureLabel = ref('')
+const versionLayoutLabel = ref('')
 const loadingReleases = ref(false)
 const publishing = ref(false)
 const retryingNotice = ref(false)
@@ -145,7 +149,7 @@ function onDocumentClick(event: MouseEvent) { const target = event.target instan
 function onFileChange(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
 function onFileRemove(_file: UploadFile, files: UploadFiles) { selectedFiles.value = files.map((item) => item.raw).filter(Boolean) as File[] }
 async function loadReleases() { if (!projectId.value || busy.value) return; loadingReleases.value = true; try { releases.value = await listReleases(projectId.value, filterProductLine.value) } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } finally { loadingReleases.value = false } }
-async function loadCategories() { if (!projectId.value) return; try { const data = await getProjectReleaseCategories(projectId.value); projectCategories.value = data.categories; const values = new Set(projectCategories.value.map((item) => item.title || item.key)); if (filterProductLine.value && !values.has(filterProductLine.value)) filterProductLine.value = ''; if (form.product_line && !values.has(form.product_line)) form.product_line = '' } catch (error) { projectCategories.value = []; ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
+async function loadCategories() { if (!projectId.value) return; try { const data = await getProjectReleaseCategories(projectId.value); projectCategories.value = data.categories; projectStructure.value = data.project_structure; projectStructureLabel.value = data.project_structure_label; versionLayoutLabel.value = data.version_layout_label; const values = new Set(projectCategories.value.map((item) => item.title || item.key)); if (filterProductLine.value && !values.has(filterProductLine.value)) filterProductLine.value = ''; if (form.product_line && !values.has(form.product_line)) form.product_line = '' } catch (error) { projectCategories.value = []; projectStructure.value = ''; projectStructureLabel.value = ''; versionLayoutLabel.value = ''; ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
 async function reloadProject() { if (!busy.value) { await loadCategories(); await loadReleases() } }
 async function loadContacts() { try { const data = await getContacts(mailScope.value); const named = data as typeof data & { contacts_to_people?: ContactPerson[]; contacts_cc_people?: ContactPerson[] }; contactsTo.value = data.contacts_to; contactsCc.value = data.contacts_cc; contactPeople.value = [...(named.contacts_to_people || []), ...(named.contacts_cc_people || [])]; contactTemplates.value = data.contact_templates || []; selectedTemplateNames.value = []; mailTo.value = []; mailCc.value = [] } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
 function contactLabel(email: string): string { const key = email.trim().toLowerCase(); const named = contactPeople.value.find((item) => item.email.trim().toLowerCase() === key); if (named) return `${named.name || named.email.split('@')[0]} <${named.email}>`; for (const template of contactTemplates.value) { const contact = [...template.contacts_to, ...template.contacts_cc].find((item) => item.email.trim().toLowerCase() === key); if (contact) return `${contact.name || contact.email.split('@')[0]} <${contact.email}>` } return email }

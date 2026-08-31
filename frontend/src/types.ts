@@ -115,11 +115,17 @@ export interface MetaInfo {
 
 export interface ProjectReleaseCategories {
   mode: string
+  project_structure: 'single_model' | 'multi_model' | ''
+  project_structure_label: string
+  version_layout: 'inline' | 'page' | ''
+  version_layout_label: string
   categories: Array<{ key: string; title: string }>
 }
 
 export interface WikiRefreshPreview {
   mode: string
+  project_structure: 'single_model' | 'multi_model'
+  version_layout: 'inline' | 'page'
   main_page: string
   release_count: number
   categories: Array<{
@@ -154,8 +160,12 @@ export interface WikiModeConvertPreview {
   ok: boolean
   project_id: string
   current_mode: 'inline' | 'page'
-  source_mode: 'inline' | 'page'
+  source_mode: 'inline' | 'page' | 'mixed'
   target_mode: 'inline' | 'page'
+  project_structure: 'single_model' | 'multi_model'
+  model_count: number
+  model_pages: string[]
+  index_pages_to_write: string[]
   release_count: number
   pages_to_write: string[]
   pages_to_delete: string[]
@@ -175,10 +185,14 @@ export interface WikiModeConvertResult extends WikiModeConvertPreview {
 export interface LegacyMigrationPreview {
   project_id: string
   entry_pages: string[]
+  project_structure: 'single_model' | 'multi_model'
+  project_structure_label: string
   release_detail_mode?: 'auto' | 'inline' | 'page'
   release_detail_mode_label?: string
   requested_release_detail_mode?: 'auto' | 'inline' | 'page'
   target_page_label?: string
+  model_pages: string[]
+  index_pages_to_write: string[]
   source_page_count: number
   model_count: number
   release_count: number

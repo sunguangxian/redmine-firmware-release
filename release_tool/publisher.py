@@ -183,7 +183,8 @@ class ReleasePublisher:
         plan: dict[str, Any] | None = None,
     ) -> str:
         try:
-            self._log(logs, f"项目发布结构：{profile.mode}，内联版本")
+            structure_label = "多型号项目" if profile.mode == "multi_list" else "单型号项目"
+            self._log(logs, f"项目发布结构：{structure_label}，所有版本一个页面")
             self._validate_category(form, index_sync, profile, logs)
             version_name = self._configured_version_name(form, index_sync, profile)
             version = self._get_or_create_version(form, logs, version_name=version_name)
@@ -210,7 +211,7 @@ class ReleasePublisher:
                 container_page = index_sync.inline_container_for_release(
                     profile,
                     form.page_title,
-                    f"**产品线:** {form.product_line}\n**Commit:** {form.commit}\n",
+                f"**型号:** {form.product_line}\n**Commit:** {form.commit}\n",
                 )
             new_block_id = ""
 
@@ -229,7 +230,7 @@ class ReleasePublisher:
                 self._log(logs, f"内联编辑目标块：{old_block_id} -> {new_block_id}")
             elif is_edit and old_block_id != form.version_name.strip():
                 self._log(logs, f"内联编辑保留唯一块标识：{old_block_id}，显示版本：{form.version_name.strip()}")
-            self._log(logs, f"内联版本页面：{container_page}，已有附件 {len(old_files)} 个")
+            self._log(logs, f"版本所在页面：{container_page}，已有附件 {len(old_files)} 个")
         except Exception:
             self._progress(progress, "wiki", "failed")
             raise
@@ -252,7 +253,7 @@ class ReleasePublisher:
             base_text = current_text
             if old_block_id and old_block_id != new_block_id:
                 base_text = delete_inline_release_block(base_text, old_block_id)
-                self._log(logs, f"已删除旧内联版本块：{old_block_id}")
+                self._log(logs, f"已删除页面中的旧版本记录：{old_block_id}")
             block = build_inline_release_block(
                 form,
                 int(version["id"]),
@@ -271,7 +272,7 @@ class ReleasePublisher:
                 is_start_page=container_page == profile.main_page,
                 version=(page or {}).get("version"),
             )
-            self._log(logs, f"内联版本写入完成：{container_page} / {form.version_name}")
+            self._log(logs, f"版本记录写入完成：{container_page} / {form.version_name}")
             self._progress(progress, "wiki", "success")
         except Exception:
             self._progress(progress, "wiki", "failed")
@@ -293,7 +294,7 @@ class ReleasePublisher:
         try:
             self._progress(progress, "index", "running")
             index_sync.sync_after_publish(container_page, new_text)
-            self._log(logs, "内联版本索引同步完成")
+            self._log(logs, "版本索引同步完成")
             self._progress(progress, "index", "success")
         except Exception:
             self._progress(progress, "index", "failed")
@@ -361,12 +362,12 @@ class ReleasePublisher:
 
     def _validate_category(self, form: ReleaseForm, index_sync, profile, logs: list[str] | None = None) -> None:
         if profile.mode != "multi_list":
-            self._log(logs, "项目不是 multi_list，版本分类允许为空")
+            self._log(logs, "当前为单型号项目，型号字段允许为空")
             return
 
         if not form.product_line.strip():
-            self._log(logs, "multi_list 分类校验失败：版本分类为空")
-            raise RedmineError("当前项目配置为 multi_list，发布或编辑版本时必须填写版本分类。")
+            self._log(logs, "多型号项目校验失败：型号为空")
+            raise RedmineError("当前项目配置为多型号，发布或编辑版本时必须选择型号。")
 
         category = index_sync._categorize(
             form.page_title,
@@ -376,13 +377,13 @@ class ReleasePublisher:
             categories=profile.categories,
         )
         if category:
-            self._log(logs, f"multi_list 分类校验通过：{form.product_line}")
+            self._log(logs, f"型号校验通过：{form.product_line}")
             return
 
         category_names = "、".join(category.title or category.key for category in profile.categories)
-        self._log(logs, f"multi_list 分类校验失败：{form.product_line} 不在配置中")
+        self._log(logs, f"型号校验失败：{form.product_line} 不在配置中")
         raise RedmineError(
-            f"版本分类“{form.product_line}”未匹配当前项目 Release_Tool_Config 中的分类：{category_names}"
+            f"型号“{form.product_line}”未匹配当前项目 Release_Tool_Config 中配置的型号：{category_names}"
         )
 
     def _configured_release_title(self, form: ReleaseForm, index_sync, profile) -> str:

@@ -85,10 +85,11 @@ export function buildWikiConfigText(config) {
     ? [mainPage, ...categories.map((item, index) => {
         const branch = index === categories.length - 1 ? '└──' : '├──'
         const list = item.listPage.trim() || item.hubPage.trim()
-        const suffix = list && list !== item.hubPage.trim() ? ` → ${list}` : ''
-        return `${branch} ${item.title.trim() || item.key.trim()} (${item.hubPage.trim()}${suffix})`
+        const legacy = list && list !== item.hubPage.trim() ? ` [旧列表页: ${list}]` : ''
+        const detail = detailIsPage ? ' → 每个版本独立页面' : ' → 页内保存全部版本'
+        return `${branch} ${item.title.trim() || item.key.trim()} (${item.hubPage.trim()})${detail}${legacy}`
       })].join('\n')
-    : `${mainPage}\n└── ${detailIsPage ? '每个版本一个 Wiki 页面' : '版本内容直接写在主页面中'}`
+    : `${mainPage}\n└── ${detailIsPage ? '每个版本独立页面' : '页内保存全部版本'}`
   const prefix = detailIsPage && config.releasePagePrefix.trim()
     ? `release_page_prefix: ${config.releasePagePrefix.trim()}\n`
     : ''
