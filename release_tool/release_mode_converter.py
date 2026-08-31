@@ -39,6 +39,9 @@ class ReleaseModeConverter:
         all_items = source["all_items"]
         pages_to_write = self._target_pages(sync, profile, items, target_mode)
         pages_to_delete = self._pages_to_delete_after_conversion(profile, all_items, source_mode, target_mode)
+        for title in self._legacy_start_pages(profile):
+            if title not in pages_to_delete:
+                pages_to_delete.append(title)
         model_pages = [category.hub for category in profile.categories]
         index_pages = [profile.main_page, *model_pages]
         existing_pages = [title for title in pages_to_write if self.client.get_wiki_page(self.project_id, title)]
@@ -127,6 +130,10 @@ class ReleaseModeConverter:
             config_updated = True
 
         refreshed_release_count = IndexSync(self.client, self.project_id).refresh_all()
+        legacy_start_pages = self._activate_main_page_and_delete_legacy_starts(profile)
+        for title in legacy_start_pages:
+            if title not in deleted_pages:
+                deleted_pages.append(title)
         return {
             **preview,
             "ok": True,
@@ -136,9 +143,39 @@ class ReleaseModeConverter:
             "refreshed_release_count": refreshed_release_count,
             "message": (
                 f"已完成 {source_mode} -> {target_mode} 转换：复制 Release {converted_count} 个，"
-                f"重建索引 {refreshed_release_count} 个；原有内容未删除。"
+                f"重建索引 {refreshed_release_count} 个，并将 Wiki 默认页切换为 {profile.main_page}。"
             ),
         }
+
+    def _legacy_start_pages(self, profile: WikiProfile) -> list[str]:
+        if profile.main_page == "Wiki":
+            return []
+        page = self.client.get_wiki_page(self.project_id, "Wiki")
+        if not page:
+            return []
+        text = str(page.get("text") or "")
+        release_links = re.findall(r"Release_[A-Za-z0-9_+-]+(?:_NP500)?_FW_", text, re.I)
+        if len(release_links) < 2 or not re.search(r"Release\s*Notes|版本列表", text, re.I):
+            return []
+        return ["Wiki"]
+
+    def _activate_main_page_and_delete_legacy_starts(self, profile: WikiProfile) -> list[str]:
+        page = self.client.get_wiki_page(self.project_id, profile.main_page)
+        if not page:
+            raise RedmineError(f"转换后的主页面 {profile.main_page} 不存在，未切换 Wiki 默认页。")
+        self.client.put_wiki_page(
+            self.project_id,
+            profile.main_page,
+            page.get("text", ""),
+            "set release notes as wiki start page",
+            is_start_page=True,
+            version=page.get("version"),
+        )
+        deleted: list[str] = []
+        for title in self._legacy_start_pages(profile):
+            self.client.delete_wiki_page(self.project_id, title)
+            deleted.append(title)
+        return deleted
 
     def _clean_existing_inline_containers(self, profile: WikiProfile, items: list[dict[str, Any]]) -> int:
         categories = self._category_map(profile)

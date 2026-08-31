@@ -22,6 +22,12 @@ release_page_prefix: Release_PT7200D_FW_
 class ReleaseModeConverterTest(unittest.TestCase):
     def test_unconfigured_single_model_pages_can_be_previewed_and_adopted(self):
         client = FakeRedmineClient()
+        client.seed_page(
+            "Wiki",
+            "# Release Notes\n\n## 版本列表\n\n"
+            "- [[Release_DP990DLF_FW_V5_3_7_52|V5.3.7.52]]\n"
+            "- [[Release_DP990DLF_FW_V5_3_7_51|V5.3.7.51]]\n",
+        )
         client.seed_page("Release_Notes", "# Release Notes\n")
         client.seed_version("V5.3.7.52", 1)
         release_form = form("V5.3.7.52")
@@ -41,6 +47,7 @@ class ReleaseModeConverterTest(unittest.TestCase):
         self.assertEqual(preview["project_structure"], "single_model")
         self.assertEqual(preview["source_mode"], "page")
         self.assertEqual(preview["release_count"], 1)
+        self.assertIn("Wiki", preview["pages_to_delete"])
 
         result = ReleaseModeConverter(client, "dp990dlf").convert("inline")
 
@@ -48,6 +55,8 @@ class ReleaseModeConverterTest(unittest.TestCase):
         self.assertIn("mode: single_list", client.pages["Release_Tool_Config"]["text"])
         self.assertIn("release_detail_mode: inline", client.pages["Release_Tool_Config"]["text"])
         self.assertIn("RELEASE_INLINE_BEGIN:Release_DP990DLF_FW_V5_3_7_52", client.pages["Release_Notes"]["text"])
+        self.assertEqual(client.wiki_start_page, "Release_Notes")
+        self.assertNotIn("Wiki", client.pages)
 
     def test_unconfigured_multi_model_pages_are_inferred(self):
         client = FakeRedmineClient()
