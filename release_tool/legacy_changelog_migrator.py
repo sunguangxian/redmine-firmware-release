@@ -9,7 +9,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from .index_sync import IndexSync
-from .redmine_api import RedmineClient, RedmineError
+from .redmine_api import RELEASE_PAGE_RE, RedmineClient, RedmineError
+from .release_mode_converter import ReleaseModeConverter
 from .release_page import (
     ReleaseForm,
     build_inline_release_block,
@@ -103,6 +104,10 @@ class LegacyChangelogMigrator:
             config = parse_release_wiki_config(page.get("text", ""))
             if config and config.release_detail_mode in {"inline", "page"}:
                 return config.release_detail_mode
+        if hasattr(self.client, "get_wiki_index"):
+            titles = [str(item.get("title") or "") for item in self._get_wiki_index()]
+            if any(RELEASE_PAGE_RE.match(title) for title in titles):
+                return "page"
         return "inline"
 
     def preview(self) -> Dict[str, Any]:
@@ -110,6 +115,10 @@ class LegacyChangelogMigrator:
         categories = self._release_categories(releases)
         single_list = len(categories) <= 1
         detail_mode = self._selected_detail_mode()
+        if not releases:
+            adoption = self._existing_release_adoption_preview(detail_mode)
+            if adoption:
+                return adoption
         existing_versions = {item.get("name", ""): item for item in self.client.list_versions(self.project_id)}
         existing_titles = {item.get("title", "") for item in self._get_wiki_index()}
         project_files: List[Dict[str, Any]] = []
@@ -201,6 +210,58 @@ class LegacyChangelogMigrator:
             "problems": problems,
         }
 
+    def _existing_release_adoption_preview(self, detail_mode: str) -> Optional[Dict[str, Any]]:
+        if detail_mode != "page":
+            return None
+        titles = [
+            str(item.get("title") or "")
+            for item in self._get_wiki_index()
+            if RELEASE_PAGE_RE.match(str(item.get("title") or ""))
+        ]
+        if not titles or self.client.get_wiki_page(self.project_id, CONFIG_PAGE_TITLE):
+            return None
+        conversion = ReleaseModeConverter(self.client, self.project_id).preview("page")
+        if not conversion.get("release_count"):
+            return None
+        structure = str(conversion.get("project_structure") or "single_model")
+        return {
+            "project_id": self.project_id,
+            "entry_pages": self.entry_pages,
+            "upgrade_strategy": "adopt_existing_release_pages",
+            "project_structure": structure,
+            "project_structure_label": "多型号项目" if structure == "multi_model" else "单型号项目",
+            "release_detail_mode": "page",
+            "release_detail_mode_label": self._detail_mode_label("page"),
+            "requested_release_detail_mode": self.release_detail_mode,
+            "target_page_label": "纳管现有独立版本页面",
+            "model_pages": conversion.get("model_pages", []),
+            "index_pages_to_write": conversion.get("index_pages_to_write", ["Release_Notes"]),
+            "source_page_count": len(titles),
+            "model_count": int(conversion.get("model_count") or 1),
+            "release_count": int(conversion.get("release_count") or 0),
+            "attachment_ref_count": 0,
+            "matched_attachment_count": 0,
+            "versions_to_create": 0,
+            "existing_versions": int(conversion.get("release_count") or 0),
+            "release_pages_to_create": 0,
+            "existing_release_pages": int(conversion.get("release_count") or 0),
+            "project_files_to_upload": 0,
+            "existing_project_files": 0,
+            "can_read_project_files": True,
+            "source_pages": [
+                {
+                    "title": title,
+                    "model": "",
+                    "release_count": 1,
+                    "attachment_ref_count": 0,
+                    "matched_attachment_count": 0,
+                }
+                for title in titles
+            ],
+            "warnings": conversion.get("warnings", []),
+            "problems": [],
+        }
+
     def _inline_preview_counts(self, releases: List[LegacyRelease], *, single_list: bool) -> Tuple[int, int]:
         existing_blocks = 0
         new_blocks = 0
@@ -231,6 +292,22 @@ class LegacyChangelogMigrator:
             raise RedmineError("迁移预览存在阻塞问题，请先处理重复目标页面或版本。")
         if preview.get("attachment_ref_count") and not preview.get("can_read_project_files"):
             raise RedmineError("当前账号无法读取项目文件列表，不能安全迁移旧附件到项目 Files。请先确认 Redmine 文件模块权限。")
+        if preview.get("upgrade_strategy") == "adopt_existing_release_pages":
+            self._log("检测到现有独立 Release 页面，创建配置并重建索引")
+            conversion = ReleaseModeConverter(self.client, self.project_id).convert("page")
+            refreshed = int(conversion.get("refreshed_release_count") or 0)
+            self._log(f"现有 Release 页面纳管完成：重建索引 {refreshed} 个")
+            return {
+                "ok": True,
+                "preview": preview,
+                "created_versions": 0,
+                "uploaded_files": 0,
+                "updated_release_pages": 0,
+                "refreshed_release_count": refreshed,
+                "release_detail_mode": "page",
+                "release_detail_mode_label": self._detail_mode_label("page"),
+                "message": f"升级完成：已创建 Release_Tool_Config，并纳管 {refreshed} 个现有 Release 页面。",
+            }
         self._log("重新扫描旧 Wiki 页面，准备写入 Redmine")
         releases, _sources, _warnings = self.scan()
         if not releases:

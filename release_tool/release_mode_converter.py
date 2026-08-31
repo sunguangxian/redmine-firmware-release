@@ -42,7 +42,7 @@ class ReleaseModeConverter:
         model_pages = [category.hub for category in profile.categories]
         index_pages = [profile.main_page, *model_pages]
         existing_pages = [title for title in pages_to_write if self.client.get_wiki_page(self.project_id, title)]
-        config_will_change = current_mode != target_mode or self._config_needs_hub_pages(profile)
+        config_will_change = source["config_missing"] or current_mode != target_mode or self._config_needs_hub_pages(profile)
         warnings: list[str] = list(source["warnings"])
         if source_mode == target_mode:
             warnings.append("当前可识别 Release 内容已经是目标版本模式，执行转换只会切换配置或重建索引。")
@@ -65,6 +65,7 @@ class ReleaseModeConverter:
             "pages_to_delete": pages_to_delete,
             "existing_pages": existing_pages,
             "config_will_change": config_will_change,
+            "config_missing": source["config_missing"],
             "warnings": warnings,
             "message": self._message(current_mode, source_mode, target_mode, len(items)),
         }
@@ -121,8 +122,8 @@ class ReleaseModeConverter:
             deleted_pages = self._delete_legacy_list_pages(profile)
 
         config_updated = False
-        if current_mode != target_mode or self._config_needs_hub_pages(profile):
-            self._save_config_mode(target_mode)
+        if source["config_missing"] or current_mode != target_mode or self._config_needs_hub_pages(profile):
+            self._save_config_mode(target_mode, profile)
             config_updated = True
 
         refreshed_release_count = IndexSync(self.client, self.project_id).refresh_all()
@@ -221,18 +222,27 @@ class ReleaseModeConverter:
         return converted
 
     def _source_snapshot(self, sync: IndexSync, target_mode: str) -> dict[str, Any]:
-        config_profile = sync.discover_profile()
+        config_missing = not self.client.get_wiki_page(self.project_id, CONFIG_PAGE_TITLE)
+        config_profile = self._infer_unconfigured_profile(sync) if config_missing else sync.discover_profile()
         config_mode = getattr(config_profile, "release_detail_mode", "inline")
         config_items = sync._build_items(config_profile)
         alternate_mode = "page" if config_mode == "inline" else "inline"
         alternate_profile = replace(config_profile, release_detail_mode=alternate_mode)
         alternate_items = sync._build_items(alternate_profile)
+        if config_missing and config_profile.mode == "multi_list":
+            self._assign_inferred_categories(config_profile, config_items)
+            self._assign_inferred_categories(config_profile, alternate_items)
 
         source_profile = config_profile
         source_mode = config_mode
         source_items = config_items
         all_items = config_items
         warnings: list[str] = []
+        if config_missing:
+            warnings.append(
+                "当前项目没有 Release_Tool_Config；已根据现有 Release 页面推断结构，"
+                "确认转换时会自动创建配置页。"
+            )
 
         if config_items and alternate_items:
             items_by_mode = {
@@ -276,7 +286,74 @@ class ReleaseModeConverter:
             "items": source_items,
             "all_items": all_items,
             "warnings": warnings,
+            "config_missing": config_missing,
         }
+
+    def _infer_unconfigured_profile(self, sync: IndexSync) -> WikiProfile:
+        titles = sorted(sync._wiki_titles())
+        if "Release_Notes" not in titles:
+            raise RedmineError(
+                "当前项目既没有 Release_Tool_Config，也没有 Release_Notes，无法自动识别版本结构。"
+                "请使用旧项目升级扫描 Changelog，或先创建配置页。"
+            )
+
+        model_pages = [
+            title
+            for title in titles
+            if title.startswith("Release_Notes_") and not title.endswith("_List")
+        ]
+        inline_model_pages = []
+        for title in model_pages:
+            page = self.client.get_wiki_page(self.project_id, title)
+            if "RELEASE_INLINE_BEGIN:" in str((page or {}).get("text") or ""):
+                inline_model_pages.append(title)
+
+        is_multi = len(model_pages) > 1 or bool(inline_model_pages)
+        categories = []
+        if is_multi:
+            for title in model_pages:
+                key = title[len("Release_Notes_"):].strip()
+                if key:
+                    categories.append(CategoryProfile(key=key, title=key, hub=title, list_page=title))
+
+        release_titles = [title for title in titles if RELEASE_PAGE_RE.match(title)]
+        main_page = self.client.get_wiki_page(self.project_id, "Release_Notes")
+        has_inline = "RELEASE_INLINE_BEGIN:" in str((main_page or {}).get("text") or "") or bool(inline_model_pages)
+        detail_mode = "page" if release_titles else "inline" if has_inline else "page"
+        prefix = "Release_{category}_FW_" if is_multi else self._infer_release_page_prefix(release_titles)
+        return WikiProfile(
+            mode="multi_list" if is_multi else "single_list",
+            main_page="Release_Notes",
+            categories=categories,
+            release_page_prefix=prefix,
+            release_detail_mode=detail_mode,
+        )
+
+    def _infer_release_page_prefix(self, release_titles: list[str]) -> str:
+        for title in release_titles:
+            match = re.match(r"^(Release_.+?_FW_)(?:V)?\d", title, re.I)
+            if match:
+                return match.group(1)
+        return f"Release_{self.project_id.upper()}_FW_"
+
+    def _assign_inferred_categories(self, profile: WikiProfile, items: list[dict[str, Any]]) -> None:
+        if not profile.categories:
+            return
+        for item in items:
+            if item.get("cat"):
+                continue
+            source_title = str(item.get("container_page") or item.get("page") or "")
+            page = self.client.get_wiki_page(self.project_id, source_title)
+            parent_title = str(((page or {}).get("parent") or {}).get("title") or "")
+            normalized_title = re.sub(r"[^a-z0-9]+", "", source_title.lower())
+            for category in profile.categories:
+                normalized_key = re.sub(r"[^a-z0-9]+", "", category.key.lower())
+                if source_title in {category.hub, category.list_page} or parent_title in {category.hub, category.list_page}:
+                    item["cat"] = category.key
+                    break
+                if normalized_key and normalized_key in normalized_title:
+                    item["cat"] = category.key
+                    break
 
     def _merge_source_items(
         self,
@@ -676,18 +753,48 @@ class ReleaseModeConverter:
     def _config_needs_hub_pages(self, profile: WikiProfile) -> bool:
         return profile.mode == "multi_list" and any(category.list_page != category.hub for category in profile.categories)
 
-    def _save_config_mode(self, target_mode: str) -> None:
+    def _save_config_mode(self, target_mode: str, profile: WikiProfile) -> None:
         page = self.client.get_wiki_page(self.project_id, CONFIG_PAGE_TITLE)
         if not page:
-            raise RedmineError(f"未找到 {CONFIG_PAGE_TITLE}，无法切换 Release 版本模式。")
-        text = self._replace_config_mode(page.get("text", ""), target_mode)
+            text = self._build_inferred_config(profile, target_mode)
+        else:
+            text = self._replace_config_mode(page.get("text", ""), target_mode)
         self.client.put_wiki_page(
             self.project_id,
             CONFIG_PAGE_TITLE,
             text,
             "release detail mode conversion",
-            version=page.get("version"),
+            version=(page or {}).get("version"),
         )
+
+    def _build_inferred_config(self, profile: WikiProfile, target_mode: str) -> str:
+        lines = [
+            "# Release Tool Config",
+            "",
+            "本页面由版本布局转换工具根据现有 Release 页面生成。",
+            "",
+            CONFIG_BEGIN,
+            "```yaml",
+            f"mode: {profile.mode}",
+            "text_format: common_mark",
+            f"main_page: {profile.main_page}",
+            f"release_detail_mode: {target_mode}",
+        ]
+        if target_mode == "page" and profile.release_page_prefix:
+            lines.append(f"release_page_prefix: {profile.release_page_prefix}")
+        if profile.mode == "multi_list":
+            lines.append("categories:")
+            for category in profile.categories:
+                lines.extend(
+                    [
+                        f"  - key: {category.key}",
+                        f"    title: {category.title}",
+                        f"    hub_page: {category.hub}",
+                        f"    list_page: {category.hub}",
+                    ]
+                )
+        lines.extend(["```", CONFIG_END, ""])
+        return "\n".join(lines)
 
     def _replace_config_mode(self, text: str, target_mode: str) -> str:
         block_pattern = re.compile(rf"{re.escape(CONFIG_BEGIN)}(?P<body>.*?){re.escape(CONFIG_END)}", re.S)

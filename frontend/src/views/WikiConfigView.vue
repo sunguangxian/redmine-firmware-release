@@ -169,6 +169,7 @@
         <div>项目结构：{{ projectStructureLabel(convertPreview.project_structure) }}（{{ convertPreview.model_count }} 种型号）</div>
         <div>当前内容：{{ layoutLabel(convertPreview.source_mode) }} → 目标：{{ layoutLabel(convertPreview.target_mode) }}</div>
         <div>识别 Release：{{ convertPreview.release_count }} 个</div>
+        <div v-if="convertPreview.config_missing">配置页：转换时将根据预览结果自动创建 Release_Tool_Config</div>
         <div>型号页面：</div>
         <div v-for="page in convertPreview.model_pages" :key="`model-${page}`">- {{ page }}</div>
         <div v-if="!convertPreview.model_pages.length">- {{ form.mainPage }}（单型号主页面）</div>

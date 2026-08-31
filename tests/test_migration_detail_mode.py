@@ -2,7 +2,9 @@ import unittest
 
 from fake_redmine import FakeRedmineClient
 from release_tool.legacy_changelog_migrator import LegacyChangelogMigrator, LegacyRelease, LegacySourcePage
+from release_tool.release_page import build_release_markdown
 from release_tool.wiki_config import parse_release_wiki_config
+from test_release_flow_fake_redmine import form
 
 
 class FakeClient:
@@ -23,6 +25,34 @@ class FakeMigrator(LegacyChangelogMigrator):
 
 
 class MigrationDetailModeTest(unittest.TestCase):
+    def test_unconfigured_existing_release_pages_can_be_adopted_by_upgrade(self):
+        client = FakeRedmineClient()
+        client.seed_page("Release_Notes", "# Release Notes\n")
+        client.seed_version("V5.3.7.52", 1)
+        release_form = form("V5.3.7.52")
+        release_form.project_id = "dp990dlf"
+        release_form.proj_tag = "DP990DLF"
+        release_form.product_line = ""
+        client.seed_page(
+            "Release_DP990DLF_FW_V5_3_7_52",
+            build_release_markdown(release_form, 1, [], main_page="Release_Notes"),
+            parent_title="Release_Notes",
+        )
+        migrator = LegacyChangelogMigrator(client, "dp990dlf")
+
+        preview = migrator.preview()
+
+        self.assertEqual(preview["upgrade_strategy"], "adopt_existing_release_pages")
+        self.assertEqual(preview["release_detail_mode"], "page")
+        self.assertEqual(preview["release_count"], 1)
+
+        result = migrator.execute()
+
+        self.assertTrue(result["ok"])
+        self.assertIn("mode: single_list", client.pages["Release_Tool_Config"]["text"])
+        self.assertIn("release_detail_mode: page", client.pages["Release_Tool_Config"]["text"])
+        self.assertIn("Release_DP990DLF_FW_V5_3_7_52", client.pages)
+
     def test_normalize_mode(self):
         migrator = LegacyChangelogMigrator(FakeClient(), "dp580")
         self.assertEqual(migrator._normalize_detail_mode("inline"), "inline")

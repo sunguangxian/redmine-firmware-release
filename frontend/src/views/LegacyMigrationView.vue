@@ -32,6 +32,7 @@
     <el-card v-if="previewData" class="card">
       <template #header>升级预览</template>
       <div class="migration-summary">
+        <div v-if="previewData.upgrade_strategy === 'adopt_existing_release_pages'">升级方式：纳管现有 Release 页面并创建配置，不重复迁移版本或附件</div>
         <div>项目型号结构：{{ previewData.project_structure_label }}</div>
         <div>版本页面布局：{{ previewData.release_detail_mode_label || modeLabel(releaseDetailMode) }}</div>
         <div>目标页面类型：{{ previewData.target_page_label }}</div>
@@ -239,7 +240,9 @@ async function execute() {
   const modeText = previewData.value.release_detail_mode_label || modeLabel(releaseDetailMode.value)
   try {
     await ElMessageBox.confirm(
-      `将按“${previewData.value.project_structure_label} / ${modeText}”写入 Redmine：创建或复用版本、迁移附件、生成标准型号页和版本页面并重建索引。旧 Changelog 页面不会删除。是否继续？`,
+      previewData.value.upgrade_strategy === 'adopt_existing_release_pages'
+        ? `将按“${previewData.value.project_structure_label} / ${modeText}”纳管现有 Release 页面：创建 Release_Tool_Config 并重建索引，不迁移版本或附件，也不删除现有版本页面。是否继续？`
+        : `将按“${previewData.value.project_structure_label} / ${modeText}”写入 Redmine：创建或复用版本、迁移附件、生成标准型号页和版本页面并重建索引。旧 Changelog 页面不会删除。是否继续？`,
       '确认执行旧项目升级',
       { type: 'warning' }
     )

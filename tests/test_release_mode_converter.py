@@ -20,6 +20,60 @@ release_page_prefix: Release_PT7200D_FW_
 
 
 class ReleaseModeConverterTest(unittest.TestCase):
+    def test_unconfigured_single_model_pages_can_be_previewed_and_adopted(self):
+        client = FakeRedmineClient()
+        client.seed_page("Release_Notes", "# Release Notes\n")
+        client.seed_version("V5.3.7.52", 1)
+        release_form = form("V5.3.7.52")
+        release_form.project_id = "dp990dlf"
+        release_form.proj_tag = "DP990DLF"
+        release_form.product_line = ""
+        client.seed_page(
+            "Release_DP990DLF_FW_V5_3_7_52",
+            build_release_markdown(release_form, 1, [], main_page="Release_Notes"),
+            parent_title="Release_Notes",
+        )
+
+        preview = ReleaseModeConverter(client, "dp990dlf").preview("inline")
+
+        self.assertTrue(preview["config_missing"])
+        self.assertTrue(preview["config_will_change"])
+        self.assertEqual(preview["project_structure"], "single_model")
+        self.assertEqual(preview["source_mode"], "page")
+        self.assertEqual(preview["release_count"], 1)
+
+        result = ReleaseModeConverter(client, "dp990dlf").convert("inline")
+
+        self.assertTrue(result["config_updated"])
+        self.assertIn("mode: single_list", client.pages["Release_Tool_Config"]["text"])
+        self.assertIn("release_detail_mode: inline", client.pages["Release_Tool_Config"]["text"])
+        self.assertIn("RELEASE_INLINE_BEGIN:Release_DP990DLF_FW_V5_3_7_52", client.pages["Release_Notes"]["text"])
+
+    def test_unconfigured_multi_model_pages_are_inferred(self):
+        client = FakeRedmineClient()
+        client.seed_page("Release_Notes", "# Release Notes\n")
+        client.seed_page("Release_Notes_F864", "# F864\n", parent_title="Release_Notes")
+        client.seed_page("Release_Notes_F864X", "# F864X\n", parent_title="Release_Notes")
+        client.seed_version("V1.0.0", 1)
+        client.seed_page(
+            "Release_F864_FW_V1_0_0",
+            build_release_markdown(form("V1.0.0"), 1, [], main_page="Release_Notes"),
+            parent_title="Release_Notes_F864",
+        )
+
+        preview = ReleaseModeConverter(client, "f647").preview("page")
+
+        self.assertTrue(preview["config_missing"])
+        self.assertEqual(preview["project_structure"], "multi_model")
+        self.assertEqual(preview["model_pages"], ["Release_Notes_F864", "Release_Notes_F864X"])
+        self.assertEqual(preview["release_count"], 1)
+
+        ReleaseModeConverter(client, "f647").convert("page")
+        config = client.pages["Release_Tool_Config"]["text"]
+        self.assertIn("mode: multi_list", config)
+        self.assertIn("hub_page: Release_Notes_F864", config)
+        self.assertIn("list_page: Release_Notes_F864", config)
+
     def test_page_to_inline_copies_releases_and_keeps_old_pages(self):
         client = FakeRedmineClient()
         client.seed_page("Release_Tool_Config", PAGE_CONFIG)

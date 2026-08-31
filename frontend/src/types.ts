@@ -171,6 +171,7 @@ export interface WikiModeConvertPreview {
   pages_to_delete: string[]
   existing_pages: string[]
   config_will_change: boolean
+  config_missing: boolean
   warnings: string[]
   message: string
 }
@@ -185,6 +186,7 @@ export interface WikiModeConvertResult extends WikiModeConvertPreview {
 export interface LegacyMigrationPreview {
   project_id: string
   entry_pages: string[]
+  upgrade_strategy?: 'adopt_existing_release_pages'
   project_structure: 'single_model' | 'multi_model'
   project_structure_label: string
   release_detail_mode?: 'auto' | 'inline' | 'page'
