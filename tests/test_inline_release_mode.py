@@ -155,6 +155,31 @@ main_page: Release_Notes
         self.assertEqual(text.count("\n--------------\n"), 4)
         self.assertNotIn("**Commit:** abc123\n\n--------------", text)
 
+    def test_inline_sort_treats_consecutive_separators_as_one_block_run(self):
+        def block(version: str, date: str) -> str:
+            form = ReleaseForm(
+                project_id="dp580",
+                proj_tag="DP580",
+                version_name=version,
+                release_date=date,
+                commit="abc123",
+                product_line="常规版本 (5X)",
+                changelog_items=[f"change {version}"],
+            )
+            return build_inline_release_block(form, 12, [], block_id=version.replace(".", "_"))
+
+        page = (
+            "# Release Notes\n\n{{>toc}}\n\n"
+            + block("V5.3.7.59", "2026-08-21")
+            + "\n\n--------------\n\n--------------\n\n"
+            + block("V5.3.7.60", "2026-09-01")
+        )
+
+        text = normalize_inline_release_page(page)
+
+        self.assertLess(text.index("V5.3.7.60"), text.index("V5.3.7.59"))
+        self.assertEqual(text.count("\n--------------\n"), 1)
+
     def test_inline_sort_preserves_manual_content_between_block_runs(self):
         def block(version: str, date: str) -> str:
             form = ReleaseForm(

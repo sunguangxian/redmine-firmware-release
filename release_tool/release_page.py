@@ -301,7 +301,7 @@ def _sort_inline_release_blocks_segment(page_text: str) -> str:
 
     for previous, current in zip(matches, matches[1:]):
         gap = page_text[previous.end() : current.start()]
-        if re.fullmatch(r"\s*(?:-{3,}\s*)?", gap):
+        if re.fullmatch(r"\s*(?:-{3,}\s*)*", gap):
             run.append(current.group(0).strip())
             continue
         result += flush_run() + gap
