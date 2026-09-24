@@ -23,6 +23,11 @@
         <el-table-column prop="product_line" label="型号" width="160" />
         <el-table-column label="Wiki 页" min-width="240"><template #default="{ row }">{{ row.display_title || row.title }}</template></el-table-column>
         <el-table-column prop="summary" label="摘要" min-width="240" />
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" :disabled="busy" @click="openResend(row)">补发邮件</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -61,7 +66,7 @@
 
       <div class="toolbar" style="margin-top: 16px">
         <el-button type="primary" :disabled="busy || !selectedWikiTitle" :loading="publishing" @click="publish">预览并更新到 Redmine</el-button>
-        <el-button v-if="selectedWikiTitle && noticeEnabled" :disabled="busy" :loading="retryingNotice" type="warning" @click="retryNotice">{{ canRetryNotice ? '重发邮件' : '单独发送通知邮件' }}</el-button>
+        <el-button v-if="canRetryNotice" :disabled="busy" :loading="retryingNotice" type="warning" @click="retryNotice">重发邮件</el-button>
         <el-button v-if="logs.length" @click="logDialogVisible = true">查看日志</el-button>
       </div>
       <el-alert v-if="status" class="card status-text" :type="canRetryNotice ? 'warning' : 'success'" :closable="false" show-icon><template #title>{{ status }}</template></el-alert>
@@ -95,6 +100,7 @@
       </el-tabs>
     </el-card>
 
+    <ResendNoticeDialog v-model="resendVisible" :project-id="projectId" :wiki-title="resendTarget.wikiTitle" :version-name="resendTarget.versionName" :release-date="resendTarget.releaseDate" :commit="resendTarget.commit" :changelog="resendTarget.changelog" :files="resendTarget.files" :scopes="meta.mail_scopes" @sent="onResendSent" @failed="onResendFailed" />
     <ExecutionLogDialog v-model="logDialogVisible" :logs="logs" />
     <ReleasePreviewDialog v-model="previewDialogVisible" title="更新前预览" :plan="previewPlan" @confirm="confirmPreviewDialog" @cancel="cancelPreviewDialog" />
   </div>
@@ -105,10 +111,11 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import ExecutionLogDialog from '../components/ExecutionLogDialog.vue'
+import ResendNoticeDialog from '../components/ResendNoticeDialog.vue'
 import ReleaseFileList from '../components/ReleaseFileList.vue'
 import ReleasePreviewDialog from '../components/ReleasePreviewDialog.vue'
 import { errorLogs, errorMessage, getContacts, getMailHistory, getProjectReleaseCategories, getPublishHistory, getReleaseDetail, listReleases, previewRelease, publishRelease, recoverPublishHistory, sendReleaseNotice, type MailHistoryItem, type PublishHistoryItem, type ReleasePlan } from '../api/http'
-import type { ContactTemplateConfig, MetaInfo, Project, ReleaseSummary } from '../types'
+import type { ContactTemplateConfig, MetaInfo, Project, ReleaseFileLink, ReleaseSummary } from '../types'
 import { buildMailBody, buildMailSubject, friendlyReleaseError, hasReleaseDraft, mergeEmails, validateReleaseInput } from '../utils/releaseUi.js'
 
 const props = defineProps<{ projects: Project[]; meta: MetaInfo; mailVersion: number }>()
@@ -135,6 +142,8 @@ const previewDialogVisible = ref(false)
 const previewPlan = ref<(ReleasePlan & { summary?: string }) | null>(null)
 let previewResolver: ((value: boolean) => void) | null = null
 const canRetryNotice = ref(false)
+const resendVisible = ref(false)
+const resendTarget = reactive({ wikiTitle: '', versionName: '', releaseDate: '', commit: '', changelog: '', files: [] as ReleaseFileLink[] })
 const filesInfo = ref('')
 const replaceAttachments = ref(false)
 const noticeEnabled = ref(false)
@@ -186,7 +195,10 @@ function cancelPreviewDialog() { previewResolver?.(false); previewResolver = nul
 async function confirmPreview(): Promise<boolean> { const preview = await previewRelease(buildReleaseFormData()); logs.value = preview.logs || []; previewPlan.value = preview; previewDialogVisible.value = true; return new Promise((resolve) => { previewResolver = resolve }) }
 function handleFailure(error: unknown) { const message = friendlyReleaseError(errorMessage(error)); const backendLogs = errorLogs(error); logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]; ElMessage.error(message) }
 async function publish() { if (publishing.value) return; if (!validateBeforeSubmit()) return; publishing.value = true; status.value = ''; canRetryNotice.value = false; logs.value = ['正在生成更新前预览']; logDialogVisible.value = true; try { const confirmed = await confirmPreview(); if (!confirmed) { logs.value = ['已取消更新']; return } logs.value = ['已确认更新，等待后端执行']; const result = await publishRelease(buildReleaseFormData()); releases.value = result.releases; logs.value = result.logs || []; selectedWikiTitle.value = result.title; canRetryNotice.value = noticeEnabled.value && result.mail_status === 'failed'; status.value = [`更新完成：${result.title}`, result.result_summary, result.notice_message].filter(Boolean).join('\n'); await loadHistoriesQuietly(); baseline.value = snapshot(); ElMessage.success('更新流程完成') } catch (error) { handleFailure(error) } finally { publishing.value = false; logDialogVisible.value = true } }
-async function retryNotice() { if (retryingNotice.value) return; if (!selectedWikiTitle.value) return ElMessage.warning('没有可发送邮件的版本'); const isRetry = canRetryNotice.value; const label = isRetry ? '重发邮件' : '发送通知邮件'; retryingNotice.value = true; logs.value = [`正在${label}`]; logDialogVisible.value = true; try { const result = await sendReleaseNotice(buildNoticeFormData(isRetry ? 'retry' : 'manual')); logs.value = result.logs || []; status.value = `${status.value}\n${label}：成功，${result.message}`; canRetryNotice.value = false; await loadHistoriesQuietly(); ElMessage.success(`${label}成功`) } catch (error) { handleFailure(error) } finally { retryingNotice.value = false; logDialogVisible.value = true } }
+async function retryNotice() { if (retryingNotice.value) return; if (!selectedWikiTitle.value) return ElMessage.warning('没有可发送邮件的版本'); retryingNotice.value = true; logs.value = ['正在重发邮件']; logDialogVisible.value = true; try { const result = await sendReleaseNotice(buildNoticeFormData('retry')); logs.value = result.logs || []; status.value = `${status.value}\n重发邮件：成功，${result.message}`; canRetryNotice.value = false; await loadHistoriesQuietly(); ElMessage.success('重发邮件成功') } catch (error) { handleFailure(error) } finally { retryingNotice.value = false; logDialogVisible.value = true } }
+async function openResend(value: unknown) { if (busy.value) return; const row = value as ReleaseSummary; try { const detail = await getReleaseDetail(projectId.value, row.title); resendTarget.wikiTitle = row.title; resendTarget.versionName = detail.version_name || row.version; resendTarget.releaseDate = detail.release_date || row.date; resendTarget.commit = detail.commit || ''; resendTarget.changelog = detail.changelog || ''; resendTarget.files = detail.files || []; resendVisible.value = true } catch (error) { ElMessage.error(friendlyReleaseError(errorMessage(error))) } }
+function onResendSent(result: { message: string; logs: string[] }) { logs.value = result.logs || []; status.value = `补发邮件：成功，${result.message}`; logDialogVisible.value = true; if (selectedWikiTitle.value && selectedWikiTitle.value === resendTarget.wikiTitle) loadHistoriesQuietly(); ElMessage.success('补发邮件成功') }
+function onResendFailed(result: { message: string; logs: string[] }) { logs.value = result.logs || [`补发邮件失败：${result.message}`]; status.value = `补发邮件失败：${result.message}`; logDialogVisible.value = true; if (selectedWikiTitle.value && selectedWikiTitle.value === resendTarget.wikiTitle) loadHistoriesQuietly() }
 async function recoverHistory(value: unknown, action: 'rebuild_index' | 'continue') { const row = value as PublishHistoryItem; if (recoveringHistoryId.value) return; try { const actionLabel = row.recover_actions?.find((item) => item.action === action)?.label || action; await ElMessageBox.confirm(`确认执行恢复操作：${actionLabel}？`, '恢复发布记录', { confirmButtonText: '确认执行', cancelButtonText: '取消', type: 'warning' }); recoveringHistoryId.value = row.id; recoveringAction.value = action; logs.value = [`正在执行恢复操作：${actionLabel}`]; logDialogVisible.value = true; const result = await recoverPublishHistory(row.id, action); logs.value = result.logs || []; status.value = result.message; await loadHistoriesQuietly(); if (action === 'continue') await loadReleases(); ElMessage.success(result.message) } catch (error) { if (error === 'cancel' || error === 'close') return; const message = friendlyReleaseError(errorMessage(error)); if (message === 'cancel' || message === 'close') return; const backendLogs = errorLogs(error); logs.value = backendLogs.length ? [...backendLogs, `执行失败：${message}`] : [`执行失败：${message}`]; ElMessage.error(message) } finally { recoveringHistoryId.value = null; recoveringAction.value = '' } }
 onMounted(async () => { window.addEventListener('beforeunload', onBeforeUnload); document.addEventListener('click', onDocumentClick, true); await loadContacts(); await loadCategories(); await loadReleases() })
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', onBeforeUnload); document.removeEventListener('click', onDocumentClick, true); emit('dirty-change', false) })

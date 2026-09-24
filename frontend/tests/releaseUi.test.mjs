@@ -5,6 +5,8 @@ import {
   duplicateFileNames,
   friendlyReleaseError,
   releaseNameFromAttachments,
+  mergeContactPeople,
+  publishedAttachmentIssue,
   validateReleaseInput,
 } from '../src/utils/releaseUi.js'
 
@@ -26,6 +28,23 @@ test('validateReleaseInput reports frontend validation errors', () => {
   assert.ok(errors.includes('请填写版本号'))
   assert.ok(errors.includes('发布日期格式必须是 YYYY-MM-DD'))
   assert.ok(errors.some((item) => item.includes('重名文件')))
+})
+
+test('mergeContactPeople keeps cc-only and template-only addresses', () => {
+  const people = mergeContactPeople([
+    [{ name: '在职', email: 'stay@example.com' }],
+    ['stay@example.com'],
+    [{ name: '离职', email: 'Left@example.com' }],
+    [{ email: 'left@example.com' }],
+  ])
+  assert.deepEqual(people.map((item) => item.email), ['stay@example.com', 'Left@example.com'])
+  assert.equal(people[1].name, '离职')
+})
+
+test('publishedAttachmentIssue requires every firmware file to have a download url', () => {
+  assert.equal(publishedAttachmentIssue([]), '该版本没有可随邮件发送的固件附件')
+  assert.match(publishedAttachmentIssue([{ filename: 'fw.bin' }, { filename: 'boot.bin', url: '/attachments/download/2/boot.bin' }]), /fw\.bin/)
+  assert.equal(publishedAttachmentIssue([{ filename: 'fw.bin', url: '/attachments/download/1/fw.bin' }]), '')
 })
 
 test('friendlyReleaseError maps publish lock and wiki conflict errors', () => {

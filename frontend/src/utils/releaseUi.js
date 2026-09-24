@@ -19,6 +19,20 @@ export function mergeEmails(groups) {
   return result
 }
 
+export function mergeContactPeople(groups) {
+  const seen = new Set()
+  const result = []
+  groups.flat().forEach((item) => {
+    const email = String(item?.email || item || '').trim()
+    const key = email.toLowerCase()
+    if (!email.includes('@') || seen.has(key)) return
+    seen.add(key)
+    const name = String(item?.name || '').trim() || email.split('@')[0]
+    result.push({ name, email })
+  })
+  return result
+}
+
 export function changelogLines(text) {
   return String(text || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
 }
@@ -89,6 +103,14 @@ export function releaseNameFromAttachments(names, fallbackVersion, fallbackDate)
   const cleanModels = uniqueItems(models)
   const modelText = cleanModels.length > 4 ? `${cleanModels.slice(0, 4).join('/')} 等${cleanModels.length}个机型` : cleanModels.join('/')
   return [modelText, parsedVersion || fallbackVersion, parsedDate || String(fallbackDate || '').replace(/-/g, '')].filter(Boolean).join(' ')
+}
+
+export function publishedAttachmentIssue(files) {
+  const named = (files || []).filter((item) => String(item?.filename || '').trim())
+  if (!named.length) return '该版本没有可随邮件发送的固件附件'
+  const missing = named.filter((item) => !String(item?.url || '').trim()).map((item) => item.filename)
+  if (missing.length) return `固件附件缺少下载地址：${missing.join('、')}`
+  return ''
 }
 
 export function buildMailSubject(scope, names, versionName, releaseDate) {

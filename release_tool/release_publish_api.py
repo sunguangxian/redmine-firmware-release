@@ -129,7 +129,7 @@ def register_release_publish_routes(app: FastAPI) -> None:
         mail_cc: str = Form(""),
         mail_subject: str = Form(""),
         mail_body: str = Form(""),
-        files: Optional[List[UploadFile]] = File(None),
+        files: List[UploadFile] = File(default=[]),
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:

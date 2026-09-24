@@ -22,7 +22,7 @@
           <div class="toolbar mail-settings-actions">
             <el-button :loading="testingAdminInternal" @click="testAdminInternal">测试内网服务器</el-button>
             <el-button :loading="testingAdminExternal" @click="testAdminExternal">测试外网服务器</el-button>
-            <el-button type="primary" :loading="savingAdmin" @click="saveAdmin">保存服务器配置</el-button>
+            <el-button type="primary" :loading="savingAdmin" @click="saveAdmin()">保存服务器配置</el-button>
           </div>
         </el-card>
 
@@ -50,7 +50,7 @@
           <div class="toolbar mail-settings-actions">
             <el-button :loading="testingUser" @click="testUser">测试外网账号</el-button>
             <el-button :loading="loadingExternalContacts" @click="loadExternalAccountContacts()">读取账户数据</el-button>
-            <el-button type="primary" :loading="savingUser" @click="saveUser">保存外网账号</el-button>
+            <el-button type="primary" :loading="savingUser" @click="saveUser()">保存外网账号</el-button>
             <el-button :loading="loading" @click="load">重新读取</el-button>
           </div>
         </el-card>
@@ -83,8 +83,8 @@
           <div class="contact-manager-footer">
             <span class="muted">共 {{ filteredContacts.length }} 个联系人</span>
             <el-pagination v-model:current-page="contactPage" :page-size="contactPageSize" :total="filteredContacts.length" layout="prev, pager, next" background />
-            <el-button v-if="contactScope === 'internal'" type="primary" :loading="savingAdmin" @click="saveAdmin">保存内网联系人</el-button>
-            <el-button v-else type="primary" :loading="savingUser" @click="saveUser">保存外网联系人</el-button>
+            <el-button v-if="contactScope === 'internal'" type="primary" :loading="savingAdmin" @click="saveAdmin()">保存内网联系人</el-button>
+            <el-button v-else type="primary" :loading="savingUser" @click="saveUser()">保存外网联系人</el-button>
           </div>
         </el-card>
       </el-tab-pane>
@@ -118,7 +118,7 @@
           <div class="contact-manager-footer">
             <span class="muted">共 {{ externalTemplates.length }} 个联系人组</span>
             <div style="flex: 1"></div>
-            <el-button type="primary" :loading="savingUser" @click="saveUser">保存联系人组</el-button>
+            <el-button type="primary" :loading="savingUser" @click="saveUser()">保存联系人组</el-button>
           </div>
         </el-card>
       </el-tab-pane>
@@ -169,6 +169,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { errorMessage, getExternalAccountContacts, getMailSettings, revealMailPasswords, saveAdminMailSettings, saveUserExternalMailSettings, saveUserInternalMailSettings, testAdminMailServer, testMailConnection } from '../api/http'
 import type { ContactPersonConfig, ContactTemplateConfig, MailSettings, SessionInfo } from '../types'
+import { mergeContactPeople } from '../utils/releaseUi.js'
 
 const props = defineProps<{ session: SessionInfo }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -204,6 +205,8 @@ const templateDraft = ref<{ name: string; emails: string[] }>({ name: '', emails
 function nameFromEmail(email: string): string { return email.split('@')[0] || email }
 function cleanPeople(items: ContactPersonConfig[]): ContactPersonConfig[] { const seen = new Set<string>(); const result: ContactPersonConfig[] = []; items.forEach((item) => { const email = item.email.trim(); const key = email.toLowerCase(); if (!email.includes('@') || seen.has(key)) return; seen.add(key); result.push({ name: item.name.trim() || nameFromEmail(email), email }) }); return result }
 function emailToPerson(email: string): ContactPersonConfig { return externalPeople.value.find((item) => item.email.trim().toLowerCase() === email.trim().toLowerCase()) || { name: nameFromEmail(email), email } }
+function personIndex(list: ContactPersonConfig[], email: string): number { const key = email.trim().toLowerCase(); return list.findIndex((item) => item.email.trim().toLowerCase() === key) }
+function currentPeople(): ContactPersonConfig[] { return contactScope.value === 'internal' ? internalPeople.value : externalPeople.value }
 function editableExternalTemplates(items: ContactTemplateConfig[]) { return (items || []).map((item) => ({ name: item.name, emails: item.contacts_to.map((contact) => contact.email) })) }
 function saveableExternalTemplates(): ContactTemplateConfig[] { return externalTemplates.value.map((item) => ({ name: item.name.trim(), contacts_to: item.emails.map(emailToPerson), contacts_cc: [] })).filter((item) => item.name) }
 const externalContactOptions = computed(() => cleanPeople(externalPeople.value).map((item) => ({ ...item, label: `${item.name || nameFromEmail(item.email)} <${item.email}>` })))
@@ -244,12 +247,12 @@ async function revealPasswords() {
 
 function openContactDialog(value?: unknown) {
   const item = value as ContactPersonConfig | undefined
-  editingContactIndex.value = item ? activePeople.value.indexOf(item) : -1
+  editingContactIndex.value = item ? personIndex(currentPeople(), item.email) : -1
   contactDraft.value = item ? { ...item } : { name: '', email: '' }
   contactDialogVisible.value = true
 }
 
-function saveContactDraft() {
+async function saveContactDraft() {
   const email = contactDraft.value.email.trim()
   if (!email || !email.includes('@')) return ElMessage.warning('请填写有效的联系人邮箱')
   const list = activePeople.value
@@ -266,22 +269,29 @@ function saveContactDraft() {
     list.push(next)
   }
   contactDialogVisible.value = false
+  const saved = await persistContacts('联系人已保存')
+  if (!saved) await load()
 }
 
 async function removeContact(value: unknown) {
   const item = value as ContactPersonConfig
+  if (savingAdmin.value || savingUser.value) return
   try {
-    await ElMessageBox.confirm(`确认删除联系人“${item.name || item.email}”吗？`, '删除联系人', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除联系人“${item.name || item.email}”吗？删除后会立即保存。`, '删除联系人', { type: 'warning' })
   } catch {
     return
   }
-  const index = activePeople.value.indexOf(item)
-  if (index >= 0) activePeople.value.splice(index, 1)
+  const list = currentPeople()
+  const index = personIndex(list, item.email)
+  if (index < 0) return
+  list.splice(index, 1)
   if (contactScope.value === 'external') {
     externalTemplates.value.forEach((template) => { template.emails = template.emails.filter((email) => email.toLowerCase() !== item.email.toLowerCase()) })
   }
   const lastPage = Math.max(1, Math.ceil(filteredContacts.value.length / contactPageSize))
   contactPage.value = Math.min(contactPage.value, lastPage)
+  const saved = await persistContacts('已删除联系人')
+  if (!saved) await load()
 }
 
 function openTemplateDialog(value?: unknown) {
@@ -291,7 +301,7 @@ function openTemplateDialog(value?: unknown) {
   templateDialogVisible.value = true
 }
 
-function saveTemplateDraft() {
+async function saveTemplateDraft() {
   const name = templateDraft.value.name.trim()
   if (!name) return ElMessage.warning('请填写联系人组名称')
   if (!templateDraft.value.emails.length) return ElMessage.warning('请至少选择一个联系人')
@@ -301,6 +311,8 @@ function saveTemplateDraft() {
   if (editingTemplateIndex.value >= 0) externalTemplates.value.splice(editingTemplateIndex.value, 1, next)
   else externalTemplates.value.push(next)
   templateDialogVisible.value = false
+  const saved = await persistContacts('联系人组已保存')
+  if (!saved) await load()
 }
 
 async function removeTemplate(value: unknown) {
@@ -310,8 +322,10 @@ async function removeTemplate(value: unknown) {
   } catch {
     return
   }
-  const index = externalTemplates.value.indexOf(item)
+  const index = externalTemplates.value.findIndex((template) => template.name === item.name)
   if (index >= 0) externalTemplates.value.splice(index, 1)
+  const saved = await persistContacts('已删除联系人组')
+  if (!saved) await load()
 }
 
 async function runMailConnectionTest(scope: MailScope, account: { smtp_user: string; smtp_password: string; smtp_from: string }) { const result = await testMailConnection({ scope, smtp_user: account.smtp_user, smtp_password: account.smtp_password, smtp_from: account.smtp_from }); ElMessage.success(result.message || 'SMTP 连通性测试通过') }
@@ -321,13 +335,14 @@ async function testAdminExternal() { if (!settings.value) return; testingAdminEx
 async function testInternal() { if (!settings.value) return; testingInternal.value = true; try { await runMailConnectionTest('internal', settings.value.user_internal) } catch (error) { ElMessage.error(errorMessage(error)) } finally { testingInternal.value = false } }
 async function testUser() { if (!settings.value) return; testingUser.value = true; try { await runMailConnectionTest('external', settings.value.user_external) } catch (error) { ElMessage.error(errorMessage(error)) } finally { testingUser.value = false } }
 
-async function loadExternalAccountContacts(showMessage = true) { if (!settings.value) return; const smtpUser = settings.value.user_external.smtp_user.trim(); if (!smtpUser) { externalPeople.value = []; externalTemplates.value = []; if (showMessage) ElMessage.warning('请先填写外网 SMTP 用户名'); return } loadingExternalContacts.value = true; try { const data = await getExternalAccountContacts(smtpUser); externalPeople.value = data.contacts_to_people?.length ? data.contacts_to_people : (data.contacts_to || []).map((email: string) => ({ name: nameFromEmail(email), email })); externalTemplates.value = editableExternalTemplates(data.contact_templates || []); if (showMessage) ElMessage.success('已读取当前外网账号联系人') } catch (error) { ElMessage.error(errorMessage(error)) } finally { loadingExternalContacts.value = false } }
+async function loadExternalAccountContacts(showMessage = true) { if (!settings.value) return; const smtpUser = settings.value.user_external.smtp_user.trim(); if (!smtpUser) { externalPeople.value = []; externalTemplates.value = []; if (showMessage) ElMessage.warning('请先填写外网 SMTP 用户名'); return } loadingExternalContacts.value = true; try { const data = await getExternalAccountContacts(smtpUser); const templatePeople = (data.contact_templates || []).flatMap((item) => [...(item.contacts_to || []), ...(item.contacts_cc || [])]); externalPeople.value = mergeContactPeople([data.contacts_to_people || [], (data.contacts_to || []).map((email) => ({ email })), data.contacts_cc_people || [], (data.contacts_cc || []).map((email) => ({ email })), templatePeople]); externalTemplates.value = editableExternalTemplates(data.contact_templates || []); if (showMessage) ElMessage.success('已读取当前外网账号联系人') } catch (error) { ElMessage.error(errorMessage(error)) } finally { loadingExternalContacts.value = false } }
 async function handleExternalSmtpUserChange() { await loadExternalAccountContacts(false) }
 
-async function load() { loading.value = true; try { settings.value = await getMailSettings(); internalPeople.value = settings.value.admin.internal_contacts.contacts_people?.length ? settings.value.admin.internal_contacts.contacts_people : settings.value.admin.internal_contacts.contacts_to.map((email) => ({ name: nameFromEmail(email), email })); externalPeople.value = settings.value.user_external.contacts_to_people?.length ? settings.value.user_external.contacts_to_people : settings.value.user_external.contacts_to.map((email) => ({ name: nameFromEmail(email), email })); externalTemplates.value = editableExternalTemplates(settings.value.user_external.contact_templates) } catch (error) { ElMessage.error(errorMessage(error)) } finally { loading.value = false } }
-async function saveAdmin() { if (!settings.value || !props.session.is_admin) return; savingAdmin.value = true; try { const people = cleanPeople(internalPeople.value); await saveAdminMailSettings({ internal_server: settings.value.admin.internal_server, external_server: settings.value.admin.external_server, internal_contacts: { contacts: people.map((item) => item.email), contacts_to: people.map((item) => item.email), contacts_cc: [], contacts_people: people } }); ElMessage.success('管理员邮件配置已保存'); emit('changed'); await load() } catch (error) { ElMessage.error(errorMessage(error)) } finally { savingAdmin.value = false } }
+async function load() { loading.value = true; try { settings.value = await getMailSettings(); const internal = settings.value.admin.internal_contacts; internalPeople.value = mergeContactPeople([internal.contacts_people || [], (internal.contacts_to || []).map((email) => ({ email })), (internal.contacts_cc || []).map((email) => ({ email }))]); const external = settings.value.user_external; const templatePeople = (external.contact_templates || []).flatMap((item) => [...(item.contacts_to || []), ...(item.contacts_cc || [])]); externalPeople.value = mergeContactPeople([external.contacts_to_people || [], (external.contacts_to || []).map((email) => ({ email })), external.contacts_cc_people || [], (external.contacts_cc || []).map((email) => ({ email })), templatePeople]); externalTemplates.value = editableExternalTemplates(external.contact_templates) } catch (error) { ElMessage.error(errorMessage(error)) } finally { loading.value = false } }
+async function saveAdmin(successMessage = '管理员邮件配置已保存') { if (!settings.value || !props.session.is_admin) return false; savingAdmin.value = true; try { const people = cleanPeople(internalPeople.value); await saveAdminMailSettings({ internal_server: settings.value.admin.internal_server, external_server: settings.value.admin.external_server, internal_contacts: { contacts: people.map((item) => item.email), contacts_to: people.map((item) => item.email), contacts_cc: [], contacts_people: people } }); ElMessage.success(successMessage); emit('changed'); await load(); return true } catch (error) { ElMessage.error(errorMessage(error)); return false } finally { savingAdmin.value = false } }
+async function persistContacts(successMessage: string) { return contactScope.value === 'internal' ? saveAdmin(successMessage) : saveUser(successMessage) }
 async function saveInternal() { if (!settings.value) return; savingInternal.value = true; try { await saveUserInternalMailSettings({ smtp_user: settings.value.user_internal.smtp_user, smtp_password: settings.value.user_internal.smtp_password, smtp_from: settings.value.user_internal.smtp_from, contacts_to: settings.value.user_internal.contacts_to, contacts_cc: settings.value.user_internal.contacts_cc, contact_templates: settings.value.user_internal.contact_templates }); ElMessage.success('个人内网邮件账号已保存'); emit('changed'); await load() } catch (error) { ElMessage.error(errorMessage(error)) } finally { savingInternal.value = false } }
-async function saveUser() { if (!settings.value) return; savingUser.value = true; try { const people = cleanPeople(externalPeople.value); await saveUserExternalMailSettings({ smtp_user: settings.value.user_external.smtp_user, smtp_password: settings.value.user_external.smtp_password, smtp_from: settings.value.user_external.smtp_from, contacts_to: people.map((item) => item.email), contacts_cc: [], contacts_to_people: people, contacts_cc_people: [], contact_templates: saveableExternalTemplates() }); ElMessage.success('个人外网邮件设置已保存'); emit('changed'); await load() } catch (error) { ElMessage.error(errorMessage(error)) } finally { savingUser.value = false } }
+async function saveUser(successMessage = '个人外网邮件设置已保存') { if (!settings.value) return false; savingUser.value = true; try { const people = cleanPeople(externalPeople.value); await saveUserExternalMailSettings({ smtp_user: settings.value.user_external.smtp_user, smtp_password: settings.value.user_external.smtp_password, smtp_from: settings.value.user_external.smtp_from, contacts_to: people.map((item) => item.email), contacts_cc: [], contacts_to_people: people, contacts_cc_people: [], contact_templates: saveableExternalTemplates() }); ElMessage.success(successMessage); emit('changed'); await load(); return true } catch (error) { ElMessage.error(errorMessage(error)); return false } finally { savingUser.value = false } }
 
 watch([contactScope, contactSearch], () => { contactPage.value = 1 })
 onMounted(load)

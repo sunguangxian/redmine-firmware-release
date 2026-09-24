@@ -13,12 +13,14 @@ from .attachment_policy import AttachmentContent, content_size, sha256_hex, vali
 from .dependencies import _current_client, _current_session
 from .email_sender import EmailSendError
 from .mail_contact_helpers import mail_scope_label as _mail_scope_label
+from .mail_delivery_helpers import load_published_mail_attachments
 from .mail_delivery_helpers import send_release_notice as _send_release_notice
 from .mail_delivery_helpers import validate_notice_preflight as _validate_notice_preflight
+from .mail_history import record_mail_send
 from .redmine_api import RedmineClient, RedmineError
 from .release_helpers import validate_release_preflight
 from .release_planner import ReleasePlanner
-from .release_page import ReleaseForm, proj_tag_from_project
+from .release_page import ReleaseForm, parse_inline_ref, proj_tag_from_project
 
 
 def _split_changelog(changelog: str) -> List[str]:
@@ -53,6 +55,39 @@ def _size_text(size: int) -> str:
     if size >= 1024:
         return f"{size / 1024:.1f} KB"
     return f"{size} B"
+
+
+def _history_wiki_title(wiki_title: str) -> str:
+    inline = parse_inline_ref(wiki_title)
+    return inline[0] if inline else wiki_title
+
+
+def _record_resend_failure(
+    *,
+    session: Dict[str, Any],
+    project_id: str,
+    wiki_title: str,
+    version_name: str,
+    scope: str,
+    subject: str,
+    to_addrs: List[str],
+    cc_addrs: List[str],
+    error_message: str,
+) -> None:
+    record_mail_send(
+        project_id=project_id,
+        wiki_title=_history_wiki_title(wiki_title),
+        version_name=version_name.strip(),
+        scope=scope,
+        subject=(subject or "").strip(),
+        to_addrs=to_addrs,
+        cc_addrs=cc_addrs,
+        attachment_count=0,
+        sender_user=session.get("user_login", ""),
+        status="failed",
+        error_message=error_message,
+        send_type="resend",
+    )
 
 
 def _build_preview_lines(preview: Dict[str, Any]) -> List[str]:
@@ -106,7 +141,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         mail_subject: str = Form(""),
         mail_body: str = Form(""),
         send_type: str = Form("manual"),
-        files: Optional[List[UploadFile]] = File(None),
+        files: List[UploadFile] = File(default=[]),
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
@@ -170,7 +205,7 @@ def register_release_ops_routes(app: FastAPI) -> None:
         mail_cc: str = Form(""),
         mail_subject: str = Form(""),
         mail_body: str = Form(""),
-        files: Optional[List[UploadFile]] = File(None),
+        files: List[UploadFile] = File(default=[]),
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
@@ -226,19 +261,42 @@ def register_release_ops_routes(app: FastAPI) -> None:
         mail_cc: str = Form(""),
         mail_subject: str = Form(""),
         mail_body: str = Form(""),
-        files: Optional[List[UploadFile]] = File(None),
+        send_type: str = Form("manual"),
+        files: List[UploadFile] = File(default=[]),
         session: Dict[str, Any] = Depends(_current_session),
         client: RedmineClient = Depends(_current_client),
     ) -> Dict[str, Any]:
         require_project_access(session, project_id)
         logs: List[str] = []
+        normalized_send_type = send_type if send_type in {"manual", "retry", "resend"} else "manual"
+        use_published_files = normalized_send_type == "resend"
         try:
             scope, to_addrs, cc_addrs = _validate_notice_preflight(
                 session, mail_scope, mail_to, mail_cc, mail_subject, mail_body
             )
-            file_rows = await run_in_threadpool(_read_mail_files, files)
+            if use_published_files:
+                try:
+                    file_rows = await run_in_threadpool(load_published_mail_attachments, client, project_id, wiki_title)
+                except EmailSendError as exc:
+                    _record_resend_failure(
+                        session=session,
+                        project_id=project_id,
+                        wiki_title=wiki_title,
+                        version_name=version_name,
+                        scope=scope,
+                        subject=mail_subject,
+                        to_addrs=to_addrs,
+                        cc_addrs=cc_addrs,
+                        error_message=str(exc),
+                    )
+                    raise
+                logs.append(f"补发邮件将附带已发布固件 {len(file_rows)} 个")
+                for filename, _description, content in file_rows:
+                    logs.append(f"- {filename} ({_size_text(len(content))})")
+            else:
+                file_rows = await run_in_threadpool(_read_mail_files, files)
             logs.append(
-                f"邮件重发预检查通过：{_mail_scope_label(scope)}，收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个"
+                f"邮件预检查通过：{_mail_scope_label(scope)}，收件人 {len(to_addrs)} 个，抄送 {len(cc_addrs)} 个"
             )
             message = await run_in_threadpool(
                 _send_release_notice,
@@ -253,10 +311,10 @@ def register_release_ops_routes(app: FastAPI) -> None:
                 mail_cc=cc_addrs,
                 mail_subject=mail_subject,
                 mail_body=mail_body,
-                send_type=send_type if send_type in {"manual", "retry"} else "manual",
+                send_type=normalized_send_type,
             )
             logs.append(message)
             return {"ok": True, "message": message, "logs": logs}
         except EmailSendError as exc:
-            logs.append(f"邮件重发失败：{exc}")
+            logs.append(f"邮件发送失败：{exc}")
             return JSONResponse(status_code=400, content={"detail": str(exc), "logs": logs})

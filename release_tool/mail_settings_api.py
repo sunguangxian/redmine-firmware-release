@@ -15,6 +15,7 @@ from .config_store import (
     get_email_server_settings,
     get_internal_contact_settings,
     get_user_internal_email_settings,
+    remove_contact_emails,
     store_email_server_settings,
     store_internal_contact_settings,
     store_user_internal_email_settings,
@@ -123,6 +124,17 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         session: Dict[str, Any] = Depends(_current_session),
     ) -> Dict[str, bool]:
         _require_admin(session)
+        previous = get_internal_contact_settings()
+        previous_emails = {
+            str(email or "").strip().lower()
+            for email in [*(previous.get("contacts_to") or []), *(previous.get("contacts_cc") or [])]
+            if str(email or "").strip()
+        }
+        previous_emails.update(
+            str(item.get("email") or "").strip().lower()
+            for item in get_internal_contact_people()
+            if str(item.get("email") or "").strip()
+        )
         store_email_server_settings(
             MAIL_SCOPE_INTERNAL,
             smtp_host=payload.internal_server.smtp_host,
@@ -143,6 +155,8 @@ def register_mail_settings_routes(app: FastAPI) -> None:
         contacts_cc = payload.internal_contacts.contacts_cc
         store_internal_contact_people(internal_people or clean_people(None, contacts_to))
         store_internal_contact_settings(contacts_to=contacts_to, contacts_cc=contacts_cc)
+        removed = sorted(previous_emails.difference(str(email).strip().lower() for email in contacts_to if str(email).strip()))
+        remove_contact_emails(removed)
         record_audit(
             actor=session.get("user_login", ""),
             action="mail_admin_settings_updated",

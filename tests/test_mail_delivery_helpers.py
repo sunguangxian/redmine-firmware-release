@@ -5,9 +5,11 @@ from release_tool.config_store import MAIL_SCOPE_INTERNAL
 from release_tool.email_sender import EmailSendError
 from release_tool.mail_delivery_helpers import (
     build_notice_body,
+    load_published_mail_attachments,
     send_release_notice,
     validate_notice_preflight,
 )
+from release_tool.redmine_api import RedmineError
 from release_tool.release_page import inline_ref
 
 
@@ -161,6 +163,120 @@ class MailDeliveryHelpersTest(unittest.TestCase):
         self.assertEqual(history.call_args.kwargs["status"], "failed")
         self.assertEqual(history.call_args.kwargs["error_message"], "failed")
         save_contacts.assert_not_called()
+
+
+def _firmware_page(*rows: str) -> str:
+    body = "\n".join(rows) or "| （无） | |"
+    return "\n".join([
+        "## 固件文件",
+        "",
+        "| 文件名 | 说明 |",
+        "|--------|------|",
+        body,
+    ])
+
+
+class PublishedMailAttachmentTest(unittest.TestCase):
+    def _client(self, text: str, downloads=None):
+        client = Mock()
+        client.base_url = "http://redmine.local"
+        client.get_wiki_page.return_value = {"text": text}
+        client.download_content_url.side_effect = downloads or (lambda url: b"firmware-" + url.encode("utf-8"))
+        return client
+
+    def test_loads_every_published_firmware_file(self):
+        client = self._client(_firmware_page(
+            "| [fw.bin](/attachments/download/1/fw.bin) | SHA256: abc |",
+            "| [boot.bin](http://redmine.local/attachments/download/2/boot.bin) | |",
+        ))
+
+        rows = load_published_mail_attachments(client, "demo", "Release_Demo")
+
+        self.assertEqual([item[0] for item in rows], ["fw.bin", "boot.bin"])
+        self.assertEqual(rows[0][2], b"firmware-/attachments/download/1/fw.bin")
+        client.download_content_url.assert_any_call("/attachments/download/1/fw.bin")
+        client.download_content_url.assert_any_call("/attachments/download/2/boot.bin")
+
+    def test_inline_release_uses_only_the_selected_block(self):
+        text = """
+<!-- RELEASE_INLINE_BEGIN:V1.0.0 -->
+## 固件文件
+
+| 文件名 | 说明 |
+|--------|------|
+| [a.bin](/attachments/download/1/a.bin) | |
+<!-- RELEASE_INLINE_END:V1.0.0 -->
+<!-- RELEASE_INLINE_BEGIN:V2.0.0 -->
+## 固件文件
+
+| 文件名 | 说明 |
+|--------|------|
+| [b.bin](/attachments/download/2/b.bin) | |
+<!-- RELEASE_INLINE_END:V2.0.0 -->
+"""
+        client = self._client(text)
+        title = inline_ref("Release_Notes", "V1.0.0")
+
+        rows = load_published_mail_attachments(client, "demo", title)
+
+        self.assertEqual([item[0] for item in rows], ["a.bin"])
+        client.get_wiki_page.assert_called_once_with("demo", "Release_Notes")
+        client.download_content_url.assert_called_once_with("/attachments/download/1/a.bin")
+
+    def test_rejects_version_without_firmware(self):
+        client = self._client("## 变更说明\n\n1. 修复问题\n")
+
+        with self.assertRaisesRegex(EmailSendError, "没有可随邮件发送的固件附件"):
+            load_published_mail_attachments(client, "demo", "Release_Demo")
+        client.download_content_url.assert_not_called()
+
+    def test_rejects_firmware_without_download_url(self):
+        client = self._client(_firmware_page("| fw.bin | |"))
+
+        with self.assertRaisesRegex(EmailSendError, "缺少下载地址：fw.bin"):
+            load_published_mail_attachments(client, "demo", "Release_Demo")
+        client.download_content_url.assert_not_called()
+
+    def test_rejects_download_url_outside_redmine(self):
+        client = self._client(_firmware_page("| [fw.bin](https://files.example/fw.bin) | |"))
+
+        with self.assertRaisesRegex(EmailSendError, "不在当前 Redmine：fw.bin"):
+            load_published_mail_attachments(client, "demo", "Release_Demo")
+        client.download_content_url.assert_not_called()
+
+    def test_rejects_empty_or_failed_download_without_partial_success(self):
+        client = self._client(
+            _firmware_page(
+                "| [fw.bin](/attachments/download/1/fw.bin) | |",
+                "| [boot.bin](/attachments/download/2/boot.bin) | |",
+            ),
+            downloads=lambda url: b"" if url.endswith("boot.bin") else b"ok",
+        )
+
+        with self.assertRaisesRegex(EmailSendError, "固件附件为空：boot.bin"):
+            load_published_mail_attachments(client, "demo", "Release_Demo")
+
+        client.download_content_url.side_effect = RedmineError("HTTP 404")
+        with self.assertRaisesRegex(EmailSendError, "下载固件附件失败：fw.bin"):
+            load_published_mail_attachments(client, "demo", "Release_Demo")
+
+    def test_rejects_attachments_over_mail_limit(self):
+        client = self._client(
+            _firmware_page("| [fw.bin](/attachments/download/1/fw.bin) | |"),
+            downloads=lambda url: b"12345",
+        )
+
+        with patch("release_tool.mail_delivery_helpers.MAX_MAIL_ATTACHMENT_BYTES", 4):
+            with self.assertRaisesRegex(EmailSendError, "fw.bin 合计 5 B，最大 4 B"):
+                load_published_mail_attachments(client, "demo", "Release_Demo")
+
+    def test_missing_wiki_page_does_not_download(self):
+        client = self._client("")
+        client.get_wiki_page.return_value = None
+
+        with self.assertRaisesRegex(EmailSendError, "未找到已发布版本"):
+            load_published_mail_attachments(client, "demo", "Release_Demo")
+        client.download_content_url.assert_not_called()
 
 
 if __name__ == "__main__":

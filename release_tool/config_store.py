@@ -477,6 +477,69 @@ def get_internal_contact_settings() -> dict[str, Any]:
     }
 
 
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
+def remove_contact_emails(emails: list[str]) -> None:
+    """从全部联系人、联系人组和姓名记录中去掉这些邮箱。"""
+    keys = {str(email or "").strip().lower() for email in emails if str(email or "").strip()}
+    if not keys:
+        return
+    placeholders = ",".join("?" for _ in keys)
+    key_list = sorted(keys)
+    with db() as conn:
+        conn.execute(f"DELETE FROM contacts WHERE lower(email) IN ({placeholders})", key_list)
+        if _table_exists(conn, "named_contacts"):
+            conn.execute(f"DELETE FROM named_contacts WHERE lower(email) IN ({placeholders})", key_list)
+        if _table_exists(conn, "external_account_contacts"):
+            conn.execute(
+                f"DELETE FROM external_account_contacts WHERE lower(email) IN ({placeholders})",
+                key_list,
+            )
+        rows = conn.execute(
+            """
+            SELECT owner_type, user_key, scope, name, contacts_to, contacts_cc
+            FROM contact_templates
+            ORDER BY display_order ASC, id ASC
+            """
+        ).fetchall()
+        grouped: dict[tuple[str, str, str], list[sqlite3.Row]] = {}
+        for row in rows:
+            grouped.setdefault((row["owner_type"], row["user_key"] or "", row["scope"]), []).append(row)
+        for (owner_type, user_key, scope), items in grouped.items():
+            templates: list[dict[str, Any]] = []
+            changed = False
+            for row in items:
+                try:
+                    to_raw = json.loads(row["contacts_to"] or "[]")
+                    cc_raw = json.loads(row["contacts_cc"] or "[]")
+                except json.JSONDecodeError:
+                    to_raw, cc_raw = [], []
+                to_list = _clean_contact_list(to_raw)
+                cc_list = _clean_contact_list(cc_raw)
+                new_to = [item for item in to_list if item["email"].lower() not in keys]
+                new_cc = [item for item in cc_list if item["email"].lower() not in keys]
+                if len(new_to) != len(to_list) or len(new_cc) != len(cc_list):
+                    changed = True
+                if new_to or new_cc:
+                    templates.append({"name": row["name"], "contacts_to": new_to, "contacts_cc": new_cc})
+                elif to_list or cc_list:
+                    changed = True
+            if changed:
+                _replace_contact_templates(
+                    conn,
+                    owner_type=owner_type,
+                    user_key=user_key,
+                    scope=scope,
+                    templates=templates,
+                )
+
+
 def store_internal_contact_settings(
     *,
     contacts: list[str] | None = None,

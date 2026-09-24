@@ -38,5 +38,6 @@ declare module 'vue' {
     ExecutionLogDialog: typeof import('./src/components/ExecutionLogDialog.vue')['default']
     ReleaseFileList: typeof import('./src/components/ReleaseFileList.vue')['default']
     ReleasePreviewDialog: typeof import('./src/components/ReleasePreviewDialog.vue')['default']
+    ResendNoticeDialog: typeof import('./src/components/ResendNoticeDialog.vue')['default']
   }
 }

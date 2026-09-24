@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
-from .attachment_policy import AttachmentContent
+from .attachment_policy import MAX_MAIL_ATTACHMENT_BYTES, AttachmentContent
 from .config_store import (
     MAIL_SCOPE_EXTERNAL,
     MAIL_SCOPE_INTERNAL,
@@ -18,8 +18,8 @@ from .external_account_contacts import get_user_external_email_account_settings
 from .mail_contact_helpers import mail_scope_label, merge_contact_lists, save_new_contacts_for_scope
 from .mail_history import record_mail_send
 from .mail_notice_helpers import validate_notice_fields
-from .redmine_api import RedmineClient
-from .release_page import parse_inline_ref
+from .redmine_api import RedmineClient, RedmineError
+from .release_page import extract_inline_release_block, parse_inline_ref, parse_release_files
 
 _CREDENTIAL_FIELD = "smtp_" + "password"
 _USER_FIELD = "smtp_user"
@@ -95,6 +95,83 @@ def validate_notice_preflight(
     if not settings.smtp_from:
         raise EmailSendError("请先填写发件人邮箱")
     return scope, to_addrs, cc_addrs
+
+
+def _format_bytes(size: int) -> str:
+    if size >= 1024 * 1024:
+        return f"{size / 1024 / 1024:.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size} B"
+
+
+def _redmine_attachment_path(base_url: str, content_url: str, filename: str) -> str:
+    value = (content_url or "").strip()
+    if value.startswith("/") and not value.startswith("//"):
+        return value
+    parsed = urlparse(value)
+    base = urlparse(base_url or "")
+    same_host = parsed.netloc.lower() == (base.netloc or "").lower()
+    if parsed.scheme in {"http", "https"} and same_host and parsed.path.startswith("/"):
+        if parsed.query:
+            return f"{parsed.path}?{parsed.query}"
+        return parsed.path
+    raise EmailSendError(f"固件附件下载地址不在当前 Redmine：{filename}。未发送邮件。")
+
+
+def _published_release_text(client: RedmineClient, project_id: str, wiki_title: str) -> str:
+    inline = parse_inline_ref(wiki_title)
+    try:
+        if inline:
+            page = client.get_wiki_page(project_id, inline[0])
+            if not page:
+                raise EmailSendError("未找到已发布版本，无法补发邮件。未发送邮件。")
+            block = extract_inline_release_block(page.get("text") or "", inline[1])
+            if not block:
+                raise EmailSendError("未找到已发布版本，无法补发邮件。未发送邮件。")
+            return block
+        page = client.get_wiki_page(project_id, wiki_title)
+    except EmailSendError:
+        raise
+    except RedmineError as exc:
+        raise EmailSendError(f"读取已发布版本失败：{exc}。未发送邮件。") from exc
+    if not page:
+        raise EmailSendError("未找到已发布版本，无法补发邮件。未发送邮件。")
+    return page.get("text") or ""
+
+
+def load_published_mail_attachments(
+    client: RedmineClient,
+    project_id: str,
+    wiki_title: str,
+) -> List[Tuple[str, str, bytes]]:
+    """下载该版本 Wiki 固件表中的全部文件，供补发邮件附件使用。"""
+    files = [item for item in parse_release_files(_published_release_text(client, project_id, wiki_title)) if (item.get("filename") or "").strip()]
+    if not files:
+        raise EmailSendError("该版本没有可随邮件发送的固件附件。未发送邮件。")
+    missing = [str(item.get("filename") or "") for item in files if not (item.get("url") or "").strip()]
+    if missing:
+        raise EmailSendError(f"固件附件缺少下载地址：{'、'.join(missing)}。未发送邮件。")
+
+    rows: List[Tuple[str, str, bytes]] = []
+    for item in files:
+        filename = str(item.get("filename") or "")
+        path = _redmine_attachment_path(client.base_url, str(item.get("url") or ""), filename)
+        try:
+            content = client.download_content_url(path)
+        except RedmineError as exc:
+            raise EmailSendError(f"下载固件附件失败：{filename}。{exc}。未发送邮件。") from exc
+        if not content:
+            raise EmailSendError(f"固件附件为空：{filename}。未发送邮件。")
+        rows.append((filename, str(item.get("description") or ""), content))
+
+    total = sum(len(content) for _filename, _description, content in rows)
+    if total > MAX_MAIL_ATTACHMENT_BYTES:
+        names = "、".join(filename for filename, _description, _content in rows)
+        raise EmailSendError(
+            f"邮件附件总大小超过限制：{names} 合计 {_format_bytes(total)}，最大 {_format_bytes(MAX_MAIL_ATTACHMENT_BYTES)}。未发送邮件。"
+        )
+    return rows
 
 
 def build_notice_body(client: RedmineClient, project_id: str, wiki_title: str, body: str) -> Tuple[str, str]:

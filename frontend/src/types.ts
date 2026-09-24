@@ -22,6 +22,12 @@ export interface ReleaseSummary {
   summary: string
 }
 
+export interface ReleaseFileLink {
+  filename: string
+  description?: string
+  url?: string | null
+}
+
 export interface ReleaseDetail {
   wiki_title: string
   version_name: string
@@ -30,6 +36,7 @@ export interface ReleaseDetail {
   product_line: string
   changelog: string
   files_info: string
+  files?: ReleaseFileLink[]
 }
 
 export interface SmtpServerConfig {
