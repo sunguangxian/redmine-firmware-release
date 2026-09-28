@@ -50,3 +50,58 @@ export async function previewLegacyMigration(payload: LegacyMigrationPayload): P
 export async function executeLegacyMigration(payload: LegacyMigrationPayload): Promise<LegacyMigrationResult> { const { data } = await http.post('/api/legacy-migration/execute', payload); return data }
 export async function startLegacyMigrationJob(payload: LegacyMigrationPayload): Promise<LegacyMigrationJob> { const { data } = await http.post('/api/legacy-migration/execute-job', payload); return data }
 export async function getLegacyMigrationJob(jobId: string): Promise<LegacyMigrationJob> { const { data } = await http.get(`/api/legacy-migration/jobs/${encodeURIComponent(jobId)}`); return data }
+
+export type IssueImportVersion = { id: number; name: string; status: string }
+export type IssueImportAssignee = { id: number; name: string; login: string }
+export type IssueImportOptions = { versions: IssueImportVersion[]; assignees: IssueImportAssignee[]; warnings: string[] }
+export type IssueImportRow = {
+  row_key: string
+  sheet: string
+  excel_row: number
+  seq: string
+  seq_note: string
+  found_on: string
+  module: string
+  level: string
+  priority_name: string
+  tracker_name: string
+  subject: string
+  description: string
+  duplicate: boolean
+  existing_id: number | null
+  existing_version: string
+}
+export type IssueImportPreview = {
+  ok: boolean
+  filename: string
+  context: { title: string; software_version: string; mcu: string; extra_versions: Array<{ name: string; value: string }>; sample: string; suggested_version: string }
+  suggested_version: IssueImportVersion | null
+  warnings: string[]
+  skipped_sheets: string[]
+  used_sheets: string[]
+  issues: IssueImportRow[]
+  counts: { total: number; new: number; duplicate: number }
+}
+export type IssueImportResult = {
+  ok: boolean
+  created: Array<{ id: number; subject: string; url: string }>
+  skipped: Array<{ row_key: string; subject: string; reason: string }>
+  failed: { row_key: string; subject: string; error: string } | null
+  version: IssueImportVersion
+  assignee: IssueImportAssignee
+}
+
+export async function getIssueImportOptions(projectId: string): Promise<IssueImportOptions> {
+  const { data } = await http.get('/api/issue-import/options', { params: { project_id: projectId } })
+  return data
+}
+
+export async function previewIssueImport(form: FormData): Promise<IssueImportPreview> {
+  const { data } = await http.post('/api/issue-import/preview', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  return data
+}
+
+export async function commitIssueImport(form: FormData): Promise<IssueImportResult> {
+  const { data } = await http.post('/api/issue-import/commit', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  return data
+}

@@ -9,6 +9,7 @@ from .api_app import create_base_app
 from .audit_api import register_audit_routes
 from .auth_api import register_auth_routes
 from .health_api import register_health_routes
+from .issue_import_api import register_issue_import_routes
 from .legacy_migration_api import register_legacy_migration_routes
 from .mail_admin_test_api import register_admin_mail_test_routes
 from .mail_log_api import register_mail_log_routes
@@ -52,6 +53,7 @@ def create_app():
     register_release_ops_routes(app)
     register_release_publish_routes(app)
     register_wiki_config_routes(app)
+    register_issue_import_routes(app)
     move_frontend_routes_to_end(app)
     return app
 

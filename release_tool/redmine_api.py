@@ -337,5 +337,72 @@ class RedmineClient:
         data = self._request("POST", f"/projects/{quote(project_id)}/files.json", json=payload)
         return data.get("file", {}) if isinstance(data, dict) else {}
 
+    def get_project(self, project_id: str, include: str = "") -> dict[str, Any]:
+        suffix = f"?include={quote(include)}" if include else ""
+        data = self._request("GET", f"/projects/{quote(project_id)}.json{suffix}")
+        if isinstance(data, dict) and isinstance(data.get("project"), dict):
+            return data["project"]
+        return data if isinstance(data, dict) else {}
+
+    def list_memberships(self, project_id: str) -> list[dict[str, Any]]:
+        return self._collect_pages(
+            f"/projects/{quote(project_id)}/memberships.json",
+            "memberships",
+        )
+
+    def list_users(self) -> list[dict[str, Any]]:
+        return self._collect_pages("/users.json?status=1", "users")
+
+    def list_issue_priorities(self) -> list[dict[str, Any]]:
+        data = self._request("GET", "/enumerations/issue_priorities.json")
+        if not isinstance(data, dict):
+            return []
+        return list(data.get("issue_priorities") or [])
+
+    def list_issues(self, project_id: str, *, limit_cap: int = 5000) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        offset = 0
+        limit = 100
+        while len(issues) < limit_cap:
+            data = self._request(
+                "GET",
+                f"/issues.json?project_id={quote(project_id)}&status_id=*&limit={limit}&offset={offset}",
+            )
+            if not isinstance(data, dict):
+                break
+            batch = data.get("issues") or []
+            issues.extend(batch)
+            total = int(data.get("total_count") or len(issues))
+            offset += limit
+            if not batch or offset >= total:
+                break
+        return issues[:limit_cap]
+
+    def create_issue(self, project_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+        payload = {"issue": {"project_id": project_id, **fields}}
+        data = self._request("POST", "/issues.json", json=payload)
+        if not isinstance(data, dict) or not isinstance(data.get("issue"), dict):
+            raise RedmineError("Redmine 创建问题成功，但返回内容无法解析")
+        return data["issue"]
+
+    def _collect_pages(self, path: str, collection_key: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        offset = 0
+        limit = 100
+        separator = "&" if "?" in path else "?"
+        while True:
+            data = self._request("GET", f"{path}{separator}limit={limit}&offset={offset}")
+            if not isinstance(data, dict):
+                return items
+            batch = data.get(collection_key) or []
+            items.extend(batch)
+            total = data.get("total_count")
+            if total is None or not batch:
+                break
+            offset += limit
+            if len(items) >= int(total):
+                break
+        return items
+
 
 RELEASE_PAGE_RE = re.compile(r"^Release_[A-Za-z0-9_+-]+(?:_NP500)?_FW_", re.I)

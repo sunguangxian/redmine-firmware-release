@@ -29,6 +29,9 @@ class AppFactoryTest(unittest.TestCase):
             "/api/wiki-config/{project_id}/convert-preview",
             "/api/wiki-config/{project_id}/convert",
             "/api/legacy-migration/preview",
+            "/api/issue-import/options",
+            "/api/issue-import/preview",
+            "/api/issue-import/commit",
         }
 
         self.assertTrue(expected.issubset(paths), expected - paths)

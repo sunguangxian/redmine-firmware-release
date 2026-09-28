@@ -35,6 +35,9 @@
         <el-tab-pane v-if="session.is_admin" label="旧项目升级" name="legacy">
           <LegacyMigrationView :projects="session.projects" />
         </el-tab-pane>
+        <el-tab-pane v-if="session.is_admin" label="问题导入" name="issues">
+          <IssueImportView :projects="session.projects" />
+        </el-tab-pane>
         <el-tab-pane label="邮件设置" name="mail">
           <MailSettingsView :session="session" @changed="mailVersion++" />
         </el-tab-pane>
@@ -59,6 +62,7 @@ import LoginView from './views/LoginView.vue'
 import { errorMessage, getMe, getMeta, logout } from './api/http'
 import type { MetaInfo, SessionInfo } from './types'
 
+const IssueImportView = defineAsyncComponent(() => import('./views/IssueImportView.vue'))
 const LegacyMigrationView = defineAsyncComponent(() => import('./views/LegacyMigrationView.vue'))
 const MailSettingsView = defineAsyncComponent(() => import('./views/MailSettingsView.vue'))
 const PublishHistoryView = defineAsyncComponent(() => import('./views/PublishHistoryView.vue'))
